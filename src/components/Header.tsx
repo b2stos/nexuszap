@@ -1,7 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 export const Header = () => {
+  const navigate = useNavigate();
+
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-lg border-b border-border">
       <nav className="container mx-auto px-4 sm:px-6 lg:px-8">
@@ -26,10 +29,10 @@ export const Header = () => {
           </div>
 
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="sm">
+            <Button variant="ghost" size="sm" onClick={() => navigate("/auth")}>
               Entrar
             </Button>
-            <Button size="sm" className="bg-gradient-primary hover:shadow-glow transition-all">
+            <Button size="sm" className="bg-gradient-primary hover:shadow-glow transition-all" onClick={() => navigate("/auth")}>
               Começar grátis
             </Button>
           </div>

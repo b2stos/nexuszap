@@ -14,16 +14,200 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      campaigns: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          id: string
+          message_content: string
+          name: string
+          status: Database["public"]["Enums"]["campaign_status"]
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          message_content: string
+          name: string
+          status?: Database["public"]["Enums"]["campaign_status"]
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          message_content?: string
+          name?: string
+          status?: Database["public"]["Enums"]["campaign_status"]
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaigns_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      contacts: {
+        Row: {
+          created_at: string
+          id: string
+          import_batch_id: string | null
+          name: string
+          phone: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          import_batch_id?: string | null
+          name: string
+          phone: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          import_batch_id?: string | null
+          name?: string
+          phone?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contacts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      messages: {
+        Row: {
+          campaign_id: string
+          contact_id: string
+          created_at: string
+          delivered_at: string | null
+          error_message: string | null
+          id: string
+          read_at: string | null
+          sent_at: string | null
+          status: Database["public"]["Enums"]["message_status"]
+        }
+        Insert: {
+          campaign_id: string
+          contact_id: string
+          created_at?: string
+          delivered_at?: string | null
+          error_message?: string | null
+          id?: string
+          read_at?: string | null
+          sent_at?: string | null
+          status?: Database["public"]["Enums"]["message_status"]
+        }
+        Update: {
+          campaign_id?: string
+          contact_id?: string
+          created_at?: string
+          delivered_at?: string | null
+          error_message?: string | null
+          id?: string
+          read_at?: string | null
+          sent_at?: string | null
+          status?: Database["public"]["Enums"]["message_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "messages_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "messages_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          created_at: string
+          email: string
+          full_name: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          full_name?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          full_name?: string | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_roles_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "user"
+      campaign_status: "draft" | "sending" | "completed" | "failed"
+      message_status: "pending" | "sent" | "delivered" | "read" | "failed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +334,10 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "user"],
+      campaign_status: ["draft", "sending", "completed", "failed"],
+      message_status: ["pending", "sent", "delivered", "read", "failed"],
+    },
   },
 } as const
