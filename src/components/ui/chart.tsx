@@ -133,10 +133,7 @@ const ChartTooltipContent = React.forwardRef<HTMLDivElement, ChartTooltipContent
       const [item] = payload;
       const key = `${labelKey || item.dataKey || item.name || "value"}`;
       const itemConfig = getPayloadConfigFromPayload(config, item, key);
-      const value =
-        !labelKey && typeof label === "string"
-          ? config[label as keyof typeof config]?.label || label
-          : itemConfig?.label;
+      const value = !labelKey && typeof label === "string" ? config[label as keyof typeof config]?.label || label : itemConfig?.label;
 
       if (labelFormatter) {
         return <div className={cn("font-medium", labelClassName)}>{labelFormatter(value, payload)}</div>;
@@ -179,7 +176,7 @@ const ChartTooltipContent = React.forwardRef<HTMLDivElement, ChartTooltipContent
                 )}
               >
                 {formatter && item?.value !== undefined && item.name ? (
-                  formatter(item.value, item.name, item, index, item.payload)
+                  formatter(item.value, item.name, item, index, payload)
                 ) : (
                   <>
                     {itemConfig?.icon ? (
@@ -232,14 +229,15 @@ ChartTooltipContent.displayName = "ChartTooltip";
 
 const ChartLegend = RechartsPrimitive.Legend;
 
-const ChartLegendContent = React.forwardRef<
-  HTMLDivElement,
-  React.ComponentProps<"div"> &
-    Pick<RechartsPrimitive.LegendProps, "payload" | "verticalAlign"> & {
-      hideIcon?: boolean;
-      nameKey?: string;
-    }
->(({ className, hideIcon = false, payload, verticalAlign = "bottom", nameKey }, ref) => {
+type ChartLegendContentProps = React.ComponentProps<"div"> & {
+  payload?: any[];
+  verticalAlign?: "top" | "bottom";
+  nameKey?: string;
+  hideIcon?: boolean;
+};
+
+const ChartLegendContent = React.forwardRef<HTMLDivElement, ChartLegendContentProps>(
+  ({ className, hideIcon = false, payload, verticalAlign = "bottom", nameKey }, ref) => {
   const { config } = useChart();
 
   if (!payload?.length) {
@@ -270,7 +268,7 @@ const ChartLegendContent = React.forwardRef<
                 }}
               />
             )}
-            {itemConfig?.label}
+            <span className="text-muted-foreground">{itemConfig?.label}</span>
           </div>
         );
       })}
