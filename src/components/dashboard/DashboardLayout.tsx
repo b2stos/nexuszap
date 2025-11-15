@@ -14,7 +14,7 @@ export function DashboardLayout({ children, user }: DashboardLayoutProps) {
       <DashboardSidebar />
       <div className="lg:pl-64">
         <DashboardHeader user={user} />
-        <main className="p-8">
+        <main className="p-4 lg:p-8 pt-16 lg:pt-8">
           {children}
         </main>
       </div>
