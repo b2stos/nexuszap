@@ -19,6 +19,7 @@ export type Database = {
           completed_at: string | null
           created_at: string
           id: string
+          media_urls: string[] | null
           message_content: string
           name: string
           status: Database["public"]["Enums"]["campaign_status"]
@@ -28,6 +29,7 @@ export type Database = {
           completed_at?: string | null
           created_at?: string
           id?: string
+          media_urls?: string[] | null
           message_content: string
           name: string
           status?: Database["public"]["Enums"]["campaign_status"]
@@ -37,6 +39,7 @@ export type Database = {
           completed_at?: string | null
           created_at?: string
           id?: string
+          media_urls?: string[] | null
           message_content?: string
           name?: string
           status?: Database["public"]["Enums"]["campaign_status"]
