@@ -5,35 +5,34 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Upload } from "lucide-react";
+import { Loader2, Upload, CheckCircle, XCircle } from "lucide-react";
 import * as XLSX from "xlsx";
 import { useQueryClient } from "@tanstack/react-query";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface ImportContactsDialogProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }
 
+interface ValidationResult {
+  original: string;
+  formatted: string;
+  isValid: boolean;
+  reason?: string;
+}
+
 export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialogProps) {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [validationResults, setValidationResults] = useState<ValidationResult[] | null>(null);
   const queryClient = useQueryClient();
-
-  const normalizePhone = (phone: string): string => {
-    const cleaned = phone.replace(/\D/g, "");
-    if (cleaned.length === 11) {
-      return `+55${cleaned}`;
-    }
-    if (cleaned.length === 10) {
-      return `+55${cleaned}`;
-    }
-    return cleaned;
-  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       setFile(selectedFile);
+      setValidationResults(null);
     }
   };
 
@@ -54,48 +53,103 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error("Usuário não autenticado");
 
-        const contacts = jsonData.map((row: any) => ({
-          user_id: user.id,
+        // Extract phone numbers from the file
+        const rawContacts = jsonData.map((row: any) => ({
           name: row.nome || row.name || "",
-          phone: normalizePhone(row.telefone || row.phone || ""),
-          import_batch_id: crypto.randomUUID(),
+          phone: String(row.telefone || row.phone || ""),
         }));
+
+        const phoneNumbers = rawContacts.map(c => c.phone);
+
+        // Validate phone numbers with AI
+        toast({
+          title: "Validando números...",
+          description: "A IA está verificando e formatando os números de telefone.",
+        });
+
+        const { data: validationData, error: validationError } = await supabase.functions.invoke(
+          'validate-phone-numbers',
+          {
+            body: { phoneNumbers }
+          }
+        );
+
+        if (validationError) throw validationError;
+
+        const results = validationData.results as ValidationResult[];
+        setValidationResults(results);
+
+        // Filter valid contacts
+        const validContacts = rawContacts
+          .map((contact, index) => ({
+            ...contact,
+            validation: results[index]
+          }))
+          .filter(c => c.validation.isValid)
+          .map(c => ({
+            user_id: user.id,
+            name: c.name,
+            phone: c.validation.formatted,
+            import_batch_id: crypto.randomUUID(),
+          }));
+
+        if (validContacts.length === 0) {
+          toast({
+            title: "Nenhum número válido",
+            description: "Nenhum número de telefone válido foi encontrado na planilha.",
+            variant: "destructive",
+          });
+          setLoading(false);
+          return;
+        }
 
         const { error } = await supabase
           .from("contacts")
-          .insert(contacts);
+          .insert(validContacts);
 
         if (error) throw error;
 
+        const invalidCount = results.filter(r => !r.isValid).length;
+        const validCount = results.filter(r => r.isValid).length;
+
         toast({
           title: "Importação concluída",
-          description: `${contacts.length} contatos importados com sucesso!`,
+          description: `${validCount} contatos válidos importados! ${invalidCount > 0 ? `${invalidCount} números inválidos foram ignorados.` : ''}`,
         });
 
         queryClient.invalidateQueries({ queryKey: ["contacts"] });
-        setFile(null);
-        onOpenChange?.(false);
+        
+        // Reset after a delay so user can see results
+        setTimeout(() => {
+          setFile(null);
+          setValidationResults(null);
+          onOpenChange?.(false);
+        }, 3000);
       };
 
       reader.readAsBinaryString(file);
     } catch (error: any) {
+      console.error('Import error:', error);
       toast({
         title: "Erro na importação",
         description: error.message,
         variant: "destructive",
       });
-    } finally {
       setLoading(false);
     }
   };
 
+  const validCount = validationResults?.filter(r => r.isValid).length || 0;
+  const invalidCount = validationResults?.filter(r => !r.isValid).length || 0;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Importar Contatos</DialogTitle>
+          <DialogTitle>Importar Contatos com Validação IA</DialogTitle>
           <DialogDescription>
-            Envie um arquivo CSV ou XLSX com as colunas "nome" e "telefone"
+            Envie um arquivo CSV ou XLSX com as colunas "nome" e "telefone". 
+            A IA irá validar e formatar os números automaticamente.
           </DialogDescription>
         </DialogHeader>
 
@@ -107,11 +161,44 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
               type="file"
               accept=".csv,.xlsx,.xls"
               onChange={handleFileChange}
+              disabled={loading}
             />
             <p className="text-xs text-muted-foreground">
               Formatos aceitos: CSV, XLSX, XLS
             </p>
           </div>
+
+          {validationResults && (
+            <Alert>
+              <AlertDescription>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4 text-green-500" />
+                    <span className="font-medium">{validCount} números válidos</span>
+                  </div>
+                  {invalidCount > 0 && (
+                    <div className="flex items-center gap-2">
+                      <XCircle className="h-4 w-4 text-red-500" />
+                      <span className="font-medium">{invalidCount} números inválidos (serão ignorados)</span>
+                    </div>
+                  )}
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {validationResults && invalidCount > 0 && (
+            <div className="max-h-40 overflow-y-auto space-y-1 text-xs">
+              <p className="font-medium text-muted-foreground mb-2">Números inválidos:</p>
+              {validationResults
+                .filter(r => !r.isValid)
+                .map((result, index) => (
+                  <div key={index} className="text-red-500">
+                    {result.original} - {result.reason || 'Formato inválido'}
+                  </div>
+                ))}
+            </div>
+          )}
 
           <Button
             onClick={handleImport}
@@ -121,12 +208,12 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
             {loading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Importando...
+                Validando e importando...
               </>
             ) : (
               <>
                 <Upload className="mr-2 h-4 w-4" />
-                Importar
+                Importar com Validação IA
               </>
             )}
           </Button>
