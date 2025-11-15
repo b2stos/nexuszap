@@ -1,5 +1,5 @@
 import { NavLink } from "@/components/NavLink";
-import { LayoutDashboard, Users, Send, PlusCircle, MessageSquare } from "lucide-react";
+import { LayoutDashboard, Users, Send, PlusCircle, MessageSquare, QrCode } from "lucide-react";
 
 export function DashboardSidebar() {
   return (
@@ -52,6 +52,16 @@ export function DashboardSidebar() {
                   >
                     <PlusCircle className="h-6 w-6 shrink-0" />
                     Nova Campanha
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink
+                    to="/dashboard/whatsapp"
+                    className="group flex gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold hover:bg-muted"
+                    activeClassName="bg-muted text-primary"
+                  >
+                    <QrCode className="h-6 w-6 shrink-0" />
+                    WhatsApp
                   </NavLink>
                 </li>
               </ul>
