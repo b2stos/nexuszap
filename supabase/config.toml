@@ -5,3 +5,6 @@ verify_jwt = true
 
 [functions.whatsapp-session]
 verify_jwt = true
+
+[functions.send-whatsapp-messages]
+verify_jwt = true
