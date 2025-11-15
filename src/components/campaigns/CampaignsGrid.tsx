@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Send, CheckCircle2, Eye, AlertCircle } from "lucide-react";
+import { SendCampaignButton } from "./SendCampaignButton";
 
 const statusLabels = {
   draft: "Rascunho",
@@ -19,7 +20,7 @@ const statusColors = {
 };
 
 export function CampaignsGrid() {
-  const { data: campaigns } = useQuery({
+  const { data: campaigns, refetch } = useQuery({
     queryKey: ["campaigns"],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -69,6 +70,12 @@ export function CampaignsGrid() {
                   {statusLabels[campaign.status as keyof typeof statusLabels]}
                 </Badge>
               </div>
+              <SendCampaignButton 
+                campaignId={campaign.id}
+                campaignName={campaign.name}
+                status={campaign.status}
+                onStatusChange={() => refetch()}
+              />
             </CardHeader>
             <CardContent>
               <div className="space-y-3">

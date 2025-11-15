@@ -6,72 +6,153 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// In-memory session storage (in production, use a database)
-const sessions = new Map();
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { action } = await req.json();
+    const { action, instanceName } = await req.json();
     
-    // Get user ID from auth header
     const authHeader = req.headers.get('authorization');
     if (!authHeader) {
       throw new Error('Unauthorized');
     }
 
-    // For demo purposes, we'll simulate a WhatsApp Web session
-    // In production, integrate with Evolution API or similar WhatsApp Business API
+    const EVOLUTION_API_URL = Deno.env.get('EVOLUTION_API_URL');
+    const EVOLUTION_API_KEY = Deno.env.get('EVOLUTION_API_KEY');
+
+    if (!EVOLUTION_API_URL || !EVOLUTION_API_KEY) {
+      throw new Error('Evolution API credentials not configured');
+    }
+
+    const instance = instanceName || 'whatsapp-business';
     
-    console.log(`Action: ${action}`);
+    console.log(`Action: ${action} for instance: ${instance}`);
 
     if (action === 'initialize') {
-      // Generate a mock QR code data (in production, this would come from WhatsApp API)
-      const qrCode = `2@${Math.random().toString(36).substring(7)},${Date.now()}`;
-      
-      sessions.set('current', {
-        status: 'qr',
-        qrCode,
-        timestamp: Date.now()
+      // Create/fetch instance and get QR code
+      const createResponse = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
+        method: 'POST',
+        headers: {
+          'apikey': EVOLUTION_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          instanceName: instance,
+          qrcode: true,
+          integration: 'WHATSAPP-BAILEYS'
+        }),
       });
+
+      if (!createResponse.ok) {
+        const errorText = await createResponse.text();
+        console.error('Error creating instance:', errorText);
+        throw new Error(`Failed to create instance: ${createResponse.status}`);
+      }
+
+      const instanceData = await createResponse.json();
+      
+      // Connect instance
+      const connectResponse = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instance}`, {
+        method: 'GET',
+        headers: {
+          'apikey': EVOLUTION_API_KEY,
+        },
+      });
+
+      if (!connectResponse.ok) {
+        const errorText = await connectResponse.text();
+        console.error('Error connecting instance:', errorText);
+      }
+
+      const connectData = await connectResponse.json();
+      
+      if (connectData.qrcode?.code) {
+        return new Response(
+          JSON.stringify({
+            status: 'qr',
+            qrCode: connectData.qrcode.code
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
 
       return new Response(
         JSON.stringify({
-          status: 'qr',
-          qrCode
+          status: 'connected',
+          phoneNumber: connectData.instance?.owner || null
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     if (action === 'status') {
-      const session = sessions.get('current') || { status: 'disconnected' };
-      
-      // Simulate successful connection after 10 seconds
-      if (session.status === 'qr' && Date.now() - session.timestamp > 10000) {
-        const connectedSession = {
-          status: 'connected',
-          phoneNumber: '+55 11 98765-4321',
-          timestamp: Date.now()
-        };
-        sessions.set('current', connectedSession);
+      const statusResponse = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instance}`, {
+        method: 'GET',
+        headers: {
+          'apikey': EVOLUTION_API_KEY,
+        },
+      });
+
+      if (!statusResponse.ok) {
         return new Response(
-          JSON.stringify(connectedSession),
+          JSON.stringify({ status: 'disconnected' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
+      const statusData = await statusResponse.json();
+      
+      if (statusData.state === 'open') {
+        return new Response(
+          JSON.stringify({
+            status: 'connected',
+            phoneNumber: statusData.instance?.owner || null
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // If not connected, try to get QR code
+      const connectResponse = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instance}`, {
+        method: 'GET',
+        headers: {
+          'apikey': EVOLUTION_API_KEY,
+        },
+      });
+
+      if (connectResponse.ok) {
+        const connectData = await connectResponse.json();
+        if (connectData.qrcode?.code) {
+          return new Response(
+            JSON.stringify({
+              status: 'qr',
+              qrCode: connectData.qrcode.code
+            }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+      }
+
       return new Response(
-        JSON.stringify(session),
+        JSON.stringify({ status: 'disconnected' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     if (action === 'disconnect') {
-      sessions.delete('current');
+      const logoutResponse = await fetch(`${EVOLUTION_API_URL}/instance/logout/${instance}`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': EVOLUTION_API_KEY,
+        },
+      });
+
+      if (!logoutResponse.ok) {
+        console.error('Error disconnecting instance');
+      }
+
       return new Response(
         JSON.stringify({ status: 'disconnected' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
