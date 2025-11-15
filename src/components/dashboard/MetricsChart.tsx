@@ -51,45 +51,80 @@ export function MetricsChart() {
   });
 
   return (
-    <Card>
+    <Card className="border-0 shadow-card">
       <CardHeader>
-        <CardTitle>Evolução das Mensagens</CardTitle>
+        <CardTitle className="text-2xl">Evolução das Mensagens</CardTitle>
         <CardDescription>Últimos 7 dias</CardDescription>
       </CardHeader>
       <CardContent>
-        <ResponsiveContainer width="100%" height={350}>
+        <ResponsiveContainer width="100%" height={400}>
           <LineChart data={chartData || []}>
-            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-            <XAxis dataKey="date" className="text-xs" />
-            <YAxis className="text-xs" />
+            <defs>
+              <linearGradient id="colorEnviadas" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="hsl(228, 100%, 55%)" stopOpacity={0.3}/>
+                <stop offset="95%" stopColor="hsl(228, 100%, 55%)" stopOpacity={0}/>
+              </linearGradient>
+              <linearGradient id="colorEntregues" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="hsl(142, 76%, 36%)" stopOpacity={0.3}/>
+                <stop offset="95%" stopColor="hsl(142, 76%, 36%)" stopOpacity={0}/>
+              </linearGradient>
+              <linearGradient id="colorVisualizadas" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="hsl(24, 96%, 53%)" stopOpacity={0.3}/>
+                <stop offset="95%" stopColor="hsl(24, 96%, 53%)" stopOpacity={0}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" className="stroke-muted/30" />
+            <XAxis 
+              dataKey="date" 
+              className="text-xs"
+              tick={{ fill: 'hsl(var(--muted-foreground))' }}
+            />
+            <YAxis 
+              className="text-xs"
+              tick={{ fill: 'hsl(var(--muted-foreground))' }}
+            />
             <Tooltip
               contentStyle={{
                 backgroundColor: "hsl(var(--card))",
                 border: "1px solid hsl(var(--border))",
                 borderRadius: "var(--radius)",
+                boxShadow: "0 4px 12px hsl(var(--primary) / 0.1)",
               }}
             />
-            <Legend />
+            <Legend 
+              wrapperStyle={{
+                paddingTop: "20px",
+              }}
+            />
             <Line
               type="monotone"
               dataKey="enviadas"
-              stroke="hsl(var(--primary))"
-              strokeWidth={2}
+              stroke="hsl(228, 100%, 55%)"
+              strokeWidth={3}
               name="Enviadas"
+              dot={{ fill: "hsl(228, 100%, 55%)", r: 5 }}
+              activeDot={{ r: 7 }}
+              fill="url(#colorEnviadas)"
             />
             <Line
               type="monotone"
               dataKey="entregues"
               stroke="hsl(142, 76%, 36%)"
-              strokeWidth={2}
+              strokeWidth={3}
               name="Entregues"
+              dot={{ fill: "hsl(142, 76%, 36%)", r: 5 }}
+              activeDot={{ r: 7 }}
+              fill="url(#colorEntregues)"
             />
             <Line
               type="monotone"
               dataKey="visualizadas"
               stroke="hsl(24, 96%, 53%)"
-              strokeWidth={2}
+              strokeWidth={3}
               name="Visualizadas"
+              dot={{ fill: "hsl(24, 96%, 53%)", r: 5 }}
+              activeDot={{ r: 7 }}
+              fill="url(#colorVisualizadas)"
             />
           </LineChart>
         </ResponsiveContainer>
