@@ -1,7 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight, MessageCircle } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 export const CTA = () => {
+  const navigate = useNavigate();
   return (
     <section className="py-24 relative overflow-hidden">
       <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-accent/5 to-primary/10" />
@@ -29,6 +31,7 @@ export const CTA = () => {
             <Button 
               size="lg" 
               className="group bg-gradient-primary hover:shadow-glow transition-all duration-300 text-lg px-8 py-6"
+              onClick={() => navigate("/auth")}
             >
               Criar minha conta grátis
               <ArrowRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
@@ -37,6 +40,14 @@ export const CTA = () => {
               size="lg" 
               variant="outline"
               className="border-primary/20 hover:bg-primary/5 text-lg px-8 py-6"
+              onClick={() => {
+                const ctaSection = document.getElementById('contato');
+                if (ctaSection) {
+                  ctaSection.scrollIntoView({ behavior: 'smooth' });
+                } else {
+                  navigate("/auth");
+                }
+              }}
             >
               Falar com especialista
             </Button>
