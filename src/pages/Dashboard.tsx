@@ -47,12 +47,16 @@ export default function Dashboard() {
 
   return (
     <DashboardLayout user={user}>
-      <div className="space-y-8">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight text-foreground">Dashboard</h2>
-          <p className="text-muted-foreground mt-2">
-            Visão geral das suas campanhas e métricas
-          </p>
+      <div className="space-y-8 animate-fade-in">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+              Dashboard
+            </h2>
+            <p className="text-muted-foreground mt-2 text-lg">
+              Visão geral das suas campanhas e métricas
+            </p>
+          </div>
         </div>
         
         <MetricsCards />

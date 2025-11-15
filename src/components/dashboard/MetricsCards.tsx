@@ -55,40 +55,48 @@ export function MetricsCards() {
       title: "Total de Contatos",
       value: metrics?.totalContacts || 0,
       icon: Users,
-      color: "text-blue-500",
+      gradient: "from-[hsl(228,100%,58%)] to-[hsl(228,100%,48%)]",
     },
     {
       title: "Campanhas Criadas",
       value: metrics?.totalCampaigns || 0,
       icon: Send,
-      color: "text-purple-500",
+      gradient: "from-[hsl(270,80%,55%)] to-[hsl(270,80%,45%)]",
     },
     {
       title: "Mensagens Enviadas",
       value: metrics?.totalMessages || 0,
       icon: CheckCircle2,
-      color: "text-green-500",
+      gradient: "from-[hsl(142,76%,45%)] to-[hsl(142,76%,36%)]",
     },
     {
       title: "Taxa de Visualização",
       value: `${metrics?.readRate || 0}%`,
       icon: Eye,
-      color: "text-orange-500",
+      gradient: "from-[hsl(24,96%,58%)] to-[hsl(24,96%,48%)]",
     },
   ];
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
       {cards.map((card) => (
-        <Card key={card.title}>
+        <Card 
+          key={card.title}
+          className="relative overflow-hidden border-0 bg-gradient-to-br shadow-card hover:shadow-card-hover transition-all duration-300 hover:scale-105"
+          style={{
+            backgroundImage: `linear-gradient(135deg, ${card.gradient.replace('from-', '').replace('to-', ', ')})`,
+          }}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
+            <CardTitle className="text-sm font-medium text-white/90">
               {card.title}
             </CardTitle>
-            <card.icon className={`h-4 w-4 ${card.color}`} />
+            <div className="rounded-lg bg-white/20 p-2 backdrop-blur-sm">
+              <card.icon className="h-5 w-5 text-white" />
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground">{card.value}</div>
+            <div className="text-3xl font-bold text-white">{card.value}</div>
           </CardContent>
         </Card>
       ))}
