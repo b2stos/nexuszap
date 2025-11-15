@@ -4,7 +4,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { MetricsCards } from "@/components/dashboard/MetricsCards";
-import { MetricsChart } from "@/components/dashboard/MetricsChart";
 import { RecentCampaigns } from "@/components/dashboard/RecentCampaigns";
 import { Loader2 } from "lucide-react";
 
@@ -60,7 +59,6 @@ export default function Dashboard() {
         </div>
         
         <MetricsCards />
-        <MetricsChart />
         <RecentCampaigns />
       </div>
     </DashboardLayout>

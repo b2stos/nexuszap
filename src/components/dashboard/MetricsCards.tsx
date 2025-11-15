@@ -82,22 +82,30 @@ export function MetricsCards() {
       {cards.map((card) => (
         <Card 
           key={card.title}
-          className="relative overflow-hidden border-0 bg-gradient-to-br shadow-card hover:shadow-card-hover transition-all duration-300 hover:scale-105"
-          style={{
-            backgroundImage: `linear-gradient(135deg, ${card.gradient.replace('from-', '').replace('to-', ', ')})`,
-          }}
+          className="relative overflow-hidden border border-border/50 bg-card hover:border-primary/30 transition-all duration-300 hover:scale-[1.02] group"
         >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-white/90">
+            <CardTitle className="text-sm font-medium text-muted-foreground group-hover:text-foreground transition-colors">
               {card.title}
             </CardTitle>
-            <div className="rounded-lg bg-white/20 p-2 backdrop-blur-sm">
-              <card.icon className="h-5 w-5 text-white" />
+            <div className="rounded-lg bg-primary/10 p-2.5 group-hover:bg-primary/20 transition-colors">
+              <card.icon className="h-5 w-5 text-primary" />
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-white">{card.value}</div>
+          <CardContent className="space-y-1">
+            <div className="text-4xl font-bold text-foreground tracking-tight">{card.value}</div>
+            {card.title === "Taxa de Visualização" && (
+              <p className="text-xs text-muted-foreground">
+                {metrics?.readRate}% das mensagens foram lidas
+              </p>
+            )}
+            {card.title === "Mensagens Enviadas" && (
+              <p className="text-xs text-muted-foreground">
+                {metrics?.deliveryRate}% foram entregues
+              </p>
+            )}
           </CardContent>
+          <div className="absolute bottom-0 left-0 h-1 w-full bg-gradient-to-r from-primary/20 via-primary to-primary/20 opacity-0 group-hover:opacity-100 transition-opacity" />
         </Card>
       ))}
     </div>
