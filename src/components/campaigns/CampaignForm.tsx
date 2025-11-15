@@ -9,12 +9,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/hooks/use-toast";
 import { Loader2, Send } from "lucide-react";
+import { MediaUpload } from "./MediaUpload";
 
 export function CampaignForm() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState("");
   const [message, setMessage] = useState("");
+  const [mediaUrls, setMediaUrls] = useState<string[]>([]);
 
   const { data: contacts } = useQuery({
     queryKey: ["contacts-count"],
@@ -52,6 +54,7 @@ export function CampaignForm() {
           user_id: user.id,
           name,
           message_content: message,
+          media_urls: mediaUrls,
           status: "draft",
         })
         .select()
@@ -79,7 +82,7 @@ export function CampaignForm() {
 
       toast({
         title: "Campanha criada!",
-        description: `Campanha "${name}" criada com ${messages.length} mensagens.`,
+        description: `Campanha "${name}" criada com ${messages.length} mensagens${mediaUrls.length > 0 ? ` e ${mediaUrls.length} arquivo(s) de mídia` : ''}.`,
       });
 
       navigate("/dashboard/campaigns");
@@ -127,34 +130,23 @@ export function CampaignForm() {
               className="resize-none"
             />
             <p className="text-xs text-muted-foreground">
-              {message.length} caracteres
+              Caracteres: {message.length}
             </p>
           </div>
 
-          <div className="rounded-lg border border-border p-4 bg-muted/50">
-            <h3 className="font-medium mb-2 text-foreground">Destinatários</h3>
+          <div className="space-y-2">
+            <Label>Mídia (Fotos, Vídeos ou PDFs)</Label>
+            <MediaUpload
+              onMediaUploaded={setMediaUrls}
+              existingMedia={mediaUrls}
+            />
+          </div>
+
+          <div className="flex items-center justify-between pt-4 border-t">
             <p className="text-sm text-muted-foreground">
-              Esta campanha será enviada para{" "}
-              <span className="font-medium text-foreground">
-                {contacts?.length || 0} contatos
-              </span>
+              {contacts?.length || 0} contato(s) receberão esta mensagem
             </p>
-          </div>
-
-          <div className="flex gap-4">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => navigate("/dashboard/campaigns")}
-              className="flex-1"
-            >
-              Cancelar
-            </Button>
-            <Button
-              type="submit"
-              disabled={loading}
-              className="flex-1"
-            >
+            <Button type="submit" disabled={loading}>
               {loading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
