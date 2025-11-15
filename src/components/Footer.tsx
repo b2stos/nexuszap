@@ -1,6 +1,13 @@
 import { Zap } from "lucide-react";
 
 export const Footer = () => {
+  const scrollToSection = (sectionId: string) => {
+    const element = document.getElementById(sectionId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
   return (
     <footer className="bg-secondary text-secondary-foreground py-12 border-t border-border">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
@@ -21,18 +28,60 @@ export const Footer = () => {
           <div>
             <h3 className="font-semibold mb-4">Produto</h3>
             <ul className="space-y-2">
-              <li><a href="#" className="text-secondary-foreground/70 hover:text-accent transition-colors">Funcionalidades</a></li>
-              <li><a href="#" className="text-secondary-foreground/70 hover:text-accent transition-colors">Preços</a></li>
-              <li><a href="#" className="text-secondary-foreground/70 hover:text-accent transition-colors">Casos de uso</a></li>
+              <li>
+                <button 
+                  onClick={() => scrollToSection('funcionalidades')} 
+                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-left"
+                >
+                  Funcionalidades
+                </button>
+              </li>
+              <li>
+                <button 
+                  onClick={() => scrollToSection('solucao')} 
+                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-left"
+                >
+                  Solução
+                </button>
+              </li>
+              <li>
+                <button 
+                  onClick={() => scrollToSection('funcionalidades')} 
+                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-left"
+                >
+                  Casos de uso
+                </button>
+              </li>
             </ul>
           </div>
 
           <div>
             <h3 className="font-semibold mb-4">Empresa</h3>
             <ul className="space-y-2">
-              <li><a href="#" className="text-secondary-foreground/70 hover:text-accent transition-colors">Sobre</a></li>
-              <li><a href="#" className="text-secondary-foreground/70 hover:text-accent transition-colors">Contato</a></li>
-              <li><a href="#" className="text-secondary-foreground/70 hover:text-accent transition-colors">Privacidade</a></li>
+              <li>
+                <button 
+                  onClick={() => scrollToSection('solucao')} 
+                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-left"
+                >
+                  Sobre
+                </button>
+              </li>
+              <li>
+                <a 
+                  href="mailto:contato@nexuszap.com" 
+                  className="text-secondary-foreground/70 hover:text-accent transition-colors"
+                >
+                  Contato
+                </a>
+              </li>
+              <li>
+                <button 
+                  onClick={() => scrollToSection('solucao')} 
+                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-left"
+                >
+                  Privacidade
+                </button>
+              </li>
             </ul>
           </div>
         </div>

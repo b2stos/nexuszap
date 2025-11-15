@@ -1,8 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import heroImage from "@/assets/hero-nexus.jpg";
 
 export const Hero = () => {
+  const navigate = useNavigate();
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
       {/* Animated background elements */}
@@ -41,6 +43,7 @@ export const Hero = () => {
               <Button 
                 size="lg" 
                 className="group bg-gradient-primary hover:shadow-glow transition-all duration-300"
+                onClick={() => navigate("/auth")}
               >
                 Começar agora
                 <ArrowRight className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" />
@@ -49,6 +52,10 @@ export const Hero = () => {
                 size="lg" 
                 variant="outline"
                 className="border-primary/20 hover:bg-primary/5"
+                onClick={() => {
+                  const featuresSection = document.getElementById('funcionalidades');
+                  featuresSection?.scrollIntoView({ behavior: 'smooth' });
+                }}
               >
                 Ver demonstração
               </Button>
