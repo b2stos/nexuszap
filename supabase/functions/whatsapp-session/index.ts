@@ -22,12 +22,17 @@ serve(async (req) => {
     // Z-API uses instance ID and token in the URL path
     const ZAPI_INSTANCE = Deno.env.get('EVOLUTION_API_URL'); // Reusing this env var for instance ID
     const ZAPI_TOKEN = Deno.env.get('EVOLUTION_API_KEY'); // Reusing this env var for token
+    const ZAPI_CLIENT_TOKEN = Deno.env.get('ZAPI_CLIENT_TOKEN'); // Security token
 
-    if (!ZAPI_INSTANCE || !ZAPI_TOKEN) {
+    if (!ZAPI_INSTANCE || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
       throw new Error('Z-API credentials not configured');
     }
     
     const baseUrl = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}`;
+    const headers = {
+      'Client-Token': ZAPI_CLIENT_TOKEN,
+      'Content-Type': 'application/json'
+    };
     
     console.log(`Action: ${action} for Z-API instance`);
 
@@ -35,6 +40,7 @@ serve(async (req) => {
       // Check status first
       const statusResponse = await fetch(`${baseUrl}/status`, {
         method: 'GET',
+        headers: headers,
       });
 
       if (!statusResponse.ok) {
@@ -62,6 +68,7 @@ serve(async (req) => {
       // Get QR code image (base64)
       const qrResponse = await fetch(`${baseUrl}/qr-code/image`, {
         method: 'GET',
+        headers: headers,
       });
 
       if (!qrResponse.ok) {
@@ -93,6 +100,7 @@ serve(async (req) => {
     if (action === 'status') {
       const statusResponse = await fetch(`${baseUrl}/status`, {
         method: 'GET',
+        headers: headers,
       });
 
       if (!statusResponse.ok) {
@@ -124,6 +132,7 @@ serve(async (req) => {
     if (action === 'disconnect') {
       const logoutResponse = await fetch(`${baseUrl}/disconnect`, {
         method: 'GET',
+        headers: headers,
       });
 
       if (!logoutResponse.ok) {
