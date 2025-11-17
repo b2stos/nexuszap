@@ -42,7 +42,15 @@ export function WhatsAppConnection() {
         body: { action: "initialize" },
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase function error:', error);
+        throw error;
+      }
+
+      if (data.error) {
+        console.error('API error:', data);
+        throw new Error(data.error + (data.details ? ` - ${data.details}` : ''));
+      }
 
       if (data.status === "qr" && data.qrCode) {
         setSession(data);
@@ -57,11 +65,14 @@ export function WhatsAppConnection() {
           title: "Conectado",
           description: `WhatsApp conectado: ${data.phoneNumber}`,
         });
+      } else if (data.status === "error") {
+        throw new Error(data.error || "Erro desconhecido ao conectar");
       }
     } catch (error: any) {
+      console.error('Initialize error:', error);
       toast({
         title: "Erro ao inicializar",
-        description: error.message,
+        description: error.message || "Verifique suas credenciais Z-API no painel de Secrets",
         variant: "destructive",
       });
     } finally {

@@ -44,10 +44,18 @@ serve(async (req) => {
       });
 
       if (!statusResponse.ok) {
-        console.error('Error checking status');
+        const errorText = await statusResponse.text();
+        console.error('Error checking status:', statusResponse.status, errorText);
         return new Response(
-          JSON.stringify({ status: 'disconnected' }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          JSON.stringify({ 
+            status: 'error',
+            error: `Failed to check status: ${statusResponse.status}`,
+            details: errorText
+          }),
+          { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 500
+          }
         );
       }
 
@@ -148,10 +156,17 @@ serve(async (req) => {
     throw new Error('Invalid action');
 
   } catch (error: any) {
-    console.error('Error in whatsapp-session:', error);
+    console.error('Edge function error:', error);
     return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ 
+        error: error.message,
+        details: error.stack,
+        type: error.name
+      }),
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 500
+      }
     );
   }
 });
