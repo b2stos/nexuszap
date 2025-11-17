@@ -27,10 +27,19 @@ async function initializeZAPI(baseUrl: string, headers: any) {
   });
 
   if (!statusResponse.ok) {
-    throw new Error(`Z-API status check failed: ${statusResponse.status}`);
+    const errorText = await statusResponse.text();
+    console.error('Z-API status check failed:', statusResponse.status, errorText);
+    throw new Error(`Z-API não disponível (${statusResponse.status})`);
   }
 
   const statusData = await statusResponse.json();
+  console.log('Z-API status response:', statusData);
+  
+  // Check if Z-API returned an error
+  if (statusData.error) {
+    console.error('Z-API returned error:', statusData);
+    throw new Error(`Z-API Error: ${statusData.error} - ${statusData.message || 'Verifique suas credenciais'}`);
+  }
   
   if (statusData.connected === true) {
     return {
