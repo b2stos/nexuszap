@@ -11,10 +11,17 @@ import { toast } from "@/hooks/use-toast";
 import { Loader2, Send } from "lucide-react";
 import { MediaUpload } from "./MediaUpload";
 import { z } from "zod";
+import DOMPurify from "dompurify";
 
 const campaignSchema = z.object({
   name: z.string().trim().min(1, { message: "Nome da campanha não pode ser vazio" }).max(200, { message: "Nome muito longo (máximo 200 caracteres)" }),
-  message: z.string().trim().min(1, { message: "Mensagem não pode ser vazia" }).max(4000, { message: "Mensagem muito longa (máximo 4000 caracteres)" }),
+  message: z.string()
+    .trim()
+    .min(1, { message: "Mensagem não pode ser vazia" })
+    .max(4000, { message: "Mensagem muito longa (máximo 4000 caracteres)" })
+    .refine(val => !/<script|javascript:|onerror=|onclick=/i.test(val), {
+      message: "Mensagem contém conteúdo potencialmente perigoso"
+    }),
 });
 
 export function CampaignForm() {
@@ -66,12 +73,19 @@ export function CampaignForm() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado");
 
+      // Sanitize message content to prevent XSS
+      const sanitizedMessage = DOMPurify.sanitize(validation.data.message, {
+        ALLOWED_TAGS: [], // Remove all HTML tags
+        ALLOWED_ATTR: [], // Remove all attributes
+        KEEP_CONTENT: true, // Keep text content
+      });
+
       const { data: campaign, error: campaignError } = await supabase
         .from("campaigns")
         .insert({
           user_id: user.id,
           name: validation.data.name,
-          message_content: validation.data.message,
+          message_content: sanitizedMessage,
           media_urls: mediaUrls,
           status: "draft",
         })
