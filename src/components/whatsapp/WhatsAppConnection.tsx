@@ -107,6 +107,11 @@ export function WhatsAppConnection() {
         });
       } else if (data.status === "error") {
         throw new Error(data.error || "Erro desconhecido ao conectar");
+      } else if (data.status === "disconnected") {
+        // Z-API não conseguiu gerar QR code
+        throw new Error("Não foi possível gerar o QR Code. Verifique se a instância Z-API está ativa no painel.");
+      } else {
+        throw new Error(`Status inesperado: ${data.status}`);
       }
     } catch (error: any) {
       console.error('Initialize error:', error);
