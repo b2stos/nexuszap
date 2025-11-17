@@ -106,7 +106,10 @@ async function disconnectZAPI(baseUrl: string, headers: any) {
 // Evolution API Helper Functions
 async function testEvolutionAPI(apiUrl: string, apiKey: string) {
   try {
-    const response = await fetch(`${apiUrl}/instance/fetchInstances`, {
+    // Ensure URL has protocol
+    const fullUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`;
+    
+    const response = await fetch(`${fullUrl}/instance/fetchInstances`, {
       method: 'GET',
       headers: {
         'apikey': apiKey,
@@ -121,8 +124,11 @@ async function testEvolutionAPI(apiUrl: string, apiKey: string) {
 }
 
 async function initializeEvolutionAPI(apiUrl: string, apiKey: string, instanceName: string = 'whatsapp-instance') {
+  // Ensure URL has protocol
+  const fullUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`;
+  
   // Check if instance exists
-  const instancesResponse = await fetch(`${apiUrl}/instance/fetchInstances`, {
+  const instancesResponse = await fetch(`${fullUrl}/instance/fetchInstances`, {
     method: 'GET',
     headers: {
       'apikey': apiKey,
@@ -139,7 +145,7 @@ async function initializeEvolutionAPI(apiUrl: string, apiKey: string, instanceNa
 
   if (!existingInstance) {
     // Create instance
-    const createResponse = await fetch(`${apiUrl}/instance/create`, {
+    const createResponse = await fetch(`${fullUrl}/instance/create`, {
       method: 'POST',
       headers: {
         'apikey': apiKey,
@@ -157,7 +163,7 @@ async function initializeEvolutionAPI(apiUrl: string, apiKey: string, instanceNa
   }
 
   // Get connection status
-  const statusResponse = await fetch(`${apiUrl}/instance/connectionState/${instanceName}`, {
+  const statusResponse = await fetch(`${fullUrl}/instance/connectionState/${instanceName}`, {
     method: 'GET',
     headers: {
       'apikey': apiKey,
@@ -180,7 +186,7 @@ async function initializeEvolutionAPI(apiUrl: string, apiKey: string, instanceNa
   }
 
   // Get QR code
-  const qrResponse = await fetch(`${apiUrl}/instance/connect/${instanceName}`, {
+  const qrResponse = await fetch(`${fullUrl}/instance/connect/${instanceName}`, {
     method: 'GET',
     headers: {
       'apikey': apiKey,
@@ -209,7 +215,9 @@ async function initializeEvolutionAPI(apiUrl: string, apiKey: string, instanceNa
 }
 
 async function checkStatusEvolutionAPI(apiUrl: string, apiKey: string, instanceName: string = 'whatsapp-instance') {
-  const statusResponse = await fetch(`${apiUrl}/instance/connectionState/${instanceName}`, {
+  const fullUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`;
+  
+  const statusResponse = await fetch(`${fullUrl}/instance/connectionState/${instanceName}`, {
     method: 'GET',
     headers: {
       'apikey': apiKey,
@@ -238,7 +246,9 @@ async function checkStatusEvolutionAPI(apiUrl: string, apiKey: string, instanceN
 }
 
 async function disconnectEvolutionAPI(apiUrl: string, apiKey: string, instanceName: string = 'whatsapp-instance') {
-  await fetch(`${apiUrl}/instance/logout/${instanceName}`, {
+  const fullUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`;
+  
+  await fetch(`${fullUrl}/instance/logout/${instanceName}`, {
     method: 'DELETE',
     headers: {
       'apikey': apiKey,
