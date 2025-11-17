@@ -11,6 +11,7 @@ interface WhatsAppSession {
   status: "disconnected" | "qr" | "connected";
   qrCode?: string;
   phoneNumber?: string;
+  provider?: string;
 }
 
 export function WhatsAppConnection() {
@@ -193,7 +194,9 @@ export function WhatsAppConnection() {
               Conexão WhatsApp Business
             </CardTitle>
             <CardDescription>
-              Conecte seu WhatsApp Business para enviar campanhas
+              {session.provider 
+                ? `Conectado via ${session.provider}` 
+                : "Conecte seu WhatsApp Business para enviar campanhas"}
             </CardDescription>
           </div>
           <Badge
