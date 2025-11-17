@@ -13,13 +13,25 @@ export default function WhatsApp() {
 
   useEffect(() => {
     const checkUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) {
+          console.error('Error checking session:', error);
+          setLoading(false);
+          navigate("/auth");
+          return;
+        }
+        if (!session) {
+          navigate("/auth");
+          return;
+        }
+        setUser(session.user);
+        setLoading(false);
+      } catch (error) {
+        console.error('Failed to check user session:', error);
+        setLoading(false);
         navigate("/auth");
-        return;
       }
-      setUser(session.user);
-      setLoading(false);
     };
 
     checkUser();
@@ -29,6 +41,7 @@ export default function WhatsApp() {
         navigate("/auth");
       } else {
         setUser(session.user);
+        setLoading(false);
       }
     });
 

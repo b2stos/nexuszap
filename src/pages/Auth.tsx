@@ -25,9 +25,17 @@ export default function Auth() {
 
   useEffect(() => {
     const checkUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        navigate("/dashboard");
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) {
+          console.error('Error checking session:', error);
+          return;
+        }
+        if (session) {
+          navigate("/dashboard");
+        }
+      } catch (error) {
+        console.error('Failed to check user session:', error);
       }
     };
     checkUser();
