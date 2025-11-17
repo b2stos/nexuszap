@@ -12,87 +12,87 @@ serve(async (req) => {
   }
 
   try {
-    const { action, instanceName } = await req.json();
+    const { action } = await req.json();
     
     const authHeader = req.headers.get('authorization');
     if (!authHeader) {
       throw new Error('Unauthorized');
     }
 
-    const EVOLUTION_API_URL = Deno.env.get('EVOLUTION_API_URL');
-    const EVOLUTION_API_KEY = Deno.env.get('EVOLUTION_API_KEY');
+    // Z-API uses instance ID and token in the URL path
+    const ZAPI_INSTANCE = Deno.env.get('EVOLUTION_API_URL'); // Reusing this env var for instance ID
+    const ZAPI_TOKEN = Deno.env.get('EVOLUTION_API_KEY'); // Reusing this env var for token
 
-    if (!EVOLUTION_API_URL || !EVOLUTION_API_KEY) {
-      throw new Error('Evolution API credentials not configured');
+    if (!ZAPI_INSTANCE || !ZAPI_TOKEN) {
+      throw new Error('Z-API credentials not configured');
     }
-
-    const instance = instanceName || 'whatsapp-business';
     
-    console.log(`Action: ${action} for instance: ${instance}`);
+    const baseUrl = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}`;
+    
+    console.log(`Action: ${action} for Z-API instance`);
 
     if (action === 'initialize') {
-      // Create/fetch instance and get QR code
-      const createResponse = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
-        method: 'POST',
-        headers: {
-          'apikey': EVOLUTION_API_KEY,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          instanceName: instance,
-          qrcode: true,
-          integration: 'WHATSAPP-BAILEYS'
-        }),
-      });
-
-      if (!createResponse.ok) {
-        const errorText = await createResponse.text();
-        console.error('Error creating instance:', errorText);
-        throw new Error(`Failed to create instance: ${createResponse.status}`);
-      }
-
-      const instanceData = await createResponse.json();
-      
-      // Connect instance
-      const connectResponse = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instance}`, {
+      // Check status first
+      const statusResponse = await fetch(`${baseUrl}/status`, {
         method: 'GET',
-        headers: {
-          'apikey': EVOLUTION_API_KEY,
-        },
       });
 
-      if (!connectResponse.ok) {
-        const errorText = await connectResponse.text();
-        console.error('Error connecting instance:', errorText);
+      if (!statusResponse.ok) {
+        console.error('Error checking status');
+        return new Response(
+          JSON.stringify({ status: 'disconnected' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
 
-      const connectData = await connectResponse.json();
+      const statusData = await statusResponse.json();
+      console.log('Status data:', JSON.stringify(statusData));
       
-      if (connectData.qrcode?.code) {
+      // If already connected, return connected status
+      if (statusData.connected === true) {
+        return new Response(
+          JSON.stringify({
+            status: 'connected',
+            phoneNumber: statusData.phone || null
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Get QR code image (base64)
+      const qrResponse = await fetch(`${baseUrl}/qr-code/image`, {
+        method: 'GET',
+      });
+
+      if (!qrResponse.ok) {
+        console.error('Error getting QR code');
+        return new Response(
+          JSON.stringify({ status: 'disconnected' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const qrData = await qrResponse.json();
+      
+      if (qrData.value) {
         return new Response(
           JSON.stringify({
             status: 'qr',
-            qrCode: connectData.qrcode.code
+            qrCode: qrData.value // Z-API returns base64 image in 'value' field
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
       return new Response(
-        JSON.stringify({
-          status: 'connected',
-          phoneNumber: connectData.instance?.owner || null
-        }),
+        JSON.stringify({ status: 'disconnected' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     if (action === 'status') {
-      const statusResponse = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${instance}`, {
+      const statusResponse = await fetch(`${baseUrl}/status`, {
         method: 'GET',
-        headers: {
-          'apikey': EVOLUTION_API_KEY,
-        },
       });
 
       if (!statusResponse.ok) {
@@ -103,36 +103,16 @@ serve(async (req) => {
       }
 
       const statusData = await statusResponse.json();
+      console.log('Status check:', JSON.stringify(statusData));
       
-      if (statusData.state === 'open') {
+      if (statusData.connected === true) {
         return new Response(
           JSON.stringify({
             status: 'connected',
-            phoneNumber: statusData.instance?.owner || null
+            phoneNumber: statusData.phone || null
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
-      }
-
-      // If not connected, try to get QR code
-      const connectResponse = await fetch(`${EVOLUTION_API_URL}/instance/connect/${instance}`, {
-        method: 'GET',
-        headers: {
-          'apikey': EVOLUTION_API_KEY,
-        },
-      });
-
-      if (connectResponse.ok) {
-        const connectData = await connectResponse.json();
-        if (connectData.qrcode?.code) {
-          return new Response(
-            JSON.stringify({
-              status: 'qr',
-              qrCode: connectData.qrcode.code
-            }),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
       }
 
       return new Response(
@@ -142,11 +122,8 @@ serve(async (req) => {
     }
 
     if (action === 'disconnect') {
-      const logoutResponse = await fetch(`${EVOLUTION_API_URL}/instance/logout/${instance}`, {
-        method: 'DELETE',
-        headers: {
-          'apikey': EVOLUTION_API_KEY,
-        },
+      const logoutResponse = await fetch(`${baseUrl}/disconnect`, {
+        method: 'GET',
       });
 
       if (!logoutResponse.ok) {
