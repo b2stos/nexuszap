@@ -53,39 +53,82 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error("Usuário não autenticado");
 
-        // Extract phone numbers from the file
-        const rawContacts = jsonData.map((row: any) => ({
-          name: row.nome || row.name || "",
-          phone: String(row.telefone || row.phone || ""),
-        }));
+        // Extract and pre-filter contacts
+        const rawContacts = jsonData
+          .map((row: any) => ({
+            name: row.nome || row.name || "",
+            phone: String(row.telefone || row.phone || "").trim(),
+          }))
+          .filter(contact => {
+            // Pre-validate: remove empty and obviously invalid
+            const phone = contact.phone;
+            if (!phone) return false;
+            if (phone.length < 8) return false; // Too short
+            if (phone.length > 20) return false; // Too long
+            if (!/\d/.test(phone)) return false; // Must contain digits
+            return true;
+          });
 
-        const phoneNumbers = rawContacts.map(c => c.phone);
+        if (rawContacts.length === 0) {
+          toast({
+            title: "Nenhum telefone válido encontrado",
+            description: "O arquivo não contém números de telefone válidos.",
+            variant: "destructive",
+          });
+          setLoading(false);
+          return;
+        }
 
-        // Validate phone numbers with AI
-        toast({
-          title: "Validando números...",
-          description: "A IA está verificando e formatando os números de telefone.",
-        });
+        // Limit to 1000 contacts per import
+        const MAX_CONTACTS = 1000;
+        if (rawContacts.length > MAX_CONTACTS) {
+          toast({
+            title: "Muitos contatos",
+            description: `Limite de ${MAX_CONTACTS} contatos por importação. Encontrados: ${rawContacts.length}. Divida em arquivos menores.`,
+            variant: "destructive",
+          });
+          setLoading(false);
+          return;
+        }
 
-        const { data: validationData, error: validationError } = await supabase.functions.invoke(
-          'validate-phone-numbers',
-          {
-            body: { phoneNumbers }
-          }
-        );
+        // Process in batches of 100
+        const BATCH_SIZE = 100;
+        const batches: typeof rawContacts[] = [];
+        for (let i = 0; i < rawContacts.length; i += BATCH_SIZE) {
+          batches.push(rawContacts.slice(i, i + BATCH_SIZE));
+        }
 
-        if (validationError) throw validationError;
+        let allResults: ValidationResult[] = [];
+        
+        // Process each batch
+        for (let i = 0; i < batches.length; i++) {
+          toast({
+            title: "Validando...",
+            description: `Processando lote ${i + 1} de ${batches.length} (${batches[i].length} números)`,
+          });
 
-        const results = validationData.results as ValidationResult[];
-        setValidationResults(results);
+          const phoneNumbers = batches[i].map(c => c.phone);
+          const { data: validationData, error: validationError } = await supabase.functions.invoke(
+            'validate-phone-numbers',
+            {
+              body: { phoneNumbers }
+            }
+          );
+
+          if (validationError) throw validationError;
+          
+          allResults = [...allResults, ...(validationData.results as ValidationResult[])];
+        }
+
+        setValidationResults(allResults);
 
         // Filter valid contacts
         const validContacts = rawContacts
           .map((contact, index) => ({
             ...contact,
-            validation: results[index]
+            validation: allResults[index]
           }))
-          .filter(c => c.validation.isValid)
+          .filter(c => c.validation?.isValid)
           .map(c => ({
             user_id: user.id,
             name: c.name,
@@ -96,7 +139,7 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
         if (validContacts.length === 0) {
           toast({
             title: "Nenhum número válido",
-            description: "Nenhum número de telefone válido foi encontrado na planilha.",
+            description: "Nenhum número de telefone válido foi encontrado após validação.",
             variant: "destructive",
           });
           setLoading(false);
@@ -109,8 +152,8 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
 
         if (error) throw error;
 
-        const invalidCount = results.filter(r => !r.isValid).length;
-        const validCount = results.filter(r => r.isValid).length;
+        const invalidCount = allResults.filter(r => !r.isValid).length;
+        const validCount = allResults.filter(r => r.isValid).length;
 
         toast({
           title: "Importação concluída",
