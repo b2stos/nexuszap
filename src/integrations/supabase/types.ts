@@ -194,6 +194,103 @@ export type Database = {
           },
         ]
       }
+      whatsapp_config: {
+        Row: {
+          access_token_encrypted: string
+          business_account_id: string
+          created_at: string
+          display_phone_number: string | null
+          id: string
+          last_checked_at: string | null
+          phone_number_id: string
+          quality_rating: string | null
+          status: string
+          updated_at: string
+          user_id: string
+          verified_name: string | null
+        }
+        Insert: {
+          access_token_encrypted: string
+          business_account_id: string
+          created_at?: string
+          display_phone_number?: string | null
+          id?: string
+          last_checked_at?: string | null
+          phone_number_id: string
+          quality_rating?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+          verified_name?: string | null
+        }
+        Update: {
+          access_token_encrypted?: string
+          business_account_id?: string
+          created_at?: string
+          display_phone_number?: string | null
+          id?: string
+          last_checked_at?: string | null
+          phone_number_id?: string
+          quality_rating?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+          verified_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_config_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_templates: {
+        Row: {
+          category: string
+          components: Json
+          created_at: string
+          id: string
+          language: string
+          status: string
+          template_name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          category: string
+          components: Json
+          created_at?: string
+          id?: string
+          language?: string
+          status?: string
+          template_name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          category?: string
+          components?: Json
+          created_at?: string
+          id?: string
+          language?: string
+          status?: string
+          template_name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_templates_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
