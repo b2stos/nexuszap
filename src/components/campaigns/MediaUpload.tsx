@@ -73,11 +73,14 @@ export function MediaUpload({ onMediaUploaded, existingMedia = [] }: MediaUpload
 
         if (error) throw error;
 
-        const { data: { publicUrl } } = supabase.storage
+        // Get signed URL with 1 hour expiration instead of public URL
+        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
           .from('campaign-media')
-          .getPublicUrl(data.path);
+          .createSignedUrl(data.path, 3600); // 3600 seconds = 1 hour
 
-        uploadedUrls.push(publicUrl);
+        if (signedUrlError) throw signedUrlError;
+
+        uploadedUrls.push(signedUrlData.signedUrl);
       }
 
       const newMediaFiles = [...mediaFiles, ...uploadedUrls];
@@ -101,10 +104,21 @@ export function MediaUpload({ onMediaUploaded, existingMedia = [] }: MediaUpload
 
   const handleRemove = async (url: string) => {
     try {
-      // Extract file path from URL
-      const urlParts = url.split('/campaign-media/');
-      if (urlParts.length > 1) {
-        const filePath = urlParts[1];
+      // Extract file path from signed URL or regular URL
+      // Signed URLs contain the path before the token parameter
+      let filePath: string;
+      
+      if (url.includes('?token=')) {
+        // For signed URLs, extract path from URL structure
+        const urlObj = new URL(url);
+        filePath = urlObj.pathname.split('/campaign-media/')[1];
+      } else {
+        // Fallback for any other URL format
+        const urlParts = url.split('/campaign-media/');
+        filePath = urlParts.length > 1 ? urlParts[1] : '';
+      }
+      
+      if (filePath) {
         await supabase.storage.from('campaign-media').remove([filePath]);
       }
 
