@@ -10,6 +10,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/hooks/use-toast";
 import { Loader2, Send } from "lucide-react";
 import { MediaUpload } from "./MediaUpload";
+import { z } from "zod";
+
+const campaignSchema = z.object({
+  name: z.string().trim().min(1, { message: "Nome da campanha não pode ser vazio" }).max(200, { message: "Nome muito longo (máximo 200 caracteres)" }),
+  message: z.string().trim().min(1, { message: "Mensagem não pode ser vazia" }).max(4000, { message: "Mensagem muito longa (máximo 4000 caracteres)" }),
+});
 
 export function CampaignForm() {
   const navigate = useNavigate();
@@ -33,6 +39,18 @@ export function CampaignForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    // Validate inputs
+    const validation = campaignSchema.safeParse({ name, message });
+    if (!validation.success) {
+      const firstError = validation.error.errors[0];
+      toast({
+        title: "Erro de validação",
+        description: firstError.message,
+        variant: "destructive",
+      });
+      return;
+    }
+    
     if (!contacts || contacts.length === 0) {
       toast({
         title: "Nenhum contato disponível",
@@ -52,8 +70,8 @@ export function CampaignForm() {
         .from("campaigns")
         .insert({
           user_id: user.id,
-          name,
-          message_content: message,
+          name: validation.data.name,
+          message_content: validation.data.message,
           media_urls: mediaUrls,
           status: "draft",
         })
@@ -82,7 +100,7 @@ export function CampaignForm() {
 
       toast({
         title: "Campanha criada!",
-        description: `Campanha "${name}" criada com ${messages.length} mensagens${mediaUrls.length > 0 ? ` e ${mediaUrls.length} arquivo(s) de mídia` : ''}.`,
+        description: `Campanha "${validation.data.name}" criada com ${messages.length} mensagens${mediaUrls.length > 0 ? ` e ${mediaUrls.length} arquivo(s) de mídia` : ''}.`,
       });
 
       navigate("/dashboard/campaigns");
