@@ -19,10 +19,10 @@ serve(async (req) => {
       throw new Error('Unauthorized');
     }
 
-    // Z-API uses instance ID and token in the URL path
-    const ZAPI_INSTANCE = Deno.env.get('EVOLUTION_API_URL'); // Reusing this env var for instance ID
-    const ZAPI_TOKEN = Deno.env.get('EVOLUTION_API_KEY'); // Reusing this env var for token
-    const ZAPI_CLIENT_TOKEN = Deno.env.get('ZAPI_CLIENT_TOKEN'); // Security token
+    // Z-API credentials
+    const ZAPI_INSTANCE = Deno.env.get('ZAPI_INSTANCE_ID');
+    const ZAPI_TOKEN = Deno.env.get('ZAPI_TOKEN');
+    const ZAPI_CLIENT_TOKEN = Deno.env.get('ZAPI_CLIENT_TOKEN');
 
     if (!ZAPI_INSTANCE || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
       throw new Error('Z-API credentials not configured');
