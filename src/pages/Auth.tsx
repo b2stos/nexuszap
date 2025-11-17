@@ -8,6 +8,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/hooks/use-toast";
 import { Loader2, MessageSquare } from "lucide-react";
+import { z } from "zod";
+
+const authSchema = z.object({
+  email: z.string().trim().email({ message: "Email inválido" }).max(255, { message: "Email muito longo" }),
+  password: z.string().min(8, { message: "Senha deve ter pelo menos 8 caracteres" }).max(128, { message: "Senha muito longa" }),
+  fullName: z.string().trim().min(1, { message: "Nome não pode ser vazio" }).max(100, { message: "Nome muito longo" }).optional(),
+});
 
 export default function Auth() {
   const navigate = useNavigate();
@@ -31,13 +38,26 @@ export default function Auth() {
     setLoading(true);
 
     try {
+      // Validate inputs
+      const validation = authSchema.safeParse({ email, password, fullName });
+      if (!validation.success) {
+        const firstError = validation.error.errors[0];
+        toast({
+          title: "Erro de validação",
+          description: firstError.message,
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
       const { error } = await supabase.auth.signUp({
-        email,
-        password,
+        email: validation.data.email,
+        password: validation.data.password,
         options: {
           emailRedirectTo: `${window.location.origin}/dashboard`,
           data: {
-            full_name: fullName,
+            full_name: validation.data.fullName,
           },
         },
       });
@@ -68,9 +88,22 @@ export default function Auth() {
     setLoading(true);
 
     try {
+      // Validate inputs
+      const validation = authSchema.omit({ fullName: true }).safeParse({ email, password });
+      if (!validation.success) {
+        const firstError = validation.error.errors[0];
+        toast({
+          title: "Erro de validação",
+          description: firstError.message,
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
       const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+        email: validation.data.email,
+        password: validation.data.password,
       });
 
       if (error) throw error;
