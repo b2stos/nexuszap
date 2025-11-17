@@ -36,6 +36,49 @@ serve(async (req) => {
     
     console.log(`Action: ${action} for Z-API instance`);
 
+    if (action === 'test') {
+      // Test credentials by making a simple status check
+      const statusResponse = await fetch(`${baseUrl}/status`, {
+        method: 'GET',
+        headers: headers,
+      });
+
+      if (!statusResponse.ok) {
+        const errorText = await statusResponse.text();
+        console.error('Credentials test failed:', statusResponse.status, errorText);
+        
+        let errorMessage = 'Credenciais inválidas';
+        if (statusResponse.status === 401) {
+          errorMessage = 'Token ou Client-Token incorreto';
+        } else if (statusResponse.status === 404) {
+          errorMessage = 'Instance ID não encontrado';
+        } else if (statusResponse.status === 400) {
+          errorMessage = 'Client-Token não configurado ou inválido';
+        }
+        
+        return new Response(
+          JSON.stringify({ 
+            status: 'error',
+            error: errorMessage,
+            details: errorText,
+            httpStatus: statusResponse.status
+          }),
+          { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200 // Return 200 so frontend can handle the error gracefully
+          }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ 
+          status: 'success',
+          message: 'Credenciais Z-API válidas'
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     if (action === 'initialize') {
       // Check status first
       const statusResponse = await fetch(`${baseUrl}/status`, {

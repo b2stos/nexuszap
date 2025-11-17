@@ -35,9 +35,48 @@ export function WhatsAppConnection() {
     }
   };
 
+  const testCredentials = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke("whatsapp-session", {
+        body: { action: "test" },
+      });
+
+      if (error) {
+        console.error('Test error:', error);
+        return { success: false, error: 'Erro ao testar credenciais' };
+      }
+
+      if (data.status === 'error') {
+        return { success: false, error: data.error, details: data.details };
+      }
+
+      return { success: true };
+    } catch (error: any) {
+      console.error('Test exception:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
   const initializeSession = async () => {
     setLoading(true);
     try {
+      // First, test credentials
+      toast({
+        title: "Verificando credenciais",
+        description: "Testando conexão com Z-API...",
+      });
+
+      const testResult = await testCredentials();
+      
+      if (!testResult.success) {
+        throw new Error(testResult.error || "Credenciais inválidas");
+      }
+
+      toast({
+        title: "✓ Credenciais válidas",
+        description: "Gerando QR Code...",
+      });
+
       const { data, error } = await supabase.functions.invoke("whatsapp-session", {
         body: { action: "initialize" },
       });
