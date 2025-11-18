@@ -6,6 +6,34 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Retry configuration
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY = 1000; // 1 second
+
+// Helper function to sleep/delay
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Retry wrapper with exponential backoff
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  retries = MAX_RETRIES,
+  delay = INITIAL_RETRY_DELAY
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (retries === 0) {
+      throw error;
+    }
+    
+    console.log(`Retry attempt ${MAX_RETRIES - retries + 1}/${MAX_RETRIES} after ${delay}ms`);
+    await sleep(delay);
+    
+    // Exponential backoff: double the delay for next retry
+    return retryWithBackoff(fn, retries - 1, delay * 2);
+  }
+}
+
 // Z-API Helper Functions
 async function testZAPI(baseUrl: string, headers: any) {
   try {
@@ -24,8 +52,14 @@ async function testZAPI(baseUrl: string, headers: any) {
     const data = await response.json();
     console.log('Z-API test response:', data);
     
-    // Check for error in response
-    if (data.error) {
+    // "You are already connected" means credentials are valid
+    if (data.error === "You are already connected.") {
+      console.log('Z-API test: Already connected (valid credentials)');
+      return true;
+    }
+    
+    // Check for other errors
+    if (data.error && data.error !== "You are already connected.") {
       console.error('Z-API returned error:', data);
       return false;
     }
@@ -40,115 +74,144 @@ async function testZAPI(baseUrl: string, headers: any) {
 async function initializeZAPI(baseUrl: string, headers: any) {
   console.log('Initializing Z-API connection');
   
-  const statusResponse = await fetch(`${baseUrl}/status`, {
-    method: 'GET',
-    headers: headers,
-  });
+  return await retryWithBackoff(async () => {
+    const statusResponse = await fetch(`${baseUrl}/status`, {
+      method: 'GET',
+      headers: headers,
+    });
 
-  if (!statusResponse.ok) {
-    const errorText = await statusResponse.text();
-    console.error('Z-API status check failed:', statusResponse.status, errorText);
-    throw new Error(`Z-API não disponível. Status: ${statusResponse.status}. Verifique suas credenciais.`);
-  }
+    if (!statusResponse.ok) {
+      const errorText = await statusResponse.text();
+      console.error('Z-API status check failed:', statusResponse.status, errorText);
+      throw new Error(`Z-API não disponível. Status: ${statusResponse.status}. Verifique suas credenciais.`);
+    }
 
-  const statusData = await statusResponse.json();
-  console.log('Z-API status response:', statusData);
-  
-  // Check if Z-API returned an error
-  if (statusData.error) {
-    console.error('Z-API returned error:', statusData);
-    throw new Error(`Erro Z-API: ${statusData.error} - ${statusData.message || 'Verifique suas credenciais no painel Z-API'}`);
-  }
-  
-  // If already connected, return connected status
-  if (statusData.connected === true) {
-    console.log('WhatsApp already connected');
+    const statusData = await statusResponse.json();
+    console.log('Z-API status response:', statusData);
+    
+    // Special case: Already connected
+    if (statusData.error === "You are already connected.") {
+      console.log('WhatsApp already connected');
+      return {
+        status: 'connected',
+        phoneNumber: statusData.phone || null,
+        provider: 'Z-API',
+        message: 'WhatsApp já está conectado'
+      };
+    }
+    
+    // Check for other errors
+    if (statusData.error) {
+      console.error('Z-API returned error:', statusData);
+      throw new Error(`Erro Z-API: ${statusData.error} - ${statusData.message || 'Verifique suas credenciais no painel Z-API'}`);
+    }
+    
+    // If already connected via connected field
+    if (statusData.connected === true) {
+      console.log('WhatsApp already connected');
+      return {
+        status: 'connected',
+        phoneNumber: statusData.phone || null,
+        provider: 'Z-API'
+      };
+    }
+
+    // Try to get QR code
+    console.log('Requesting QR code from Z-API');
+    const qrResponse = await fetch(`${baseUrl}/qr-code/image`, {
+      method: 'GET',
+      headers: headers,
+    });
+
+    if (!qrResponse.ok) {
+      const errorText = await qrResponse.text();
+      console.error('Z-API QR code generation failed:', qrResponse.status, errorText);
+      throw new Error(`Falha ao gerar QR code. Status: ${qrResponse.status}`);
+    }
+
+    const qrData = await qrResponse.json();
+    console.log('QR code response received:', qrData ? 'success' : 'empty');
+    
+    if (qrData.value) {
+      return {
+        status: 'qr',
+        qrCode: qrData.value,
+        provider: 'Z-API'
+      };
+    }
+
     return {
-      status: 'connected',
-      phoneNumber: statusData.phone || null,
+      status: 'disconnected',
       provider: 'Z-API'
     };
-  }
-
-  // Try to get QR code
-  console.log('Requesting QR code from Z-API');
-  const qrResponse = await fetch(`${baseUrl}/qr-code/image`, {
-    method: 'GET',
-    headers: headers,
   });
-
-  if (!qrResponse.ok) {
-    const errorText = await qrResponse.text();
-    console.error('Z-API QR code generation failed:', qrResponse.status, errorText);
-    throw new Error(`Falha ao gerar QR code. Status: ${qrResponse.status}`);
-  }
-
-  const qrData = await qrResponse.json();
-  console.log('QR code response received:', qrData ? 'success' : 'empty');
-  
-  if (qrData.value) {
-    return {
-      status: 'qr',
-      qrCode: qrData.value,
-      provider: 'Z-API'
-    };
-  }
-
-  return {
-    status: 'disconnected',
-    provider: 'Z-API'
-  };
 }
 
 async function checkStatusZAPI(baseUrl: string, headers: any) {
-  const statusResponse = await fetch(`${baseUrl}/status`, {
-    method: 'GET',
-    headers: headers,
-  });
+  return await retryWithBackoff(async () => {
+    const statusResponse = await fetch(`${baseUrl}/status`, {
+      method: 'GET',
+      headers: headers,
+    });
 
-  if (!statusResponse.ok) {
-    const errorText = await statusResponse.text();
-    console.error('Z-API status check failed:', statusResponse.status, errorText);
-    throw new Error('Falha ao verificar status');
-  }
+    if (!statusResponse.ok) {
+      const errorText = await statusResponse.text();
+      console.error('Z-API status check failed:', statusResponse.status, errorText);
+      throw new Error('Falha ao verificar status');
+    }
 
-  const statusData = await statusResponse.json();
-  
-  if (statusData.error) {
-    console.error('Z-API returned error:', statusData);
-    throw new Error(`Erro: ${statusData.error}`);
-  }
-  
-  if (statusData.connected === true) {
+    const statusData = await statusResponse.json();
+    
+    // Special case: Already connected
+    if (statusData.error === "You are already connected.") {
+      console.log('Status check: Already connected');
+      return {
+        status: 'connected',
+        phoneNumber: statusData.phone || null,
+        provider: 'Z-API'
+      };
+    }
+    
+    // Check for other errors
+    if (statusData.error) {
+      console.error('Z-API returned error:', statusData);
+      throw new Error(`Erro: ${statusData.error}`);
+    }
+    
+    if (statusData.connected === true) {
+      return {
+        status: 'connected',
+        phoneNumber: statusData.phone || null,
+        provider: 'Z-API'
+      };
+    }
+
     return {
-      status: 'connected',
-      phoneNumber: statusData.phone || null,
+      status: 'disconnected',
       provider: 'Z-API'
     };
-  }
-
-  return {
-    status: 'disconnected',
-    provider: 'Z-API'
-  };
+  });
 }
 
 async function disconnectZAPI(baseUrl: string, headers: any) {
   console.log('Disconnecting from Z-API');
   
-  const response = await fetch(`${baseUrl}/disconnect`, {
-    method: 'GET',
-    headers: headers,
+  return await retryWithBackoff(async () => {
+    const response = await fetch(`${baseUrl}/disconnect`, {
+      method: 'GET',
+      headers: headers,
+    });
+    
+    if (!response.ok) {
+      console.error('Disconnect failed:', response.status);
+      throw new Error('Falha ao desconectar');
+    }
+    
+    return {
+      status: 'disconnected',
+      provider: 'Z-API'
+    };
   });
-  
-  if (!response.ok) {
-    console.error('Disconnect failed:', response.status);
-  }
-  
-  return {
-    status: 'disconnected',
-    provider: 'Z-API'
-  };
 }
 
 serve(async (req) => {
