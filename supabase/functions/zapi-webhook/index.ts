@@ -25,6 +25,21 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    // Save webhook event to database for monitoring
+    const { error: eventError } = await supabase
+      .from('webhook_events')
+      .insert({
+        event_type: webhookData.event || 'status',
+        phone: webhookData.phone || webhookData.chatId?.split('@')[0],
+        status: webhookData.status || webhookData.messageStatus,
+        payload: webhookData,
+        processed: false
+      });
+
+    if (eventError) {
+      console.error('Error saving webhook event:', eventError);
+    }
+
     // Z-API webhook events
     // messageStatus events: SENT, DELIVERED, READ, FAILED
     if (webhookData.event === 'status' || webhookData.status) {
@@ -92,6 +107,18 @@ serve(async (req) => {
           console.error('Error updating message:', updateError);
         } else {
           console.log(`Message ${message.id} updated:`, updateData);
+          
+          // Update webhook event with message_id and mark as processed
+          await supabase
+            .from('webhook_events')
+            .update({ 
+              message_id: message.id,
+              processed: true 
+            })
+            .eq('phone', phone)
+            .is('processed', false)
+            .order('created_at', { ascending: false })
+            .limit(1);
         }
       }
     }
