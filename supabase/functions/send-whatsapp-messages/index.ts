@@ -7,26 +7,31 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Delay helper
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { campaignId, instanceName } = await req.json();
+    const { campaignId } = await req.json();
     
     const authHeader = req.headers.get('authorization');
     if (!authHeader) {
       throw new Error('Unauthorized');
     }
 
-    const EVOLUTION_API_URL = Deno.env.get('EVOLUTION_API_URL');
-    const EVOLUTION_API_KEY = Deno.env.get('EVOLUTION_API_KEY');
+    // Get Z-API credentials
+    const ZAPI_INSTANCE_ID = Deno.env.get('ZAPI_INSTANCE_ID');
+    const ZAPI_TOKEN = Deno.env.get('ZAPI_TOKEN');
+    const ZAPI_CLIENT_TOKEN = Deno.env.get('ZAPI_CLIENT_TOKEN');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-    if (!EVOLUTION_API_URL || !EVOLUTION_API_KEY) {
-      throw new Error('Evolution API credentials not configured');
+    if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
+      throw new Error('Z-API credentials not configured');
     }
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -34,10 +39,13 @@ serve(async (req) => {
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-    const instance = instanceName || 'whatsapp-business';
+    const zapiBaseUrl = `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}`;
+    const zapiHeaders = {
+      'Client-Token': ZAPI_CLIENT_TOKEN,
+      'Content-Type': 'application/json'
+    };
     
-    console.log(`Sending campaign ${campaignId} via instance ${instance}`);
+    console.log(`Sending campaign ${campaignId} via Z-API`);
 
     // Get campaign details
     const { data: campaign, error: campaignError } = await supabase
@@ -72,32 +80,22 @@ serve(async (req) => {
     let successCount = 0;
     let failCount = 0;
 
-    // Send messages with delay between each
+    // Send messages with delay between each (to avoid rate limiting)
     for (const message of messages) {
       try {
         const phoneNumber = message.contacts.phone.replace(/\D/g, '');
         
-        // Prepare message payload
-        const messagePayload: any = {
-          number: phoneNumber,
-          text: campaign.message_content,
+        console.log(`Sending to ${phoneNumber}`);
+
+        // Send text message via Z-API
+        const messagePayload = {
+          phone: phoneNumber,
+          message: campaign.message_content,
         };
 
-        // Add media if present
-        if (campaign.media_urls && campaign.media_urls.length > 0) {
-          messagePayload.mediaMessage = {
-            mediatype: 'image',
-            media: campaign.media_urls[0],
-          };
-        }
-
-        // Send message via Evolution API
-        const sendResponse = await fetch(`${EVOLUTION_API_URL}/message/sendText/${instance}`, {
+        const sendResponse = await fetch(`${zapiBaseUrl}/send-text`, {
           method: 'POST',
-          headers: {
-            'apikey': EVOLUTION_API_KEY,
-            'Content-Type': 'application/json',
-          },
+          headers: zapiHeaders,
           body: JSON.stringify(messagePayload),
         });
 
@@ -109,7 +107,7 @@ serve(async (req) => {
             .from('messages')
             .update({
               status: 'failed',
-              error_message: `Evolution API error: ${sendResponse.status}`
+              error_message: `Z-API error: ${sendResponse.status} - ${errorText}`
             })
             .eq('id', message.id);
           
@@ -129,17 +127,19 @@ serve(async (req) => {
           successCount++;
         }
 
-        // Delay between messages (1 second)
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Add delay between messages (1 second) to avoid rate limiting
+        if (messages.indexOf(message) < messages.length - 1) {
+          await sleep(1000);
+        }
 
-      } catch (error: any) {
+      } catch (error) {
         console.error(`Error sending message ${message.id}:`, error);
         
         await supabase
           .from('messages')
           .update({
             status: 'failed',
-            error_message: error.message
+            error_message: error instanceof Error ? error.message : 'Unknown error'
           })
           .eq('id', message.id);
         
@@ -162,18 +162,24 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
+        total: messages.length,
         sent: successCount,
         failed: failCount,
-        total: messages.length
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-  } catch (error: any) {
-    console.error('Error in send-whatsapp-messages:', error);
+  } catch (error) {
+    console.error('Edge function error:', error);
     return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({
+        error: error instanceof Error ? error.message : 'Unknown error',
+        details: error instanceof Error ? error.stack : String(error)
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      }
     );
   }
 });
