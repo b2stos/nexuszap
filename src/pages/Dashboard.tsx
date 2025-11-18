@@ -5,7 +5,9 @@ import { User } from "@supabase/supabase-js";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { MetricsCards } from "@/components/dashboard/MetricsCards";
 import { RecentCampaigns } from "@/components/dashboard/RecentCampaigns";
+import { WebhookMonitor } from "@/components/dashboard/WebhookMonitor";
 import { Loader2 } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -71,8 +73,21 @@ export default function Dashboard() {
           </div>
         </div>
         
-        <MetricsCards />
-        <RecentCampaigns />
+        <Tabs defaultValue="overview" className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="overview">Visão Geral</TabsTrigger>
+            <TabsTrigger value="webhooks">Webhooks (Tempo Real)</TabsTrigger>
+          </TabsList>
+          
+          <TabsContent value="overview" className="space-y-6">
+            <MetricsCards />
+            <RecentCampaigns />
+          </TabsContent>
+          
+          <TabsContent value="webhooks">
+            <WebhookMonitor />
+          </TabsContent>
+        </Tabs>
       </div>
     </DashboardLayout>
   );
