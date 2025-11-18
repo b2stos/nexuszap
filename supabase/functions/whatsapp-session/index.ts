@@ -9,18 +9,37 @@ const corsHeaders = {
 // Z-API Helper Functions
 async function testZAPI(baseUrl: string, headers: any) {
   try {
+    console.log('Testing Z-API connection:', baseUrl);
     const response = await fetch(`${baseUrl}/status`, {
       method: 'GET',
       headers: headers,
     });
-    return response.ok;
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Z-API test failed - Status:', response.status, 'Error:', errorText);
+      return false;
+    }
+    
+    const data = await response.json();
+    console.log('Z-API test response:', data);
+    
+    // Check for error in response
+    if (data.error) {
+      console.error('Z-API returned error:', data);
+      return false;
+    }
+    
+    return true;
   } catch (error) {
-    console.error('Z-API test failed:', error);
+    console.error('Z-API test exception:', error);
     return false;
   }
 }
 
 async function initializeZAPI(baseUrl: string, headers: any) {
+  console.log('Initializing Z-API connection');
+  
   const statusResponse = await fetch(`${baseUrl}/status`, {
     method: 'GET',
     headers: headers,
@@ -29,7 +48,7 @@ async function initializeZAPI(baseUrl: string, headers: any) {
   if (!statusResponse.ok) {
     const errorText = await statusResponse.text();
     console.error('Z-API status check failed:', statusResponse.status, errorText);
-    throw new Error(`Z-API não disponível (${statusResponse.status})`);
+    throw new Error(`Z-API não disponível. Status: ${statusResponse.status}. Verifique suas credenciais.`);
   }
 
   const statusData = await statusResponse.json();
@@ -38,10 +57,12 @@ async function initializeZAPI(baseUrl: string, headers: any) {
   // Check if Z-API returned an error
   if (statusData.error) {
     console.error('Z-API returned error:', statusData);
-    throw new Error(`Z-API Error: ${statusData.error} - ${statusData.message || 'Verifique suas credenciais'}`);
+    throw new Error(`Erro Z-API: ${statusData.error} - ${statusData.message || 'Verifique suas credenciais no painel Z-API'}`);
   }
   
+  // If already connected, return connected status
   if (statusData.connected === true) {
+    console.log('WhatsApp already connected');
     return {
       status: 'connected',
       phoneNumber: statusData.phone || null,
@@ -49,16 +70,21 @@ async function initializeZAPI(baseUrl: string, headers: any) {
     };
   }
 
+  // Try to get QR code
+  console.log('Requesting QR code from Z-API');
   const qrResponse = await fetch(`${baseUrl}/qr-code/image`, {
     method: 'GET',
     headers: headers,
   });
 
   if (!qrResponse.ok) {
-    throw new Error('Z-API QR code generation failed');
+    const errorText = await qrResponse.text();
+    console.error('Z-API QR code generation failed:', qrResponse.status, errorText);
+    throw new Error(`Falha ao gerar QR code. Status: ${qrResponse.status}`);
   }
 
   const qrData = await qrResponse.json();
+  console.log('QR code response received:', qrData ? 'success' : 'empty');
   
   if (qrData.value) {
     return {
@@ -81,10 +107,17 @@ async function checkStatusZAPI(baseUrl: string, headers: any) {
   });
 
   if (!statusResponse.ok) {
-    throw new Error('Z-API status check failed');
+    const errorText = await statusResponse.text();
+    console.error('Z-API status check failed:', statusResponse.status, errorText);
+    throw new Error('Falha ao verificar status');
   }
 
   const statusData = await statusResponse.json();
+  
+  if (statusData.error) {
+    console.error('Z-API returned error:', statusData);
+    throw new Error(`Erro: ${statusData.error}`);
+  }
   
   if (statusData.connected === true) {
     return {
@@ -101,10 +134,16 @@ async function checkStatusZAPI(baseUrl: string, headers: any) {
 }
 
 async function disconnectZAPI(baseUrl: string, headers: any) {
-  await fetch(`${baseUrl}/disconnect`, {
+  console.log('Disconnecting from Z-API');
+  
+  const response = await fetch(`${baseUrl}/disconnect`, {
     method: 'GET',
     headers: headers,
   });
+  
+  if (!response.ok) {
+    console.error('Disconnect failed:', response.status);
+  }
   
   return {
     status: 'disconnected',
@@ -112,359 +151,92 @@ async function disconnectZAPI(baseUrl: string, headers: any) {
   };
 }
 
-// Evolution API Helper Functions
-async function testEvolutionAPI(apiUrl: string, apiKey: string) {
-  try {
-    // Ensure URL has protocol
-    const fullUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`;
-    
-    const response = await fetch(`${fullUrl}/instance/fetchInstances`, {
-      method: 'GET',
-      headers: {
-        'apikey': apiKey,
-        'Content-Type': 'application/json'
-      },
-    });
-    return response.ok;
-  } catch (error) {
-    console.error('Evolution API test failed:', error);
-    return false;
-  }
-}
-
-async function initializeEvolutionAPI(apiUrl: string, apiKey: string, instanceName: string = 'whatsapp-instance') {
-  // Ensure URL has protocol
-  const fullUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`;
-  
-  // Check if instance exists
-  const instancesResponse = await fetch(`${fullUrl}/instance/fetchInstances`, {
-    method: 'GET',
-    headers: {
-      'apikey': apiKey,
-      'Content-Type': 'application/json'
-    },
-  });
-
-  if (!instancesResponse.ok) {
-    throw new Error('Evolution API instance fetch failed');
-  }
-
-  const instances = await instancesResponse.json();
-  const existingInstance = instances.find((i: any) => i.instanceName === instanceName);
-
-  if (!existingInstance) {
-    // Create instance
-    const createResponse = await fetch(`${fullUrl}/instance/create`, {
-      method: 'POST',
-      headers: {
-        'apikey': apiKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        instanceName: instanceName,
-        qrcode: true,
-      }),
-    });
-
-    if (!createResponse.ok) {
-      throw new Error('Evolution API instance creation failed');
-    }
-  }
-
-  // Get connection status
-  const statusResponse = await fetch(`${fullUrl}/instance/connectionState/${instanceName}`, {
-    method: 'GET',
-    headers: {
-      'apikey': apiKey,
-      'Content-Type': 'application/json'
-    },
-  });
-
-  if (!statusResponse.ok) {
-    throw new Error('Evolution API status check failed');
-  }
-
-  const statusData = await statusResponse.json();
-
-  if (statusData.state === 'open') {
-    return {
-      status: 'connected',
-      phoneNumber: statusData.instance?.owner || null,
-      provider: 'Evolution API'
-    };
-  }
-
-  // Get QR code
-  const qrResponse = await fetch(`${fullUrl}/instance/connect/${instanceName}`, {
-    method: 'GET',
-    headers: {
-      'apikey': apiKey,
-      'Content-Type': 'application/json'
-    },
-  });
-
-  if (!qrResponse.ok) {
-    throw new Error('Evolution API QR code generation failed');
-  }
-
-  const qrData = await qrResponse.json();
-  
-  if (qrData.base64) {
-    return {
-      status: 'qr',
-      qrCode: qrData.base64,
-      provider: 'Evolution API'
-    };
-  }
-
-  return {
-    status: 'disconnected',
-    provider: 'Evolution API'
-  };
-}
-
-async function checkStatusEvolutionAPI(apiUrl: string, apiKey: string, instanceName: string = 'whatsapp-instance') {
-  const fullUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`;
-  
-  const statusResponse = await fetch(`${fullUrl}/instance/connectionState/${instanceName}`, {
-    method: 'GET',
-    headers: {
-      'apikey': apiKey,
-      'Content-Type': 'application/json'
-    },
-  });
-
-  if (!statusResponse.ok) {
-    throw new Error('Evolution API status check failed');
-  }
-
-  const statusData = await statusResponse.json();
-
-  if (statusData.state === 'open') {
-    return {
-      status: 'connected',
-      phoneNumber: statusData.instance?.owner || null,
-      provider: 'Evolution API'
-    };
-  }
-
-  return {
-    status: 'disconnected',
-    provider: 'Evolution API'
-  };
-}
-
-async function disconnectEvolutionAPI(apiUrl: string, apiKey: string, instanceName: string = 'whatsapp-instance') {
-  const fullUrl = apiUrl.startsWith('http') ? apiUrl : `https://${apiUrl}`;
-  
-  await fetch(`${fullUrl}/instance/logout/${instanceName}`, {
-    method: 'DELETE',
-    headers: {
-      'apikey': apiKey,
-      'Content-Type': 'application/json'
-    },
-  });
-
-  return {
-    status: 'disconnected',
-    provider: 'Evolution API'
-  };
-}
-
 serve(async (req) => {
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
     const { action } = await req.json();
-    
-    
-    const authHeader = req.headers.get('authorization');
-    if (!authHeader) {
-      throw new Error('Unauthorized');
-    }
+    console.log('Action:', action);
 
-    // Get credentials for both providers
-    const ZAPI_INSTANCE = Deno.env.get('ZAPI_INSTANCE_ID');
+    // Get Z-API credentials
+    const ZAPI_INSTANCE_ID = Deno.env.get('ZAPI_INSTANCE_ID');
     const ZAPI_TOKEN = Deno.env.get('ZAPI_TOKEN');
     const ZAPI_CLIENT_TOKEN = Deno.env.get('ZAPI_CLIENT_TOKEN');
-    
-    const EVOLUTION_API_URL = Deno.env.get('EVOLUTION_API_URL');
-    const EVOLUTION_API_KEY = Deno.env.get('EVOLUTION_API_KEY');
 
-    const hasZAPICredentials = ZAPI_INSTANCE && ZAPI_TOKEN && ZAPI_CLIENT_TOKEN;
-    const hasEvolutionCredentials = EVOLUTION_API_URL && EVOLUTION_API_KEY;
-
-    if (!hasZAPICredentials && !hasEvolutionCredentials) {
-      throw new Error('Neither Z-API nor Evolution API credentials are configured');
-    }
-
-    let zapiBaseUrl: string | null = null;
-    let zapiHeaders: any = null;
-    
-    if (hasZAPICredentials) {
-      zapiBaseUrl = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}`;
-      zapiHeaders = {
-        'Client-Token': ZAPI_CLIENT_TOKEN,
-        'Content-Type': 'application/json'
-      };
-    }
-    
-    
-    console.log(`Action: ${action}`);
-
-    if (action === 'test') {
-      // Test both providers and return which ones are available
-      const zapiWorks = hasZAPICredentials ? await testZAPI(zapiBaseUrl!, zapiHeaders) : false;
-      const evolutionWorks = hasEvolutionCredentials ? await testEvolutionAPI(EVOLUTION_API_URL!, EVOLUTION_API_KEY!) : false;
-
-      if (!zapiWorks && !evolutionWorks) {
-        return new Response(
-          JSON.stringify({ 
-            status: 'error',
-            error: 'Nenhuma API disponível. Verifique suas credenciais.',
-            providers: {
-              zapi: zapiWorks,
-              evolution: evolutionWorks
-            }
-          }),
-          { 
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 200
-          }
-        );
-      }
-
+    if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
+      console.error('Missing Z-API credentials');
       return new Response(
         JSON.stringify({ 
-          status: 'success',
-          message: zapiWorks ? 'Z-API disponível' : 'Evolution API disponível',
-          providers: {
-            zapi: zapiWorks,
-            evolution: evolutionWorks
-          }
+          error: 'Credenciais Z-API não configuradas',
+          details: 'Configure ZAPI_INSTANCE_ID, ZAPI_TOKEN e ZAPI_CLIENT_TOKEN nos secrets'
         }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
       );
     }
 
-    if (action === 'initialize') {
-      let result;
-      let lastError;
+    const zapiBaseUrl = `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}`;
+    const zapiHeaders = {
+      'Client-Token': ZAPI_CLIENT_TOKEN,
+      'Content-Type': 'application/json'
+    };
 
-      // Try Z-API first
-      if (hasZAPICredentials) {
-        try {
-          console.log('Trying Z-API...');
-          result = await initializeZAPI(zapiBaseUrl!, zapiHeaders);
-          console.log('Z-API successful:', result);
-          return new Response(
-            JSON.stringify(result),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        } catch (error: any) {
-          console.error('Z-API failed:', error.message);
-          lastError = error;
-        }
-      }
+    let result;
 
-      // Fallback to Evolution API
-      if (hasEvolutionCredentials) {
-        try {
-          console.log('Trying Evolution API as fallback...');
-          result = await initializeEvolutionAPI(EVOLUTION_API_URL!, EVOLUTION_API_KEY!);
-          console.log('Evolution API successful:', result);
-          return new Response(
-            JSON.stringify(result),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        } catch (error: any) {
-          console.error('Evolution API failed:', error.message);
-          lastError = error;
-        }
-      }
+    switch (action) {
+      case 'test':
+        console.log('Testing Z-API credentials');
+        const isValid = await testZAPI(zapiBaseUrl, zapiHeaders);
+        result = { 
+          success: isValid,
+          provider: 'Z-API',
+          message: isValid ? 'Credenciais válidas' : 'Credenciais inválidas. Verifique no painel Z-API.'
+        };
+        break;
 
-      // Both failed
-      throw lastError || new Error('Failed to initialize WhatsApp session');
+      case 'initialize':
+        console.log('Initializing WhatsApp session');
+        result = await initializeZAPI(zapiBaseUrl, zapiHeaders);
+        break;
+
+      case 'status':
+        console.log('Checking WhatsApp status');
+        result = await checkStatusZAPI(zapiBaseUrl, zapiHeaders);
+        break;
+
+      case 'disconnect':
+        console.log('Disconnecting WhatsApp');
+        result = await disconnectZAPI(zapiBaseUrl, zapiHeaders);
+        break;
+
+      default:
+        return new Response(
+          JSON.stringify({ error: 'Invalid action' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
     }
 
-    if (action === 'status') {
-      let result;
-      let lastError;
+    return new Response(
+      JSON.stringify(result),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
 
-      // Try Z-API first
-      if (hasZAPICredentials) {
-        try {
-          result = await checkStatusZAPI(zapiBaseUrl!, zapiHeaders);
-          return new Response(
-            JSON.stringify(result),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        } catch (error: any) {
-          console.error('Z-API status check failed:', error.message);
-          lastError = error;
-        }
-      }
-
-      // Fallback to Evolution API
-      if (hasEvolutionCredentials) {
-        try {
-          result = await checkStatusEvolutionAPI(EVOLUTION_API_URL!, EVOLUTION_API_KEY!);
-          return new Response(
-            JSON.stringify(result),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        } catch (error: any) {
-          console.error('Evolution API status check failed:', error.message);
-          lastError = error;
-        }
-      }
-
-      // Both failed - return disconnected
-      return new Response(
-        JSON.stringify({ status: 'disconnected' }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    if (action === 'disconnect') {
-      // Try to disconnect from both providers
-      if (hasZAPICredentials) {
-        try {
-          await disconnectZAPI(zapiBaseUrl!, zapiHeaders);
-        } catch (error) {
-          console.error('Z-API disconnect failed:', error);
-        }
-      }
-
-      if (hasEvolutionCredentials) {
-        try {
-          await disconnectEvolutionAPI(EVOLUTION_API_URL!, EVOLUTION_API_KEY!);
-        } catch (error) {
-          console.error('Evolution API disconnect failed:', error);
-        }
-      }
-
-      return new Response(
-        JSON.stringify({ status: 'disconnected' }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    throw new Error('Invalid action');
-
-  } catch (error: any) {
+  } catch (error) {
     console.error('Edge function error:', error);
     return new Response(
       JSON.stringify({ 
-        error: error.message,
-        details: error.stack,
-        type: error.name
+        error: error instanceof Error ? error.message : 'Erro desconhecido',
+        details: error instanceof Error ? error.stack : String(error),
+        type: error instanceof Error ? error.name : 'Error'
       }),
       { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 500
+        status: 500, 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
       }
     );
   }

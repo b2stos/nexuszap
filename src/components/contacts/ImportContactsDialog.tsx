@@ -108,14 +108,27 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
           });
 
           const phoneNumbers = batches[i].map(c => c.phone);
+          
+          console.log('Calling validate-phone-numbers with:', phoneNumbers.length, 'numbers');
+          
           const { data: validationData, error: validationError } = await supabase.functions.invoke(
             'validate-phone-numbers',
             {
               body: { phoneNumbers }
             }
           );
+          
+          console.log('Validation response:', { validationData, validationError });
 
-          if (validationError) throw validationError;
+          if (validationError) {
+            console.error('Validation error:', validationError);
+            throw new Error(`Erro na validação por IA: ${validationError.message || 'Erro desconhecido'}`);
+          }
+          
+          if (!validationData || !validationData.results) {
+            console.error('Invalid validation response:', validationData);
+            throw new Error('Resposta inválida da validação. Tente novamente.');
+          }
           
           allResults = [...allResults, ...(validationData.results as ValidationResult[])];
         }
