@@ -1,9 +1,23 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Send, CheckCircle2, Eye, AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Send, CheckCircle2, Eye, AlertCircle, Trash2 } from "lucide-react";
 import { SendCampaignButton } from "./SendCampaignButton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { toast } from "sonner";
+import { useState } from "react";
 
 const statusLabels = {
   draft: "Rascunho",
@@ -20,6 +34,9 @@ const statusColors = {
 };
 
 export function CampaignsGrid() {
+  const queryClient = useQueryClient();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  
   const { data: campaigns, refetch } = useQuery({
     queryKey: ["campaigns"],
     queryFn: async () => {
@@ -35,6 +52,26 @@ export function CampaignsGrid() {
       return data;
     },
   });
+
+  const handleDelete = async (campaignId: string, campaignName: string) => {
+    setDeletingId(campaignId);
+    try {
+      const { error } = await supabase
+        .from("campaigns")
+        .delete()
+        .eq("id", campaignId);
+
+      if (error) throw error;
+
+      toast.success(`Campanha "${campaignName}" excluída com sucesso`);
+      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+    } catch (error: any) {
+      console.error("Error deleting campaign:", error);
+      toast.error("Erro ao excluir campanha");
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -66,9 +103,40 @@ export function CampaignsGrid() {
                     {new Date(campaign.created_at).toLocaleDateString("pt-BR")}
                   </CardDescription>
                 </div>
-                <Badge className={statusColors[campaign.status as keyof typeof statusColors]}>
-                  {statusLabels[campaign.status as keyof typeof statusLabels]}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge className={statusColors[campaign.status as keyof typeof statusColors]}>
+                    {statusLabels[campaign.status as keyof typeof statusLabels]}
+                  </Badge>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        disabled={deletingId === campaign.id}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Tem certeza que deseja excluir a campanha "{campaign.name}"? Esta ação não pode ser desfeita e todas as mensagens associadas serão perdidas.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={() => handleDelete(campaign.id, campaign.name)}
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                          Excluir
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
               </div>
               <SendCampaignButton 
                 campaignId={campaign.id}
