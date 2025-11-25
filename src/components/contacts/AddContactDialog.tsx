@@ -7,6 +7,24 @@ import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { z } from "zod";
+
+const contactSchema = z.object({
+  name: z.string()
+    .trim()
+    .min(1, { message: "Nome não pode ser vazio" })
+    .max(100, { message: "Nome muito longo (máximo 100 caracteres)" }),
+  phone: z.string()
+    .trim()
+    .min(10, { message: "Telefone muito curto (mínimo 10 dígitos)" })
+    .max(15, { message: "Telefone muito longo (máximo 15 dígitos)" })
+    .regex(/^[0-9]+$/, { message: "Telefone deve conter apenas números" })
+    .refine((val) => {
+      // WhatsApp format validation: DDI + DDD + número
+      const cleanPhone = val.replace(/\D/g, "");
+      return cleanPhone.length >= 10 && cleanPhone.length <= 15;
+    }, { message: "Formato de telefone inválido para WhatsApp" }),
+});
 
 interface AddContactDialogProps {
   open?: boolean;
@@ -20,10 +38,13 @@ export function AddContactDialog({ open, onOpenChange }: AddContactDialogProps) 
   const queryClient = useQueryClient();
 
   const handleAdd = async () => {
-    if (!name.trim() || !phone.trim()) {
+    // Validate with Zod
+    const validation = contactSchema.safeParse({ name, phone });
+    if (!validation.success) {
+      const firstError = validation.error.errors[0];
       toast({
-        title: "Campos obrigatórios",
-        description: "Preencha nome e telefone",
+        title: "Erro de validação",
+        description: firstError.message,
         variant: "destructive",
       });
       return;
@@ -35,17 +56,12 @@ export function AddContactDialog({ open, onOpenChange }: AddContactDialogProps) 
       if (!user) throw new Error("Usuário não autenticado");
 
       // Validate phone with AI
-      console.log('Validating phone:', phone);
-      
       const { data: validationData, error: validationError } = await supabase.functions.invoke(
         'validate-phone-numbers',
-        { body: { phoneNumbers: [phone] } }
+        { body: { phoneNumbers: [validation.data.phone] } }
       );
 
-      console.log('Validation response:', { validationData, validationError });
-
       if (validationError) {
-        console.error('Validation error:', validationError);
         throw new Error(`Erro na validação: ${validationError.message || 'Erro desconhecido'}`);
       }
 
@@ -70,15 +86,15 @@ export function AddContactDialog({ open, onOpenChange }: AddContactDialogProps) 
         .from('contacts')
         .insert({
           user_id: user.id,
-          name: name.trim(),
+          name: validation.data.name,
           phone: result.formatted,
         });
 
       if (insertError) throw insertError;
 
       toast({
-        title: "Contato adicionado!",
-        description: `${name} foi adicionado com sucesso`,
+        title: "Contato adicionado com sucesso!",
+        description: `${validation.data.name} foi adicionado à sua lista de contatos`,
       });
 
       // Reset form
@@ -93,10 +109,9 @@ export function AddContactDialog({ open, onOpenChange }: AddContactDialogProps) 
         onOpenChange(false);
       }
     } catch (error: any) {
-      console.error('Add contact error:', error);
       toast({
         title: "Erro ao adicionar contato",
-        description: error.message,
+        description: error.message || "Ocorreu um erro ao adicionar o contato. Tente novamente.",
         variant: "destructive",
       });
     } finally {
