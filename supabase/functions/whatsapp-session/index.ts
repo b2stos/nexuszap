@@ -157,7 +157,18 @@ async function checkStatusZAPI(baseUrl: string, headers: any) {
     if (!statusResponse.ok) {
       const errorText = await statusResponse.text();
       console.error('Z-API status check failed:', statusResponse.status, errorText);
-      throw new Error('Falha ao verificar status');
+      
+      // Try to parse the error response
+      try {
+        const errorData = JSON.parse(errorText);
+        if (errorData.error) {
+          throw new Error(`Erro Z-API: ${errorData.error}`);
+        }
+      } catch (parseError) {
+        // If parsing fails, use generic error
+      }
+      
+      throw new Error(`Falha ao verificar status (${statusResponse.status})`);
     }
 
     const statusData = await statusResponse.json();
