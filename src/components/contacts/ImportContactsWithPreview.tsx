@@ -5,12 +5,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Upload, CheckCircle, XCircle, FileText, AlertTriangle } from "lucide-react";
+import { Loader2, Upload, CheckCircle, XCircle, FileText, AlertTriangle, Sparkles } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { z } from "zod";
@@ -46,6 +47,8 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
   const [loading, setLoading] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [useAI, setUseAI] = useState(true);
+  const [columnMapping, setColumnMapping] = useState<{ nameColumn: string; phoneColumn: string } | null>(null);
   const queryClient = useQueryClient();
 
   const validateContact = (contact: { name: string; phone: string }): { isValid: boolean; error?: string } => {
@@ -105,15 +108,30 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
       reader.onload = (e) => {
         try {
           const data = e.target?.result;
-          const workbook = XLSX.read(data, { type: "binary" });
+          const workbook = XLSX.read(data, { type: "binary", cellText: false, cellDates: true });
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
-          const jsonData = XLSX.utils.sheet_to_json(worksheet);
+          
+          // Convert with raw values to handle scientific notation
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: "" });
 
           const parsedContacts: ParsedContact[] = jsonData
             .map((row: any) => {
               const name = (row.nome || row.name || row.Nome || row.Name || "").trim();
-              const phone = String(row.telefone || row.phone || row.Telefone || row.Phone || row.tel || "").replace(/\D/g, "");
+              
+              // Handle scientific notation and various formats
+              let phoneRaw = String(row.telefone || row.phone || row.Telefone || row.Phone || row.tel || "");
+              
+              // Convert scientific notation (e.g., 5.51199E+10) to full number
+              if (phoneRaw.includes('E') || phoneRaw.includes('e')) {
+                try {
+                  phoneRaw = Number(phoneRaw).toFixed(0);
+                } catch {
+                  // Keep as is if conversion fails
+                }
+              }
+              
+              const phone = phoneRaw.replace(/\D/g, "");
 
               const validation = validateContact({ name, phone });
 
@@ -137,23 +155,103 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
     });
   };
 
+  const parseWithAI = async (file: File): Promise<ParsedContact[]> => {
+    return new Promise(async (resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = async (e) => {
+        try {
+          const data = e.target?.result;
+          let rawData: any[];
+
+          if (file.name.endsWith(".csv")) {
+            // Parse CSV to raw data
+            const result = Papa.parse(data as string, { header: true, skipEmptyLines: true });
+            rawData = result.data;
+          } else {
+            // Parse Excel to raw data
+            const workbook = XLSX.read(data, { type: "binary", cellText: false, cellDates: true });
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            rawData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: "" });
+          }
+
+          if (rawData.length === 0) {
+            reject(new Error("Arquivo vazio"));
+            return;
+          }
+
+          // Call AI edge function
+          const { data: aiResult, error: aiError } = await supabase.functions.invoke(
+            "smart-contact-import",
+            { body: { rawData } }
+          );
+
+          if (aiError) {
+            console.error("AI parsing error:", aiError);
+            reject(new Error(aiError.message || "Erro ao processar com IA"));
+            return;
+          }
+
+          if (!aiResult?.processedContacts) {
+            reject(new Error("Resposta inválida da IA"));
+            return;
+          }
+
+          // Set column mapping for display
+          if (aiResult.columnMapping) {
+            setColumnMapping(aiResult.columnMapping);
+          }
+
+          // Convert AI results to ParsedContact format
+          const parsedContacts: ParsedContact[] = aiResult.processedContacts.map((contact: any) => ({
+            name: contact.name,
+            phone: contact.phone,
+            formatted: contact.phone,
+            status: contact.isValid ? "valid" : "invalid",
+            error: contact.error,
+          }));
+
+          resolve(parsedContacts);
+        } catch (error: any) {
+          reject(error);
+        }
+      };
+
+      reader.onerror = () => reject(new Error("Erro ao ler arquivo"));
+      
+      if (file.name.endsWith(".csv")) {
+        reader.readAsText(file);
+      } else {
+        reader.readAsBinaryString(file);
+      }
+    });
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
 
     setFile(selectedFile);
     setContacts([]);
+    setColumnMapping(null);
     setParsing(true);
 
     try {
       let parsedContacts: ParsedContact[];
 
-      if (selectedFile.name.endsWith(".csv")) {
-        parsedContacts = await parseCSV(selectedFile);
-      } else if (selectedFile.name.endsWith(".xlsx") || selectedFile.name.endsWith(".xls")) {
-        parsedContacts = await parseExcel(selectedFile);
+      if (useAI) {
+        // Use AI-powered parsing
+        parsedContacts = await parseWithAI(selectedFile);
       } else {
-        throw new Error("Formato de arquivo não suportado");
+        // Use traditional parsing
+        if (selectedFile.name.endsWith(".csv")) {
+          parsedContacts = await parseCSV(selectedFile);
+        } else if (selectedFile.name.endsWith(".xlsx") || selectedFile.name.endsWith(".xls")) {
+          parsedContacts = await parseExcel(selectedFile);
+        } else {
+          throw new Error("Formato de arquivo não suportado");
+        }
       }
 
       if (parsedContacts.length === 0) {
@@ -178,8 +276,8 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
       setContacts(parsedContacts);
 
       toast({
-        title: "Arquivo processado!",
-        description: `${parsedContacts.length} contatos encontrados. Revise antes de importar.`,
+        title: useAI ? "IA processou o arquivo!" : "Arquivo processado!",
+        description: `${parsedContacts.length} contatos encontrados. ${useAI ? "Telefones já normalizados pela IA." : "Revise antes de importar."}`,
       });
     } catch (error: any) {
       toast({
@@ -208,64 +306,75 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
     }
 
     setLoading(true);
-    setValidating(true);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado");
 
-      // Validate phones with edge function in batches
-      const BATCH_SIZE = 100;
-      const batches: ParsedContact[][] = [];
-      for (let i = 0; i < validContacts.length; i += BATCH_SIZE) {
-        batches.push(validContacts.slice(i, i + BATCH_SIZE));
-      }
+      let contactsToInsert;
 
-      let updatedContacts = [...contacts];
-
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        const phoneNumbers = batch.map((c) => c.phone);
-
-        const { data: validationData, error: validationError } = await supabase.functions.invoke(
-          "validate-phone-numbers",
-          { body: { phoneNumbers } }
-        );
-
-        if (validationError || !validationData?.results) {
-          throw new Error("Erro na validação de telefones");
-        }
-
-        // Update contacts with validation results
-        batch.forEach((contact, index) => {
-          const result = validationData.results[index];
-          const contactIndex = updatedContacts.findIndex(
-            (c) => c.phone === contact.phone && c.name === contact.name
-          );
-
-          if (contactIndex !== -1) {
-            updatedContacts[contactIndex] = {
-              ...updatedContacts[contactIndex],
-              status: result.isValid ? "valid" : "invalid",
-              error: result.isValid ? undefined : result.reason,
-              formatted: result.isValid ? result.formatted : undefined,
-            };
-          }
-        });
-      }
-
-      setContacts(updatedContacts);
-      setValidating(false);
-
-      // Insert valid contacts
-      const contactsToInsert = updatedContacts
-        .filter((c) => c.status === "valid" && c.formatted)
-        .map((c) => ({
+      if (useAI) {
+        // AI already validated, use directly
+        contactsToInsert = validContacts.map((c) => ({
           user_id: user.id,
           name: c.name,
-          phone: c.formatted!,
+          phone: c.formatted || c.phone,
           import_batch_id: crypto.randomUUID(),
         }));
+      } else {
+        // Traditional validation
+        setValidating(true);
+        
+        const BATCH_SIZE = 100;
+        const batches: ParsedContact[][] = [];
+        for (let i = 0; i < validContacts.length; i += BATCH_SIZE) {
+          batches.push(validContacts.slice(i, i + BATCH_SIZE));
+        }
+
+        let updatedContacts = [...contacts];
+
+        for (let i = 0; i < batches.length; i++) {
+          const batch = batches[i];
+          const phoneNumbers = batch.map((c) => c.phone);
+
+          const { data: validationData, error: validationError } = await supabase.functions.invoke(
+            "validate-phone-numbers",
+            { body: { phoneNumbers } }
+          );
+
+          if (validationError || !validationData?.results) {
+            throw new Error("Erro na validação de telefones");
+          }
+
+          batch.forEach((contact, index) => {
+            const result = validationData.results[index];
+            const contactIndex = updatedContacts.findIndex(
+              (c) => c.phone === contact.phone && c.name === contact.name
+            );
+
+            if (contactIndex !== -1) {
+              updatedContacts[contactIndex] = {
+                ...updatedContacts[contactIndex],
+                status: result.isValid ? "valid" : "invalid",
+                error: result.isValid ? undefined : result.reason,
+                formatted: result.isValid ? result.formatted : undefined,
+              };
+            }
+          });
+        }
+
+        setContacts(updatedContacts);
+        setValidating(false);
+
+        contactsToInsert = updatedContacts
+          .filter((c) => c.status === "valid" && c.formatted)
+          .map((c) => ({
+            user_id: user.id,
+            name: c.name,
+            phone: c.formatted!,
+            import_batch_id: crypto.randomUUID(),
+          }));
+      }
 
       if (contactsToInsert.length === 0) {
         toast({
@@ -281,7 +390,7 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
 
       if (error) throw error;
 
-      const invalidCount = updatedContacts.filter((c) => c.status === "invalid").length;
+      const invalidCount = contacts.filter((c) => c.status === "invalid").length;
 
       toast({
         title: "Importação concluída com sucesso!",
@@ -292,10 +401,10 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
 
       queryClient.invalidateQueries({ queryKey: ["contacts"] });
 
-      // Close after delay
       setTimeout(() => {
         setFile(null);
         setContacts([]);
+        setColumnMapping(null);
         onOpenChange?.(false);
       }, 2000);
     } catch (error: any) {
@@ -313,6 +422,7 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
   const handleCancel = () => {
     setFile(null);
     setContacts([]);
+    setColumnMapping(null);
     onOpenChange?.(false);
   };
 
@@ -329,11 +439,44 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
             Importar Contatos com Preview
           </DialogTitle>
           <DialogDescription>
-            Envie um arquivo CSV ou XLSX. Visualize e valide os contatos antes de importar.
+            Envie um arquivo CSV ou XLSX em qualquer formato. {useAI ? "A IA detectará automaticamente as colunas." : "Use o formato padrão com colunas 'nome' e 'telefone'."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 flex-1 overflow-hidden flex flex-col">
+          {/* AI Toggle */}
+          <div className="flex items-center justify-between p-3 border rounded-lg bg-muted/50">
+            <div className="flex items-center gap-3">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <div>
+                <Label htmlFor="ai-mode" className="text-sm font-medium cursor-pointer">
+                  Importação Inteligente com IA
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {useAI 
+                    ? "Detecta colunas automaticamente e normaliza telefones em qualquer formato" 
+                    : "Modo tradicional: requer colunas 'nome' e 'telefone'"}
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="ai-mode"
+              checked={useAI}
+              onCheckedChange={setUseAI}
+              disabled={loading || parsing || contacts.length > 0}
+            />
+          </div>
+
+          {/* Column Mapping Info */}
+          {columnMapping && (
+            <Alert className="bg-primary/10 border-primary/20">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <AlertDescription>
+                <strong>IA detectou:</strong> Nome = "{columnMapping.nameColumn}", Telefone = "{columnMapping.phoneColumn}"
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* File Input */}
           <div className="space-y-2">
             <Label htmlFor="file">Arquivo</Label>
@@ -345,7 +488,9 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
               disabled={loading || parsing}
             />
             <p className="text-xs text-muted-foreground">
-              Formato: CSV ou XLSX com colunas "nome" e "telefone"
+              {useAI 
+                ? "Aceita qualquer formato de planilha. A IA identificará as colunas automaticamente." 
+                : "Formato: CSV ou XLSX com colunas 'nome' e 'telefone'"}
             </p>
           </div>
 
