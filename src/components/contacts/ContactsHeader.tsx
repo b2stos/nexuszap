@@ -1,12 +1,22 @@
 import { Button } from "@/components/ui/button";
-import { Upload, UserPlus } from "lucide-react";
+import { Upload, UserPlus, Download } from "lucide-react";
 import { useState } from "react";
-import { ImportContactsDialog } from "./ImportContactsDialog";
+import { ImportContactsWithPreview } from "./ImportContactsWithPreview";
 import { AddContactDialog } from "./AddContactDialog";
+import { downloadContactsCSVTemplate } from "@/utils/csvTemplateGenerator";
+import { toast } from "@/hooks/use-toast";
 
 export function ContactsHeader() {
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
+
+  const handleDownloadTemplate = () => {
+    downloadContactsCSVTemplate();
+    toast({
+      title: "Template baixado!",
+      description: "Use este arquivo como exemplo para importar seus contatos",
+    });
+  };
 
   return (
     <>
@@ -18,6 +28,10 @@ export function ContactsHeader() {
           </p>
         </div>
         <div className="flex gap-3">
+          <Button onClick={handleDownloadTemplate} variant="ghost" size="sm" className="gap-2">
+            <Download className="h-4 w-4" />
+            Template CSV
+          </Button>
           <Button onClick={() => setShowAddDialog(true)} variant="outline" className="gap-2">
             <UserPlus className="h-4 w-4" />
             Adicionar Contato
@@ -29,7 +43,7 @@ export function ContactsHeader() {
         </div>
       </div>
       <AddContactDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
-      <ImportContactsDialog open={showImportDialog} onOpenChange={setShowImportDialog} />
+      <ImportContactsWithPreview open={showImportDialog} onOpenChange={setShowImportDialog} />
     </>
   );
 }
