@@ -1,7 +1,7 @@
 import { User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { LogOut, Menu } from "lucide-react";
+import { LogOut, Menu, MessageSquare } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -31,10 +31,15 @@ export function DashboardHeader({ user }: DashboardHeaderProps) {
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="flex h-16 items-center gap-4 px-8">
+      <div className="flex h-16 items-center gap-4 px-4 lg:px-8">
         <Button variant="ghost" size="icon" className="lg:hidden">
           <Menu className="h-6 w-6" />
         </Button>
+        
+        <div className="flex items-center gap-2">
+          <MessageSquare className="h-6 w-6 text-primary" />
+          <h1 className="text-xl font-bold text-primary">Nexus Zap</h1>
+        </div>
         
         <div className="flex flex-1 items-center justify-end gap-4">
           <DropdownMenu>

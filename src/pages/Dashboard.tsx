@@ -4,10 +4,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { MetricsCards } from "@/components/dashboard/MetricsCards";
+import { MetricsChart } from "@/components/dashboard/MetricsChart";
 import { RecentCampaigns } from "@/components/dashboard/RecentCampaigns";
 import { WebhookMonitor } from "@/components/dashboard/WebhookMonitor";
-import { Loader2 } from "lucide-react";
+import { Loader2, Send, Upload, FileText } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -81,6 +84,46 @@ export default function Dashboard() {
           
           <TabsContent value="overview" className="space-y-6">
             <MetricsCards />
+            
+            <MetricsChart />
+            
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-2xl">Ações Rápidas</CardTitle>
+                <CardDescription>Acesso rápido às principais funcionalidades</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-3">
+                  <Button
+                    size="lg"
+                    className="h-24 flex-col gap-2"
+                    onClick={() => navigate("/dashboard/campaigns/new")}
+                  >
+                    <Send className="h-6 w-6" />
+                    <span>Enviar Mensagem</span>
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="secondary"
+                    className="h-24 flex-col gap-2"
+                    onClick={() => navigate("/dashboard/contacts")}
+                  >
+                    <Upload className="h-6 w-6" />
+                    <span>Importar Contatos</span>
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="h-24 flex-col gap-2"
+                    onClick={() => navigate("/dashboard/campaigns")}
+                  >
+                    <FileText className="h-6 w-6" />
+                    <span>Ver Relatórios</span>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+            
             <RecentCampaigns />
           </TabsContent>
           

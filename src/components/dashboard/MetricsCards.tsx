@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, Send, CheckCircle2, Eye } from "lucide-react";
+import { Send, CheckCircle2, Eye, Clock } from "lucide-react";
 
 export function MetricsCards() {
   const { data: metrics } = useQuery({
@@ -34,11 +34,21 @@ export function MetricsCards() {
         .select("id", { count: "exact" })
         .eq("status", "read");
 
+      const last24Hours = new Date();
+      last24Hours.setHours(last24Hours.getHours() - 24);
+
+      const { data: last24h } = await supabase
+        .from("messages")
+        .select("id", { count: "exact" })
+        .gte("created_at", last24Hours.toISOString())
+        .in("status", ["sent", "delivered", "read"]);
+
       const totalContacts = contacts?.length || 0;
       const totalCampaigns = campaigns?.length || 0;
       const totalMessages = sent?.length || 0;
       const deliveryRate = totalMessages > 0 ? ((delivered?.length || 0) / totalMessages) * 100 : 0;
       const readRate = totalMessages > 0 ? ((read?.length || 0) / totalMessages) * 100 : 0;
+      const messagesLast24h = last24h?.length || 0;
 
       return {
         totalContacts,
@@ -46,34 +56,35 @@ export function MetricsCards() {
         totalMessages,
         deliveryRate: deliveryRate.toFixed(1),
         readRate: readRate.toFixed(1),
+        messagesLast24h,
       };
     },
   });
 
   const cards = [
     {
-      title: "Total de Contatos",
-      value: metrics?.totalContacts || 0,
-      icon: Users,
-      gradient: "from-[hsl(228,100%,58%)] to-[hsl(228,100%,48%)]",
-    },
-    {
-      title: "Campanhas Criadas",
-      value: metrics?.totalCampaigns || 0,
-      icon: Send,
-      gradient: "from-[hsl(270,80%,55%)] to-[hsl(270,80%,45%)]",
-    },
-    {
-      title: "Mensagens Enviadas",
+      title: "Total de Mensagens Enviadas",
       value: metrics?.totalMessages || 0,
-      icon: CheckCircle2,
-      gradient: "from-[hsl(142,76%,45%)] to-[hsl(142,76%,36%)]",
+      icon: Send,
+      description: "Total de mensagens enviadas"
     },
     {
-      title: "Taxa de Visualização",
-      value: `${metrics?.readRate || 0}%`,
+      title: "Taxa de Entrega",
+      value: `${metrics?.deliveryRate || 0}%`,
+      icon: CheckCircle2,
+      description: "Mensagens entregues com sucesso"
+    },
+    {
+      title: "Mensagens Lidas",
+      value: metrics?.readRate || 0,
       icon: Eye,
-      gradient: "from-[hsl(24,96%,58%)] to-[hsl(24,96%,48%)]",
+      description: "Taxa de visualização"
+    },
+    {
+      title: "Últimas 24h",
+      value: metrics?.messagesLast24h || 0,
+      icon: Clock,
+      description: "Mensagens enviadas hoje"
     },
   ];
 
@@ -94,16 +105,9 @@ export function MetricsCards() {
           </CardHeader>
           <CardContent className="space-y-1">
             <div className="text-4xl font-bold text-foreground tracking-tight">{card.value}</div>
-            {card.title === "Taxa de Visualização" && (
-              <p className="text-xs text-muted-foreground">
-                {metrics?.readRate}% das mensagens foram lidas
-              </p>
-            )}
-            {card.title === "Mensagens Enviadas" && (
-              <p className="text-xs text-muted-foreground">
-                {metrics?.deliveryRate}% foram entregues
-              </p>
-            )}
+            <p className="text-xs text-muted-foreground">
+              {card.description}
+            </p>
           </CardContent>
           <div className="absolute bottom-0 left-0 h-1 w-full bg-gradient-to-r from-primary/20 via-primary to-primary/20 opacity-0 group-hover:opacity-100 transition-opacity" />
         </Card>
