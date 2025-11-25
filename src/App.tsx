@@ -10,6 +10,7 @@ import Contacts from "./pages/Contacts";
 import Campaigns from "./pages/Campaigns";
 import NewCampaign from "./pages/NewCampaign";
 import WhatsApp from "./pages/WhatsApp";
+import ValidationTest from "./pages/ValidationTest";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,6 +29,7 @@ const App = () => (
           <Route path="/dashboard/campaigns" element={<Campaigns />} />
           <Route path="/dashboard/campaigns/new" element={<NewCampaign />} />
           <Route path="/dashboard/whatsapp" element={<WhatsApp />} />
+          <Route path="/dashboard/validation-test" element={<ValidationTest />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
