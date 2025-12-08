@@ -14,31 +14,12 @@ serve(async (req) => {
 
   try {
     const webhookData = await req.json();
-    console.log('Webhook received:', JSON.stringify(webhookData, null, 2));
+    console.log('UAZAPI Webhook received:', JSON.stringify(webhookData, null, 2));
 
-    // Validate webhook payload has required fields
+    // Validate webhook payload
     if (!webhookData || typeof webhookData !== 'object') {
       console.log('Invalid payload: not an object');
       return new Response(JSON.stringify({ error: 'Invalid payload' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    }
-
-    // Must have at least event or status field to be a valid Z-API webhook
-    if (!webhookData.event && !webhookData.status && !webhookData.messageStatus) {
-      console.log('Invalid payload: missing event/status field');
-      return new Response(JSON.stringify({ error: 'Invalid webhook payload' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    }
-
-    // Validate phone if present (must be numeric string)
-    const phone = webhookData.phone || webhookData.chatId?.split('@')[0];
-    if (phone && !/^\d+$/.test(phone.replace(/\D/g, ''))) {
-      console.log('Invalid phone number format');
-      return new Response(JSON.stringify({ error: 'Invalid phone format' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
@@ -53,13 +34,31 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    // UAZAPI webhook event structure
+    // Events: messages.upsert, connection.update, qrcode.updated, messages.update
+    const event = webhookData.event || 'unknown';
+    const instance = webhookData.instance || webhookData.instanceName;
+    const data = webhookData.data || webhookData;
+
+    // Extract phone number from different UAZAPI event formats
+    let phone = null;
+    if (data.key?.remoteJid) {
+      phone = data.key.remoteJid.split('@')[0];
+    } else if (data.remoteJid) {
+      phone = data.remoteJid.split('@')[0];
+    } else if (data.from) {
+      phone = data.from.split('@')[0];
+    } else if (data.phone) {
+      phone = data.phone;
+    }
+
     // Save webhook event to database for monitoring
     const { error: eventError } = await supabase
       .from('webhook_events')
       .insert({
-        event_type: webhookData.event || 'status',
-        phone: webhookData.phone || webhookData.chatId?.split('@')[0],
-        status: webhookData.status || webhookData.messageStatus,
+        event_type: event,
+        phone: phone,
+        status: data.status || data.messageStatus || null,
         payload: webhookData,
         processed: false
       });
@@ -68,12 +67,8 @@ serve(async (req) => {
       console.error('Error saving webhook event:', eventError);
     }
 
-    // Z-API webhook events
-    // messageStatus events: SENT, DELIVERED, READ, FAILED
-    if (webhookData.event === 'status' || webhookData.status) {
-      const phone = webhookData.phone || webhookData.chatId?.split('@')[0];
-      const messageStatus = webhookData.status || webhookData.messageStatus;
-      
+    // Handle message status updates
+    if (event === 'messages.update' || event === 'message.update' || data.status) {
       if (!phone) {
         console.log('No phone number in webhook');
         return new Response(JSON.stringify({ received: true }), {
@@ -81,6 +76,9 @@ serve(async (req) => {
         });
       }
 
+      // UAZAPI status values: PENDING, SENT, DELIVERY_ACK (delivered), READ, PLAYED
+      const messageStatus = data.status || data.update?.status;
+      
       console.log(`Status update for ${phone}: ${messageStatus}`);
 
       // Find message by phone number
@@ -99,29 +97,32 @@ serve(async (req) => {
       }
 
       const message = messages[0];
-      const updateData: any = {};
+      const updateData: Record<string, unknown> = {};
 
-      // Map Z-API status to our status
+      // Map UAZAPI status to our status
       switch (messageStatus?.toUpperCase()) {
+        case 'PENDING':
+          updateData.status = 'pending';
+          break;
         case 'SENT':
-        case 'ENVIADA':
+        case 'SERVER_ACK':
           updateData.status = 'sent';
           updateData.sent_at = new Date().toISOString();
           break;
+        case 'DELIVERY_ACK':
         case 'DELIVERED':
-        case 'ENTREGUE':
           updateData.status = 'delivered';
           updateData.delivered_at = new Date().toISOString();
           break;
         case 'READ':
-        case 'LIDA':
+        case 'PLAYED':
           updateData.status = 'read';
           updateData.read_at = new Date().toISOString();
           break;
+        case 'ERROR':
         case 'FAILED':
-        case 'FALHA':
           updateData.status = 'failed';
-          updateData.error_message = webhookData.error || 'Message failed';
+          updateData.error_message = data.error || 'Message failed';
           break;
       }
 
@@ -149,6 +150,11 @@ serve(async (req) => {
             .limit(1);
         }
       }
+    }
+
+    // Handle connection updates
+    if (event === 'connection.update') {
+      console.log('Connection update:', data.state || data.status);
     }
 
     return new Response(JSON.stringify({ received: true }), {

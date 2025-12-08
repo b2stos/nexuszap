@@ -22,6 +22,22 @@ export function WhatsAppConnection() {
 
   const generateQRCode = async (qrData: string) => {
     try {
+      // Check if it's already a base64 image
+      if (qrData.startsWith('data:image')) {
+        setQrImage(qrData);
+        return;
+      }
+      
+      // Check if it's a raw base64 string (from UAZAPI)
+      if (qrData.length > 100 && !qrData.includes(' ')) {
+        // It might be a raw base64 image without the data URL prefix
+        if (!qrData.startsWith('data:')) {
+          setQrImage(`data:image/png;base64,${qrData}`);
+          return;
+        }
+      }
+      
+      // Generate QR code from text
       const qrDataUrl = await QRCode.toDataURL(qrData, {
         width: 300,
         margin: 2,
@@ -51,20 +67,19 @@ export function WhatsAppConnection() {
         return { success: false, error: data.error, details: data.details };
       }
 
-      return { success: true };
-    } catch (error: any) {
+      return { success: data.success !== false };
+    } catch (error: unknown) {
       console.error('Test exception:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: error instanceof Error ? error.message : 'Erro desconhecido' };
     }
   };
 
   const initializeSession = async () => {
     setLoading(true);
     try {
-      // First, test credentials
       toast({
         title: "Verificando credenciais",
-        description: "Testando conexão com Z-API...",
+        description: "Testando conexão com UAZAPI...",
       });
 
       const testResult = await testCredentials();
@@ -103,21 +118,20 @@ export function WhatsAppConnection() {
         setSession(data);
         toast({
           title: "Conectado",
-          description: `WhatsApp conectado: ${data.phoneNumber}`,
+          description: `WhatsApp conectado: ${data.phoneNumber || 'Número não identificado'}`,
         });
       } else if (data.status === "error") {
         throw new Error(data.error || "Erro desconhecido ao conectar");
       } else if (data.status === "disconnected") {
-        // Z-API não conseguiu gerar QR code
-        throw new Error("Não foi possível gerar o QR Code. Verifique se a instância Z-API está ativa no painel.");
+        throw new Error("Não foi possível gerar o QR Code. Verifique se a instância UAZAPI está ativa.");
       } else {
         throw new Error(`Status inesperado: ${data.status}`);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Initialize error:', error);
       toast({
         title: "Erro ao inicializar",
-        description: error.message || "Verifique suas credenciais Z-API no painel de Secrets",
+        description: error instanceof Error ? error.message : "Verifique suas credenciais UAZAPI nos Secrets",
         variant: "destructive",
       });
     } finally {
@@ -140,10 +154,10 @@ export function WhatsAppConnection() {
       } else if (data.status === "connected") {
         toast({
           title: "Conectado!",
-          description: `WhatsApp conectado: ${data.phoneNumber}`,
+          description: `WhatsApp conectado: ${data.phoneNumber || 'Número não identificado'}`,
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error checking status:", error);
     }
   };
@@ -163,10 +177,10 @@ export function WhatsAppConnection() {
         title: "Desconectado",
         description: "WhatsApp Business desconectado com sucesso",
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Erro ao desconectar",
-        description: error.message,
+        description: error instanceof Error ? error.message : 'Erro desconhecido',
         variant: "destructive",
       });
     } finally {
@@ -175,10 +189,8 @@ export function WhatsAppConnection() {
   };
 
   useEffect(() => {
-    // Check status on mount
     checkStatus();
 
-    // Poll for status updates when QR code is shown
     let interval: NodeJS.Timeout;
     if (session.status === "qr") {
       interval = setInterval(checkStatus, 5000);

@@ -7,8 +7,31 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Delay helper
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Get or create UAZAPI instance
+async function getOrCreateInstance(baseUrl: string, adminToken: string): Promise<{ instanceId: string; instanceToken: string }> {
+  const listResponse = await fetch(`${baseUrl}/instance/list`, {
+    method: 'GET',
+    headers: {
+      'apikey': adminToken,
+      'Content-Type': 'application/json'
+    },
+  });
+
+  if (listResponse.ok) {
+    const instances = await listResponse.json();
+    if (Array.isArray(instances) && instances.length > 0) {
+      const instance = instances[0];
+      return {
+        instanceId: instance.instanceName || instance.id || instance.name,
+        instanceToken: instance.token || instance.apikey || adminToken
+      };
+    }
+  }
+
+  throw new Error('Nenhuma instância UAZAPI encontrada. Configure o WhatsApp primeiro.');
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -24,20 +47,21 @@ serve(async (req) => {
     }
 
     // Get credentials
-    const ZAPI_INSTANCE_ID = Deno.env.get('ZAPI_INSTANCE_ID');
-    const ZAPI_TOKEN = Deno.env.get('ZAPI_TOKEN');
-    const ZAPI_CLIENT_TOKEN = Deno.env.get('ZAPI_CLIENT_TOKEN');
+    const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
+    const UAZAPI_ADMIN_TOKEN = Deno.env.get('UAZAPI_ADMIN_TOKEN');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
 
-    if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
-      throw new Error('Z-API credentials not configured');
+    if (!UAZAPI_BASE_URL || !UAZAPI_ADMIN_TOKEN) {
+      throw new Error('UAZAPI credentials not configured');
     }
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
       throw new Error('Supabase credentials not configured');
     }
+
+    const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
     // Create user client to verify ownership (uses RLS)
     const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -62,15 +86,14 @@ serve(async (req) => {
       throw new Error('Campaign not found or access denied');
     }
 
+    // Get UAZAPI instance
+    const { instanceId, instanceToken } = await getOrCreateInstance(baseUrl, UAZAPI_ADMIN_TOKEN);
+    console.log(`Using UAZAPI instance: ${instanceId}`);
+
     // Now use service role for updates
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    const zapiBaseUrl = `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}`;
-    const zapiHeaders = {
-      'Client-Token': ZAPI_CLIENT_TOKEN,
-      'Content-Type': 'application/json'
-    };
     
-    console.log(`User ${user.id} sending campaign ${campaignId} via Z-API`);
+    console.log(`User ${user.id} sending campaign ${campaignId} via UAZAPI`);
 
     // Update campaign status to sending
     await supabase
@@ -101,15 +124,18 @@ serve(async (req) => {
         
         console.log(`Sending to ${phoneNumber}`);
 
-        // Send text message via Z-API
+        // Send text message via UAZAPI
         const messagePayload = {
-          phone: phoneNumber,
-          message: campaign.message_content,
+          number: phoneNumber,
+          text: campaign.message_content,
         };
 
-        const sendResponse = await fetch(`${zapiBaseUrl}/send-text`, {
+        const sendResponse = await fetch(`${baseUrl}/message/sendText/${instanceId}`, {
           method: 'POST',
-          headers: zapiHeaders,
+          headers: {
+            'apikey': instanceToken,
+            'Content-Type': 'application/json'
+          },
           body: JSON.stringify(messagePayload),
         });
 
@@ -121,7 +147,7 @@ serve(async (req) => {
             .from('messages')
             .update({
               status: 'failed',
-              error_message: `Z-API error: ${sendResponse.status} - ${errorText}`
+              error_message: `UAZAPI error: ${sendResponse.status} - ${errorText}`
             })
             .eq('id', message.id);
           

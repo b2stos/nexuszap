@@ -6,8 +6,31 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Get or create UAZAPI instance
+async function getOrCreateInstance(baseUrl: string, adminToken: string): Promise<{ instanceId: string; instanceToken: string }> {
+  const listResponse = await fetch(`${baseUrl}/instance/list`, {
+    method: 'GET',
+    headers: {
+      'apikey': adminToken,
+      'Content-Type': 'application/json'
+    },
+  });
+
+  if (listResponse.ok) {
+    const instances = await listResponse.json();
+    if (Array.isArray(instances) && instances.length > 0) {
+      const instance = instances[0];
+      return {
+        instanceId: instance.instanceName || instance.id || instance.name,
+        instanceToken: instance.token || instance.apikey || adminToken
+      };
+    }
+  }
+
+  throw new Error('Nenhuma instância UAZAPI encontrada. Configure o WhatsApp primeiro.');
+}
+
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -52,13 +75,12 @@ serve(async (req) => {
       );
     }
 
-    // Get Z-API credentials
-    const instanceId = Deno.env.get("ZAPI_INSTANCE_ID");
-    const token = Deno.env.get("ZAPI_TOKEN");
-    const clientToken = Deno.env.get("ZAPI_CLIENT_TOKEN");
+    // Get UAZAPI credentials
+    const UAZAPI_BASE_URL = Deno.env.get("UAZAPI_BASE_URL");
+    const UAZAPI_ADMIN_TOKEN = Deno.env.get("UAZAPI_ADMIN_TOKEN");
 
-    if (!instanceId || !token) {
-      console.error("Z-API credentials not configured");
+    if (!UAZAPI_BASE_URL || !UAZAPI_ADMIN_TOKEN) {
+      console.error("UAZAPI credentials not configured");
       return new Response(
         JSON.stringify({ 
           error: "API do WhatsApp não configurada",
@@ -68,29 +90,34 @@ serve(async (req) => {
       );
     }
 
-    // Send message via Z-API
-    const zapiUrl = `https://api.z-api.io/instances/${instanceId}/token/${token}/send-text`;
+    const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
+
+    // Get UAZAPI instance
+    const { instanceId, instanceToken } = await getOrCreateInstance(baseUrl, UAZAPI_ADMIN_TOKEN);
+
+    // Send message via UAZAPI
+    const uazapiUrl = `${baseUrl}/message/sendText/${instanceId}`;
     
-    console.log(`Sending message to ${cleanPhone}`);
+    console.log(`Sending message to ${cleanPhone} via UAZAPI`);
     
-    const zapiResponse = await fetch(zapiUrl, {
+    const uazapiResponse = await fetch(uazapiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(clientToken && { "Client-Token": clientToken }),
+        "apikey": instanceToken,
       },
       body: JSON.stringify({
-        phone: cleanPhone,
-        message: message,
+        number: cleanPhone,
+        text: message,
       }),
     });
 
-    const zapiData = await zapiResponse.json();
-    console.log("Z-API response:", zapiData);
+    const uazapiData = await uazapiResponse.json();
+    console.log("UAZAPI response:", uazapiData);
 
-    if (!zapiResponse.ok) {
+    if (!uazapiResponse.ok) {
       // Check for specific error codes
-      if (zapiData.error === "Unauthorized" || zapiResponse.status === 401) {
+      if (uazapiData.error === "Unauthorized" || uazapiResponse.status === 401) {
         return new Response(
           JSON.stringify({ 
             error: "WhatsApp não conectado ou credenciais inválidas",
@@ -102,7 +129,7 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({ 
-          error: zapiData.error || "Erro ao enviar mensagem",
+          error: uazapiData.error || uazapiData.message || "Erro ao enviar mensagem",
           code: "SEND_ERROR"
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -110,13 +137,14 @@ serve(async (req) => {
     }
 
     // Check if message was actually queued/sent
-    if (zapiData.zapiMessageId || zapiData.messageId) {
-      console.log(`Message sent successfully. ID: ${zapiData.zapiMessageId || zapiData.messageId}`);
+    const messageId = uazapiData.key?.id || uazapiData.messageId || uazapiData.id;
+    if (messageId) {
+      console.log(`Message sent successfully. ID: ${messageId}`);
       
       return new Response(
         JSON.stringify({ 
           success: true,
-          messageId: zapiData.zapiMessageId || zapiData.messageId,
+          messageId: messageId,
           message: "Mensagem enviada com sucesso"
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -128,7 +156,7 @@ serve(async (req) => {
       JSON.stringify({ 
         success: true,
         message: "Mensagem enviada",
-        data: zapiData
+        data: uazapiData
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

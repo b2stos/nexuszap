@@ -9,7 +9,7 @@ verify_jwt = true
 [functions.send-whatsapp-messages]
 verify_jwt = true
 
-[functions.zapi-webhook]
+[functions.uazapi-webhook]
 verify_jwt = false
 
 [functions.smart-contact-import]
