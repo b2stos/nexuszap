@@ -9,23 +9,32 @@ const corsHeaders = {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Get or create UAZAPI instance
+// Get or create UAZAPI instance - using correct headers
 async function getOrCreateInstance(baseUrl: string, adminToken: string): Promise<{ instanceId: string; instanceToken: string }> {
-  const listResponse = await fetch(`${baseUrl}/instance/list`, {
+  const listResponse = await fetch(`${baseUrl}/admin/instances`, {
     method: 'GET',
     headers: {
-      'apikey': adminToken,
+      'admintoken': adminToken,
       'Content-Type': 'application/json'
     },
   });
 
   if (listResponse.ok) {
     const instances = await listResponse.json();
+    
     if (Array.isArray(instances) && instances.length > 0) {
       const instance = instances[0];
       return {
-        instanceId: instance.instanceName || instance.id || instance.name,
-        instanceToken: instance.token || instance.apikey || adminToken
+        instanceId: instance.name || instance.instanceName || instance.id,
+        instanceToken: instance.token || adminToken
+      };
+    }
+    
+    if (instances.instances && Array.isArray(instances.instances) && instances.instances.length > 0) {
+      const instance = instances.instances[0];
+      return {
+        instanceId: instance.name || instance.instanceName || instance.id,
+        instanceToken: instance.token || adminToken
       };
     }
   }
@@ -87,8 +96,8 @@ serve(async (req) => {
     }
 
     // Get UAZAPI instance
-    const { instanceId, instanceToken } = await getOrCreateInstance(baseUrl, UAZAPI_ADMIN_TOKEN);
-    console.log(`Using UAZAPI instance: ${instanceId}`);
+    const { instanceToken } = await getOrCreateInstance(baseUrl, UAZAPI_ADMIN_TOKEN);
+    console.log(`Using UAZAPI with token`);
 
     // Now use service role for updates
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -124,16 +133,16 @@ serve(async (req) => {
         
         console.log(`Sending to ${phoneNumber}`);
 
-        // Send text message via UAZAPI
+        // Send text message via UAZAPI using token header
         const messagePayload = {
-          number: phoneNumber,
-          text: campaign.message_content,
+          phone: phoneNumber,
+          message: campaign.message_content,
         };
 
-        const sendResponse = await fetch(`${baseUrl}/message/sendText/${instanceId}`, {
+        const sendResponse = await fetch(`${baseUrl}/message/text`, {
           method: 'POST',
           headers: {
-            'apikey': instanceToken,
+            'token': instanceToken,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(messagePayload),

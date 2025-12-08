@@ -6,23 +6,32 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Get or create UAZAPI instance
+// Get or create UAZAPI instance - using correct headers
 async function getOrCreateInstance(baseUrl: string, adminToken: string): Promise<{ instanceId: string; instanceToken: string }> {
-  const listResponse = await fetch(`${baseUrl}/instance/list`, {
+  const listResponse = await fetch(`${baseUrl}/admin/instances`, {
     method: 'GET',
     headers: {
-      'apikey': adminToken,
+      'admintoken': adminToken,
       'Content-Type': 'application/json'
     },
   });
 
   if (listResponse.ok) {
     const instances = await listResponse.json();
+    
     if (Array.isArray(instances) && instances.length > 0) {
       const instance = instances[0];
       return {
-        instanceId: instance.instanceName || instance.id || instance.name,
-        instanceToken: instance.token || instance.apikey || adminToken
+        instanceId: instance.name || instance.instanceName || instance.id,
+        instanceToken: instance.token || adminToken
+      };
+    }
+    
+    if (instances.instances && Array.isArray(instances.instances) && instances.instances.length > 0) {
+      const instance = instances.instances[0];
+      return {
+        instanceId: instance.name || instance.instanceName || instance.id,
+        instanceToken: instance.token || adminToken
       };
     }
   }
@@ -93,10 +102,10 @@ serve(async (req) => {
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
     // Get UAZAPI instance
-    const { instanceId, instanceToken } = await getOrCreateInstance(baseUrl, UAZAPI_ADMIN_TOKEN);
+    const { instanceToken } = await getOrCreateInstance(baseUrl, UAZAPI_ADMIN_TOKEN);
 
-    // Send message via UAZAPI
-    const uazapiUrl = `${baseUrl}/message/sendText/${instanceId}`;
+    // Send message via UAZAPI using token header
+    const uazapiUrl = `${baseUrl}/message/text`;
     
     console.log(`Sending message to ${cleanPhone} via UAZAPI`);
     
@@ -104,11 +113,11 @@ serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "apikey": instanceToken,
+        "token": instanceToken,
       },
       body: JSON.stringify({
-        number: cleanPhone,
-        text: message,
+        phone: cleanPhone,
+        message: message,
       }),
     });
 
