@@ -16,6 +16,34 @@ serve(async (req) => {
     const webhookData = await req.json();
     console.log('Webhook received:', JSON.stringify(webhookData, null, 2));
 
+    // Validate webhook payload has required fields
+    if (!webhookData || typeof webhookData !== 'object') {
+      console.log('Invalid payload: not an object');
+      return new Response(JSON.stringify({ error: 'Invalid payload' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Must have at least event or status field to be a valid Z-API webhook
+    if (!webhookData.event && !webhookData.status && !webhookData.messageStatus) {
+      console.log('Invalid payload: missing event/status field');
+      return new Response(JSON.stringify({ error: 'Invalid webhook payload' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Validate phone if present (must be numeric string)
+    const phone = webhookData.phone || webhookData.chatId?.split('@')[0];
+    if (phone && !/^\d+$/.test(phone.replace(/\D/g, ''))) {
+      console.log('Invalid phone number format');
+      return new Response(JSON.stringify({ error: 'Invalid phone format' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
