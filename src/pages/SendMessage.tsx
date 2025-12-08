@@ -1,5 +1,6 @@
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { MessageForm } from "@/components/MessageForm";
+import { WhatsAppStatusBanner } from "@/components/dashboard/WhatsAppStatusBanner";
 import { useProtectedUser } from "@/components/auth/ProtectedRoute";
 
 export default function SendMessage() {
@@ -8,6 +9,7 @@ export default function SendMessage() {
   return (
     <DashboardLayout user={user}>
       <div className="space-y-8 max-w-4xl mx-auto">
+        <WhatsAppStatusBanner />
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-foreground">
             Enviar Mensagem

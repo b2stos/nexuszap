@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink } from "@/components/NavLink";
-import { LayoutDashboard, Users, Send, PlusCircle, MessageSquare, QrCode, MessageCircle, Menu } from "lucide-react";
+import { LayoutDashboard, Users, Send, PlusCircle, MessageSquare, QrCode, MessageCircle, Menu, Settings } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 
@@ -74,6 +74,16 @@ function SidebarContent() {
                 >
                   <QrCode className="h-6 w-6 shrink-0" />
                   WhatsApp
+                </NavLink>
+              </li>
+              <li>
+                <NavLink
+                  to="/dashboard/settings"
+                  className="group flex gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold hover:bg-muted"
+                  activeClassName="bg-muted text-primary"
+                >
+                  <Settings className="h-6 w-6 shrink-0" />
+                  Configurações
                 </NavLink>
               </li>
             </ul>
