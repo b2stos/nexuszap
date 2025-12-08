@@ -4,12 +4,24 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Trash2, Search } from "lucide-react";
+import { Trash2, Search, Trash } from "lucide-react";
 import { useState } from "react";
 import { toast } from "@/hooks/use-toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 export function ContactsTable() {
   const [searchTerm, setSearchTerm] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const { data: contacts, refetch } = useQuery({
     queryKey: ["contacts", searchTerm],
@@ -50,6 +62,32 @@ export function ContactsTable() {
     }
   };
 
+  const handleDeleteAll = async () => {
+    if (!contacts || contacts.length === 0) return;
+    
+    setIsDeleting(true);
+    const { error } = await supabase
+      .from("contacts")
+      .delete()
+      .neq("id", "00000000-0000-0000-0000-000000000000"); // Deletes all rows
+
+    setIsDeleting(false);
+
+    if (error) {
+      toast({
+        title: "Erro ao excluir contatos",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Todos os contatos excluídos",
+        description: `${contacts.length} contatos foram removidos com sucesso.`,
+      });
+      refetch();
+    }
+  };
+
   return (
     <Card>
       <CardContent className="pt-6">
@@ -63,6 +101,36 @@ export function ContactsTable() {
               className="pl-9"
             />
           </div>
+          
+          {contacts && contacts.length > 0 && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" size="sm" className="gap-2">
+                  <Trash className="h-4 w-4" />
+                  Excluir Todos ({contacts.length})
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Excluir todos os contatos?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Esta ação não pode ser desfeita. Isso irá excluir permanentemente{" "}
+                    <strong>{contacts.length} contatos</strong> da sua lista.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleDeleteAll}
+                    disabled={isDeleting}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {isDeleting ? "Excluindo..." : "Sim, excluir todos"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </div>
 
         <Table>
