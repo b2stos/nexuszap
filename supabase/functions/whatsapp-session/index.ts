@@ -304,9 +304,7 @@ serve(async (req) => {
     console.error('Edge function error:', error);
     return new Response(
       JSON.stringify({ 
-        error: error instanceof Error ? error.message : 'Erro desconhecido',
-        details: error instanceof Error ? error.stack : String(error),
-        type: error instanceof Error ? error.name : 'Error'
+        error: error instanceof Error ? error.message : 'Erro desconhecido'
       }),
       { 
         status: 500, 
