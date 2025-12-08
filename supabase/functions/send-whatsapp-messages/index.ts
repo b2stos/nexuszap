@@ -9,6 +9,99 @@ const corsHeaders = {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Function to try sending message with different endpoint/format combinations
+async function tryUAZAPISend(
+  baseUrl: string, 
+  token: string, 
+  phone: string, 
+  message: string
+): Promise<{ success: boolean; response?: any; error?: string }> {
+  
+  // Different number formats to try
+  const numberFormats = [
+    phone,                          // Just numbers: 5511947892299
+    `${phone}@c.us`,               // WhatsApp contact: 5511947892299@c.us
+    `${phone}@s.whatsapp.net`,     // Alternative format
+  ];
+  
+  // Different endpoint/body combinations to try
+  const endpoints = [
+    { 
+      path: '/message/sendText', 
+      bodyFn: (num: string) => ({ number: num, text: message })
+    },
+    { 
+      path: '/message/text', 
+      bodyFn: (num: string) => ({ number: num, text: message })
+    },
+    { 
+      path: '/sendText', 
+      bodyFn: (num: string) => ({ number: num, text: message })
+    },
+    { 
+      path: '/chat/send/text', 
+      bodyFn: (num: string) => ({ Phone: num, Body: message })
+    },
+    { 
+      path: '/send-message', 
+      bodyFn: (num: string) => ({ chatId: num, contentType: 'string', content: message })
+    },
+    { 
+      path: '/message/send', 
+      bodyFn: (num: string) => ({ to: num, type: 'text', text: { body: message } })
+    },
+  ];
+
+  // Try each combination
+  for (const numberFormat of numberFormats) {
+    for (const endpoint of endpoints) {
+      const url = `${baseUrl}${endpoint.path}`;
+      const body = endpoint.bodyFn(numberFormat);
+      
+      console.log(`Trying: ${url} with number: ${numberFormat}`);
+      
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "token": token,
+          },
+          body: JSON.stringify(body),
+        });
+        
+        const responseText = await response.text();
+        console.log(`Status: ${response.status}`);
+        
+        // Check if successful
+        if (response.ok) {
+          try {
+            const data = JSON.parse(responseText);
+            if (!data.error && !data.message?.includes('Not Allowed') && !data.message?.includes('not found')) {
+              console.log(`SUCCESS with: ${url} and number format: ${numberFormat}`);
+              return { success: true, response: data };
+            }
+          } catch {
+            if (!responseText.includes('error') && !responseText.includes('Not Allowed')) {
+              return { success: true, response: responseText };
+            }
+          }
+        }
+        
+        if (response.status >= 400 && response.status < 500) {
+          continue;
+        }
+        
+      } catch (fetchError) {
+        console.error(`Fetch error for ${url}:`, fetchError);
+        continue;
+      }
+    }
+  }
+  
+  return { success: false, error: "Nenhum endpoint funcionou" };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -96,39 +189,23 @@ serve(async (req) => {
         
         console.log(`Sending to ${phoneNumber}`);
 
-        // Send text message via UAZAPI using correct endpoint
-        const messagePayload = {
-          number: phoneNumber,
-          text: campaign.message_content,
-        };
+        // Try sending with multiple endpoint/format combinations
+        const result = await tryUAZAPISend(baseUrl, UAZAPI_INSTANCE_TOKEN, phoneNumber, campaign.message_content);
 
-        const sendResponse = await fetch(`${baseUrl}/message/sendText`, {
-          method: 'POST',
-          headers: {
-            'token': UAZAPI_INSTANCE_TOKEN,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(messagePayload),
-        });
-
-        console.log('Send response status:', sendResponse.status);
-
-        if (!sendResponse.ok) {
-          const errorText = await sendResponse.text();
-          console.error(`Failed to send to ${phoneNumber}:`, errorText);
+        if (!result.success) {
+          console.error(`Failed to send to ${phoneNumber}:`, result.error);
           
           await supabase
             .from('messages')
             .update({
               status: 'failed',
-              error_message: `UAZAPI error: ${sendResponse.status} - ${errorText}`
+              error_message: result.error || 'UAZAPI error'
             })
             .eq('id', message.id);
           
           failCount++;
         } else {
-          const responseData = await sendResponse.json();
-          console.log(`Message sent to ${phoneNumber}:`, responseData);
+          console.log(`Message sent to ${phoneNumber}`);
           
           await supabase
             .from('messages')

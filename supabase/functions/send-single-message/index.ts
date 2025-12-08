@@ -6,6 +6,105 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Function to try sending message with different endpoint/format combinations
+async function tryUAZAPISend(
+  baseUrl: string, 
+  token: string, 
+  phone: string, 
+  message: string
+): Promise<{ success: boolean; response?: any; error?: string }> {
+  
+  // Different number formats to try
+  const numberFormats = [
+    phone,                          // Just numbers: 5511947892299
+    `${phone}@c.us`,               // WhatsApp contact: 5511947892299@c.us
+    `${phone}@s.whatsapp.net`,     // Alternative format
+  ];
+  
+  // Different endpoint/body combinations to try
+  const endpoints = [
+    { 
+      path: '/message/sendText', 
+      bodyFn: (num: string) => ({ number: num, text: message })
+    },
+    { 
+      path: '/message/text', 
+      bodyFn: (num: string) => ({ number: num, text: message })
+    },
+    { 
+      path: '/sendText', 
+      bodyFn: (num: string) => ({ number: num, text: message })
+    },
+    { 
+      path: '/chat/send/text', 
+      bodyFn: (num: string) => ({ Phone: num, Body: message })
+    },
+    { 
+      path: '/send-message', 
+      bodyFn: (num: string) => ({ chatId: num, contentType: 'string', content: message })
+    },
+    { 
+      path: '/message/send', 
+      bodyFn: (num: string) => ({ to: num, type: 'text', text: { body: message } })
+    },
+  ];
+
+  // Try each combination
+  for (const numberFormat of numberFormats) {
+    for (const endpoint of endpoints) {
+      const url = `${baseUrl}${endpoint.path}`;
+      const body = endpoint.bodyFn(numberFormat);
+      
+      console.log(`Trying: ${url}`);
+      console.log(`Body: ${JSON.stringify(body)}`);
+      
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "token": token,
+          },
+          body: JSON.stringify(body),
+        });
+        
+        const responseText = await response.text();
+        console.log(`Status: ${response.status}, Response: ${responseText}`);
+        
+        // Check if successful (status 200-299 and not an error message)
+        if (response.ok) {
+          try {
+            const data = JSON.parse(responseText);
+            // Check if response indicates success
+            if (!data.error && !data.message?.includes('Not Allowed') && !data.message?.includes('not found')) {
+              console.log(`SUCCESS with: ${url} and number format: ${numberFormat}`);
+              return { success: true, response: data };
+            }
+          } catch {
+            // Response wasn't JSON but was 200 OK
+            if (!responseText.includes('error') && !responseText.includes('Not Allowed')) {
+              console.log(`SUCCESS (non-JSON) with: ${url}`);
+              return { success: true, response: responseText };
+            }
+          }
+        }
+        
+        // If 405 or other client error, continue to next combination
+        if (response.status >= 400 && response.status < 500) {
+          console.log(`Client error ${response.status}, trying next combination...`);
+          continue;
+        }
+        
+      } catch (fetchError) {
+        console.error(`Fetch error for ${url}:`, fetchError);
+        continue;
+      }
+    }
+  }
+  
+  return { success: false, error: "Nenhum endpoint funcionou. Verifique a configuração da UAZAPI." };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -68,120 +167,36 @@ serve(async (req) => {
 
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
-    // UAZAPI - try multiple endpoint formats
-    console.log(`Sending message to ${cleanPhone} via UAZAPI`);
+    console.log(`=== Sending message to ${cleanPhone} via UAZAPI ===`);
     console.log(`Base URL: ${baseUrl}`);
     
-    let uazapiResponse;
-    let responseText;
+    // Try all endpoint/format combinations
+    const result = await tryUAZAPISend(baseUrl, UAZAPI_INSTANCE_TOKEN, cleanPhone, message);
     
-    // Try 1: /message/text endpoint (UAZAPI GO format)
-    console.log(`Trying endpoint: ${baseUrl}/message/text`);
-    uazapiResponse = await fetch(`${baseUrl}/message/text`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "token": UAZAPI_INSTANCE_TOKEN,
-      },
-      body: JSON.stringify({ number: cleanPhone, text: message }),
-    });
-    console.log('Response status:', uazapiResponse.status);
-    responseText = await uazapiResponse.text();
-    console.log("Response:", responseText);
-    
-    // Try 2: /sendText endpoint (Uzapi format)
-    if (!uazapiResponse.ok) {
-      console.log(`Trying endpoint: ${baseUrl}/sendText`);
-      uazapiResponse = await fetch(`${baseUrl}/sendText`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "token": UAZAPI_INSTANCE_TOKEN,
-        },
-        body: JSON.stringify({ number: cleanPhone, text: message }),
-      });
-      console.log('Response status:', uazapiResponse.status);
-      responseText = await uazapiResponse.text();
-      console.log("Response:", responseText);
-    }
-    
-    // Try 3: /chat/send/text endpoint (Wuzapi format)
-    if (!uazapiResponse.ok) {
-      console.log(`Trying endpoint: ${baseUrl}/chat/send/text`);
-      uazapiResponse = await fetch(`${baseUrl}/chat/send/text`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "token": UAZAPI_INSTANCE_TOKEN,
-        },
-        body: JSON.stringify({ Phone: cleanPhone, Body: message }),
-      });
-      console.log('Response status:', uazapiResponse.status);
-      responseText = await uazapiResponse.text();
-      console.log("Response:", responseText);
-    }
-    
-    // Try 4: /send/message endpoint
-    if (!uazapiResponse.ok) {
-      console.log(`Trying endpoint: ${baseUrl}/send/message`);
-      uazapiResponse = await fetch(`${baseUrl}/send/message`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "token": UAZAPI_INSTANCE_TOKEN,
-        },
-        body: JSON.stringify({ phone: cleanPhone, message: message }),
-      });
-      console.log('Response status:', uazapiResponse.status);
-      responseText = await uazapiResponse.text();
-      console.log("Response:", responseText);
-    }
-
-    if (!uazapiResponse.ok) {
+    if (!result.success) {
       return new Response(
         JSON.stringify({ 
-          error: responseText || "Erro ao enviar mensagem",
+          error: result.error || "Erro ao enviar mensagem",
           code: "SEND_ERROR",
-          details: "Nenhum endpoint de envio funcionou. Verifique a documentação da UAZAPI."
+          details: "Verifique os logs para mais detalhes sobre os endpoints testados."
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    try {
-      const uazapiData = JSON.parse(responseText);
-      const messageId = uazapiData.key?.id || uazapiData.messageId || uazapiData.id;
-      
-      if (messageId) {
-        console.log(`Message sent successfully. ID: ${messageId}`);
-        
-        return new Response(
-          JSON.stringify({ 
-            success: true,
-            messageId: messageId,
-            message: "Mensagem enviada com sucesso"
-          }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({ 
-          success: true,
-          message: "Mensagem enviada",
-          data: uazapiData
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    } catch (e) {
-      return new Response(
-        JSON.stringify({ 
-          success: true,
-          message: "Mensagem enviada"
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    // Extract message ID if available
+    const messageId = result.response?.key?.id || result.response?.messageId || result.response?.id;
+    
+    console.log(`Message sent successfully. ID: ${messageId || 'N/A'}`);
+    
+    return new Response(
+      JSON.stringify({ 
+        success: true,
+        messageId: messageId,
+        message: "Mensagem enviada com sucesso"
+      }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
 
   } catch (error) {
     console.error("Error in send-single-message:", error);
