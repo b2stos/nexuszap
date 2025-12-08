@@ -68,18 +68,19 @@ serve(async (req) => {
 
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
-    // Send message via UAZAPI
+    // Send message via UAZAPI using the correct endpoint
+    // The endpoint format is /message/sendText/{instance} but UAZAPI uses token-based routing
     console.log(`Sending message to ${cleanPhone} via UAZAPI`);
     
-    const uazapiResponse = await fetch(`${baseUrl}/chat/send/text`, {
+    const uazapiResponse = await fetch(`${baseUrl}/message/sendText`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "token": UAZAPI_INSTANCE_TOKEN,
       },
       body: JSON.stringify({
-        phone: cleanPhone,
-        message: message,
+        number: cleanPhone,
+        text: message,
       }),
     });
 
