@@ -23,21 +23,46 @@ serve(async (req) => {
       throw new Error('Unauthorized');
     }
 
-    // Get Z-API credentials
+    // Get credentials
     const ZAPI_INSTANCE_ID = Deno.env.get('ZAPI_INSTANCE_ID');
     const ZAPI_TOKEN = Deno.env.get('ZAPI_TOKEN');
     const ZAPI_CLIENT_TOKEN = Deno.env.get('ZAPI_CLIENT_TOKEN');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
 
     if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
       throw new Error('Z-API credentials not configured');
     }
 
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
       throw new Error('Supabase credentials not configured');
     }
 
+    // Create user client to verify ownership (uses RLS)
+    const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } }
+    });
+
+    // Verify the authenticated user owns this campaign
+    const { data: { user }, error: userError } = await userClient.auth.getUser();
+    if (userError || !user) {
+      throw new Error('Unauthorized: Invalid token');
+    }
+
+    // Check campaign ownership via RLS-protected query
+    const { data: campaign, error: campaignError } = await userClient
+      .from('campaigns')
+      .select('*')
+      .eq('id', campaignId)
+      .single();
+
+    if (campaignError || !campaign) {
+      console.log(`Campaign ${campaignId} not found or access denied for user ${user.id}`);
+      throw new Error('Campaign not found or access denied');
+    }
+
+    // Now use service role for updates
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const zapiBaseUrl = `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}`;
     const zapiHeaders = {
@@ -45,18 +70,7 @@ serve(async (req) => {
       'Content-Type': 'application/json'
     };
     
-    console.log(`Sending campaign ${campaignId} via Z-API`);
-
-    // Get campaign details
-    const { data: campaign, error: campaignError } = await supabase
-      .from('campaigns')
-      .select('*')
-      .eq('id', campaignId)
-      .single();
-
-    if (campaignError || !campaign) {
-      throw new Error('Campaign not found');
-    }
+    console.log(`User ${user.id} sending campaign ${campaignId} via Z-API`);
 
     // Update campaign status to sending
     await supabase
@@ -171,13 +185,12 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('Edge function error:', error);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    const status = message.includes('Unauthorized') || message.includes('access denied') ? 403 : 500;
     return new Response(
-      JSON.stringify({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        details: error instanceof Error ? error.stack : String(error)
-      }),
+      JSON.stringify({ error: message }),
       {
-        status: 500,
+        status,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       }
     );
