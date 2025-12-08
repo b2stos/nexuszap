@@ -70,48 +70,61 @@ serve(async (req) => {
 
     // UAZAPI - try multiple endpoint formats
     console.log(`Sending message to ${cleanPhone} via UAZAPI`);
+    console.log(`Base URL: ${baseUrl}`);
     
-    const requestBody = {
-      number: cleanPhone,
-      text: message,
-    };
+    let uazapiResponse;
+    let responseText;
     
-    // Try /message/send-text endpoint
-    console.log(`Trying endpoint: ${baseUrl}/message/send-text`);
-    let uazapiResponse = await fetch(`${baseUrl}/message/send-text`, {
+    // Try 1: /message/text endpoint (UAZAPI GO format)
+    console.log(`Trying endpoint: ${baseUrl}/message/text`);
+    uazapiResponse = await fetch(`${baseUrl}/message/text`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "token": UAZAPI_INSTANCE_TOKEN,
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ number: cleanPhone, text: message }),
     });
-
     console.log('Response status:', uazapiResponse.status);
-    let responseText = await uazapiResponse.text();
+    responseText = await uazapiResponse.text();
     console.log("Response:", responseText);
     
-    // If that fails, try /send-text (another common format)
+    // Try 2: /sendText endpoint (Uzapi format)
     if (!uazapiResponse.ok) {
-      console.log(`Trying endpoint: ${baseUrl}/send-text`);
-      uazapiResponse = await fetch(`${baseUrl}/send-text`, {
+      console.log(`Trying endpoint: ${baseUrl}/sendText`);
+      uazapiResponse = await fetch(`${baseUrl}/sendText`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "token": UAZAPI_INSTANCE_TOKEN,
         },
-        body: JSON.stringify({ phone: cleanPhone, message: message }),
+        body: JSON.stringify({ number: cleanPhone, text: message }),
       });
-      
       console.log('Response status:', uazapiResponse.status);
       responseText = await uazapiResponse.text();
       console.log("Response:", responseText);
     }
     
-    // If still fails, try /chat/send (WPPConnect format)
+    // Try 3: /chat/send/text endpoint (Wuzapi format)
     if (!uazapiResponse.ok) {
-      console.log(`Trying endpoint: ${baseUrl}/chat/send`);
-      uazapiResponse = await fetch(`${baseUrl}/chat/send`, {
+      console.log(`Trying endpoint: ${baseUrl}/chat/send/text`);
+      uazapiResponse = await fetch(`${baseUrl}/chat/send/text`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "token": UAZAPI_INSTANCE_TOKEN,
+        },
+        body: JSON.stringify({ Phone: cleanPhone, Body: message }),
+      });
+      console.log('Response status:', uazapiResponse.status);
+      responseText = await uazapiResponse.text();
+      console.log("Response:", responseText);
+    }
+    
+    // Try 4: /send/message endpoint
+    if (!uazapiResponse.ok) {
+      console.log(`Trying endpoint: ${baseUrl}/send/message`);
+      uazapiResponse = await fetch(`${baseUrl}/send/message`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -119,7 +132,6 @@ serve(async (req) => {
         },
         body: JSON.stringify({ phone: cleanPhone, message: message }),
       });
-      
       console.log('Response status:', uazapiResponse.status);
       responseText = await uazapiResponse.text();
       console.log("Response:", responseText);
