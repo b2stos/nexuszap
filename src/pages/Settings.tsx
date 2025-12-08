@@ -153,7 +153,7 @@ export default function Settings() {
                     <p className="font-medium text-destructive">Ação necessária</p>
                     <p className="text-sm text-muted-foreground mt-1">
                       {apiStatus === "error" 
-                        ? "Verifique se os secrets da Z-API estão configurados corretamente."
+                        ? "Verifique se os secrets da UAZAPI estão configurados corretamente (UAZAPI_BASE_URL e UAZAPI_INSTANCE_TOKEN)."
                         : "Conecte seu WhatsApp escaneando o QR Code na página de conexão."}
                     </p>
                     <Button asChild variant="default" size="sm" className="mt-3">
@@ -219,11 +219,11 @@ export default function Settings() {
               </li>
               <li className="flex items-start gap-2">
                 <span className="font-medium text-primary">2.</span>
-                <span>Confirme que os secrets Z-API estão configurados corretamente</span>
+                <span>Confirme que os secrets UAZAPI estão configurados corretamente (UAZAPI_BASE_URL e UAZAPI_INSTANCE_TOKEN)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="font-medium text-primary">3.</span>
-                <span>Verifique se sua assinatura Z-API está ativa</span>
+                <span>Verifique se sua instância UAZAPI está ativa</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="font-medium text-primary">4.</span>
@@ -239,12 +239,12 @@ export default function Settings() {
               </p>
               <Button variant="outline" size="sm" asChild>
                 <a 
-                  href="https://developer.z-api.io/" 
+                  href="https://base360.uazapi.com" 
                   target="_blank" 
                   rel="noopener noreferrer"
                 >
                   <ExternalLink className="h-4 w-4 mr-2" />
-                  Documentação Z-API
+                  Painel UAZAPI
                 </a>
               </Button>
             </div>
