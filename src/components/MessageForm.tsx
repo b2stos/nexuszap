@@ -114,11 +114,25 @@ export function MessageForm() {
       // Clean phone for sending
       const cleanPhone = phone.replace(/\D/g, "");
 
-      // Simulate API call (replace with actual WhatsApp API integration)
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Call the edge function to send message
+      const { data, error } = await supabase.functions.invoke("send-single-message", {
+        body: { phone: cleanPhone, message },
+      });
 
-      // Here you would integrate with your WhatsApp sending service
-      console.log("Sending message:", { phone: cleanPhone, message });
+      if (error) {
+        throw new Error(error.message || "Erro ao enviar mensagem");
+      }
+
+      if (data?.error) {
+        // Handle specific error codes
+        if (data.code === "WHATSAPP_NOT_CONFIGURED") {
+          throw new Error("WhatsApp não configurado. Verifique as configurações da API.");
+        }
+        if (data.code === "WHATSAPP_DISCONNECTED") {
+          throw new Error("WhatsApp desconectado. Conecte escaneando o QR Code.");
+        }
+        throw new Error(data.error);
+      }
 
       setFormState("success");
       
