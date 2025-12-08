@@ -6,39 +6,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Get or create UAZAPI instance - using correct headers
-async function getOrCreateInstance(baseUrl: string, adminToken: string): Promise<{ instanceId: string; instanceToken: string }> {
-  const listResponse = await fetch(`${baseUrl}/admin/instances`, {
-    method: 'GET',
-    headers: {
-      'admintoken': adminToken,
-      'Content-Type': 'application/json'
-    },
-  });
-
-  if (listResponse.ok) {
-    const instances = await listResponse.json();
-    
-    if (Array.isArray(instances) && instances.length > 0) {
-      const instance = instances[0];
-      return {
-        instanceId: instance.name || instance.instanceName || instance.id,
-        instanceToken: instance.token || adminToken
-      };
-    }
-    
-    if (instances.instances && Array.isArray(instances.instances) && instances.instances.length > 0) {
-      const instance = instances.instances[0];
-      return {
-        instanceId: instance.name || instance.instanceName || instance.id,
-        instanceToken: instance.token || adminToken
-      };
-    }
-  }
-
-  throw new Error('Nenhuma instância UAZAPI encontrada. Configure o WhatsApp primeiro.');
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -101,25 +68,37 @@ serve(async (req) => {
 
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
-    // Get UAZAPI instance
-    const { instanceToken } = await getOrCreateInstance(baseUrl, UAZAPI_ADMIN_TOKEN);
-
     // Send message via UAZAPI using token header
-    const uazapiUrl = `${baseUrl}/message/text`;
-    
     console.log(`Sending message to ${cleanPhone} via UAZAPI`);
     
-    const uazapiResponse = await fetch(uazapiUrl, {
+    // Try primary endpoint
+    let uazapiResponse = await fetch(`${baseUrl}/chat/send/text`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "token": instanceToken,
+        "token": UAZAPI_ADMIN_TOKEN,
       },
       body: JSON.stringify({
         phone: cleanPhone,
         message: message,
       }),
     });
+
+    // If not found, try alternative endpoint
+    if (uazapiResponse.status === 404) {
+      console.log('Trying alternative send endpoint');
+      uazapiResponse = await fetch(`${baseUrl}/message/text`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "token": UAZAPI_ADMIN_TOKEN,
+        },
+        body: JSON.stringify({
+          phone: cleanPhone,
+          message: message,
+        }),
+      });
+    }
 
     const uazapiData = await uazapiResponse.json();
     console.log("UAZAPI response:", uazapiData);

@@ -9,39 +9,6 @@ const corsHeaders = {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Get or create UAZAPI instance - using correct headers
-async function getOrCreateInstance(baseUrl: string, adminToken: string): Promise<{ instanceId: string; instanceToken: string }> {
-  const listResponse = await fetch(`${baseUrl}/admin/instances`, {
-    method: 'GET',
-    headers: {
-      'admintoken': adminToken,
-      'Content-Type': 'application/json'
-    },
-  });
-
-  if (listResponse.ok) {
-    const instances = await listResponse.json();
-    
-    if (Array.isArray(instances) && instances.length > 0) {
-      const instance = instances[0];
-      return {
-        instanceId: instance.name || instance.instanceName || instance.id,
-        instanceToken: instance.token || adminToken
-      };
-    }
-    
-    if (instances.instances && Array.isArray(instances.instances) && instances.instances.length > 0) {
-      const instance = instances.instances[0];
-      return {
-        instanceId: instance.name || instance.instanceName || instance.id,
-        instanceToken: instance.token || adminToken
-      };
-    }
-  }
-
-  throw new Error('Nenhuma instância UAZAPI encontrada. Configure o WhatsApp primeiro.');
-}
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -95,10 +62,6 @@ serve(async (req) => {
       throw new Error('Campaign not found or access denied');
     }
 
-    // Get UAZAPI instance
-    const { instanceToken } = await getOrCreateInstance(baseUrl, UAZAPI_ADMIN_TOKEN);
-    console.log(`Using UAZAPI with token`);
-
     // Now use service role for updates
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
@@ -139,14 +102,28 @@ serve(async (req) => {
           message: campaign.message_content,
         };
 
-        const sendResponse = await fetch(`${baseUrl}/message/text`, {
+        // Try primary endpoint
+        let sendResponse = await fetch(`${baseUrl}/chat/send/text`, {
           method: 'POST',
           headers: {
-            'token': instanceToken,
+            'token': UAZAPI_ADMIN_TOKEN,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(messagePayload),
         });
+
+        // If not found, try alternative endpoint
+        if (sendResponse.status === 404) {
+          console.log('Trying alternative send endpoint');
+          sendResponse = await fetch(`${baseUrl}/message/text`, {
+            method: 'POST',
+            headers: {
+              'token': UAZAPI_ADMIN_TOKEN,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(messagePayload),
+          });
+        }
 
         if (!sendResponse.ok) {
           const errorText = await sendResponse.text();
