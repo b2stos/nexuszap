@@ -68,20 +68,25 @@ serve(async (req) => {
 
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
-    // Send message via UAZAPI using the correct endpoint
-    // The endpoint format is /message/sendText/{instance} but UAZAPI uses token-based routing
+    // UAZAPI uses Evolution API format: /message/sendText with apikey header
+    // The body uses "number" and "text" fields
     console.log(`Sending message to ${cleanPhone} via UAZAPI`);
+    console.log(`Using endpoint: ${baseUrl}/message/sendText`);
     
+    const requestBody = {
+      number: cleanPhone,
+      text: message,
+    };
+    
+    console.log('Request body:', JSON.stringify(requestBody));
+
     const uazapiResponse = await fetch(`${baseUrl}/message/sendText`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "token": UAZAPI_INSTANCE_TOKEN,
+        "apikey": UAZAPI_INSTANCE_TOKEN,
       },
-      body: JSON.stringify({
-        number: cleanPhone,
-        text: message,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     console.log('UAZAPI response status:', uazapiResponse.status);
@@ -89,15 +94,89 @@ serve(async (req) => {
     console.log("UAZAPI response:", responseText);
 
     if (!uazapiResponse.ok) {
-      // Check for specific error codes
-      if (uazapiResponse.status === 401) {
-        return new Response(
-          JSON.stringify({ 
-            error: "WhatsApp não conectado ou credenciais inválidas",
-            code: "WHATSAPP_DISCONNECTED"
-          }),
-          { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+      // If apikey header doesn't work, try with 'token' header
+      if (uazapiResponse.status === 405 || uazapiResponse.status === 401) {
+        console.log("Trying with 'token' header instead...");
+        
+        const retryResponse = await fetch(`${baseUrl}/message/sendText`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "token": UAZAPI_INSTANCE_TOKEN,
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        console.log('Retry response status:', retryResponse.status);
+        const retryText = await retryResponse.text();
+        console.log("Retry response:", retryText);
+
+        if (!retryResponse.ok) {
+          // Try another endpoint format: /send/text
+          console.log("Trying /send/text endpoint...");
+          
+          const sendTextResponse = await fetch(`${baseUrl}/send/text`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "token": UAZAPI_INSTANCE_TOKEN,
+            },
+            body: JSON.stringify({
+              phone: cleanPhone,
+              message: message,
+            }),
+          });
+
+          console.log('send/text response status:', sendTextResponse.status);
+          const sendTextText = await sendTextResponse.text();
+          console.log("send/text response:", sendTextText);
+
+          if (!sendTextResponse.ok) {
+            return new Response(
+              JSON.stringify({ 
+                error: sendTextText || retryText || "Erro ao enviar mensagem",
+                code: "SEND_ERROR"
+              }),
+              { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+
+          // Parse successful response from /send/text
+          try {
+            const sendData = JSON.parse(sendTextText);
+            return new Response(
+              JSON.stringify({ 
+                success: true,
+                messageId: sendData.key?.id || sendData.messageId,
+                message: "Mensagem enviada com sucesso"
+              }),
+              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          } catch {
+            return new Response(
+              JSON.stringify({ success: true, message: "Mensagem enviada" }),
+              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+        }
+
+        // Parse successful retry response
+        try {
+          const retryData = JSON.parse(retryText);
+          return new Response(
+            JSON.stringify({ 
+              success: true,
+              messageId: retryData.key?.id || retryData.messageId,
+              message: "Mensagem enviada com sucesso"
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        } catch {
+          return new Response(
+            JSON.stringify({ success: true, message: "Mensagem enviada" }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
       }
 
       return new Response(
