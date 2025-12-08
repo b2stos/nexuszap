@@ -68,7 +68,7 @@ serve(async (req) => {
 
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
-    // UAZAPI/Evolution API - try multiple endpoint formats
+    // UAZAPI - try multiple endpoint formats
     console.log(`Sending message to ${cleanPhone} via UAZAPI`);
     
     const requestBody = {
@@ -76,7 +76,7 @@ serve(async (req) => {
       text: message,
     };
     
-    // Try /message/send-text endpoint (Evolution API v2 format)
+    // Try /message/send-text endpoint
     console.log(`Trying endpoint: ${baseUrl}/message/send-text`);
     let uazapiResponse = await fetch(`${baseUrl}/message/send-text`, {
       method: "POST",
