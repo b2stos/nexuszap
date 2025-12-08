@@ -24,12 +24,12 @@ serve(async (req) => {
 
     // Get credentials
     const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
-    const UAZAPI_ADMIN_TOKEN = Deno.env.get('UAZAPI_ADMIN_TOKEN');
+    const UAZAPI_INSTANCE_TOKEN = Deno.env.get('UAZAPI_INSTANCE_TOKEN');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
 
-    if (!UAZAPI_BASE_URL || !UAZAPI_ADMIN_TOKEN) {
+    if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
       throw new Error('UAZAPI credentials not configured');
     }
 
@@ -96,34 +96,22 @@ serve(async (req) => {
         
         console.log(`Sending to ${phoneNumber}`);
 
-        // Send text message via UAZAPI using token header
+        // Send text message via UAZAPI
         const messagePayload = {
           phone: phoneNumber,
           message: campaign.message_content,
         };
 
-        // Try primary endpoint
-        let sendResponse = await fetch(`${baseUrl}/chat/send/text`, {
+        const sendResponse = await fetch(`${baseUrl}/chat/send/text`, {
           method: 'POST',
           headers: {
-            'token': UAZAPI_ADMIN_TOKEN,
+            'token': UAZAPI_INSTANCE_TOKEN,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(messagePayload),
         });
 
-        // If not found, try alternative endpoint
-        if (sendResponse.status === 404) {
-          console.log('Trying alternative send endpoint');
-          sendResponse = await fetch(`${baseUrl}/message/text`, {
-            method: 'POST',
-            headers: {
-              'token': UAZAPI_ADMIN_TOKEN,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(messagePayload),
-          });
-        }
+        console.log('Send response status:', sendResponse.status);
 
         if (!sendResponse.ok) {
           const errorText = await sendResponse.text();
