@@ -84,6 +84,16 @@ export default function Settings() {
     }
   };
 
+  if (!user) {
+    return (
+      <DashboardLayout user={null}>
+        <div className="flex items-center justify-center h-64">
+          <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      </DashboardLayout>
+    );
+  }
+
   return (
     <DashboardLayout user={user}>
       <div className="space-y-8 max-w-4xl">
