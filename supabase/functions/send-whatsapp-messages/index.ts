@@ -96,13 +96,13 @@ serve(async (req) => {
         
         console.log(`Sending to ${phoneNumber}`);
 
-        // Send text message via UAZAPI
+        // Send text message via UAZAPI using correct endpoint
         const messagePayload = {
-          phone: phoneNumber,
-          message: campaign.message_content,
+          number: phoneNumber,
+          text: campaign.message_content,
         };
 
-        const sendResponse = await fetch(`${baseUrl}/chat/send/text`, {
+        const sendResponse = await fetch(`${baseUrl}/message/sendText`, {
           method: 'POST',
           headers: {
             'token': UAZAPI_INSTANCE_TOKEN,
