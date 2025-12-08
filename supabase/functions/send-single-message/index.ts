@@ -53,9 +53,9 @@ serve(async (req) => {
 
     // Get UAZAPI credentials
     const UAZAPI_BASE_URL = Deno.env.get("UAZAPI_BASE_URL");
-    const UAZAPI_ADMIN_TOKEN = Deno.env.get("UAZAPI_ADMIN_TOKEN");
+    const UAZAPI_INSTANCE_TOKEN = Deno.env.get("UAZAPI_INSTANCE_TOKEN");
 
-    if (!UAZAPI_BASE_URL || !UAZAPI_ADMIN_TOKEN) {
+    if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
       console.error("UAZAPI credentials not configured");
       return new Response(
         JSON.stringify({ 
@@ -68,15 +68,14 @@ serve(async (req) => {
 
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
-    // Send message via UAZAPI using token header
+    // Send message via UAZAPI
     console.log(`Sending message to ${cleanPhone} via UAZAPI`);
     
-    // Try primary endpoint
-    let uazapiResponse = await fetch(`${baseUrl}/chat/send/text`, {
+    const uazapiResponse = await fetch(`${baseUrl}/chat/send/text`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "token": UAZAPI_ADMIN_TOKEN,
+        "token": UAZAPI_INSTANCE_TOKEN,
       },
       body: JSON.stringify({
         phone: cleanPhone,
@@ -84,28 +83,13 @@ serve(async (req) => {
       }),
     });
 
-    // If not found, try alternative endpoint
-    if (uazapiResponse.status === 404) {
-      console.log('Trying alternative send endpoint');
-      uazapiResponse = await fetch(`${baseUrl}/message/text`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "token": UAZAPI_ADMIN_TOKEN,
-        },
-        body: JSON.stringify({
-          phone: cleanPhone,
-          message: message,
-        }),
-      });
-    }
-
-    const uazapiData = await uazapiResponse.json();
-    console.log("UAZAPI response:", uazapiData);
+    console.log('UAZAPI response status:', uazapiResponse.status);
+    const responseText = await uazapiResponse.text();
+    console.log("UAZAPI response:", responseText);
 
     if (!uazapiResponse.ok) {
       // Check for specific error codes
-      if (uazapiData.error === "Unauthorized" || uazapiResponse.status === 401) {
+      if (uazapiResponse.status === 401) {
         return new Response(
           JSON.stringify({ 
             error: "WhatsApp não conectado ou credenciais inválidas",
@@ -117,37 +101,47 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({ 
-          error: uazapiData.error || uazapiData.message || "Erro ao enviar mensagem",
+          error: responseText || "Erro ao enviar mensagem",
           code: "SEND_ERROR"
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Check if message was actually queued/sent
-    const messageId = uazapiData.key?.id || uazapiData.messageId || uazapiData.id;
-    if (messageId) {
-      console.log(`Message sent successfully. ID: ${messageId}`);
+    try {
+      const uazapiData = JSON.parse(responseText);
+      const messageId = uazapiData.key?.id || uazapiData.messageId || uazapiData.id;
       
+      if (messageId) {
+        console.log(`Message sent successfully. ID: ${messageId}`);
+        
+        return new Response(
+          JSON.stringify({ 
+            success: true,
+            messageId: messageId,
+            message: "Mensagem enviada com sucesso"
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       return new Response(
         JSON.stringify({ 
           success: true,
-          messageId: messageId,
-          message: "Mensagem enviada com sucesso"
+          message: "Mensagem enviada",
+          data: uazapiData
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    } catch (e) {
+      return new Response(
+        JSON.stringify({ 
+          success: true,
+          message: "Mensagem enviada"
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    // Handle unexpected response
-    return new Response(
-      JSON.stringify({ 
-        success: true,
-        message: "Mensagem enviada",
-        data: uazapiData
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
 
   } catch (error) {
     console.error("Error in send-single-message:", error);

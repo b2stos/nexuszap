@@ -29,18 +29,11 @@ async function retryWithBackoff<T>(
   }
 }
 
-// UAZAPI v2 - usando token da instância diretamente
-// Endpoints baseados na documentação:
-// - GET /instance/status - verifica status
-// - GET /instance/qrcode - obtém QR code
-// - POST /instance/logout - desconecta
-// - POST /chat/send/text - envia mensagem
-
+// UAZAPI v2 - usando Instance Token
 async function testUAZAPI(baseUrl: string, instanceToken: string) {
   try {
     console.log('Testing UAZAPI connection:', baseUrl);
     
-    // Tenta o endpoint de status da instância
     const response = await fetch(`${baseUrl}/instance/status`, {
       method: 'GET',
       headers: {
@@ -50,31 +43,14 @@ async function testUAZAPI(baseUrl: string, instanceToken: string) {
     });
     
     console.log('Test response status:', response.status);
+    const responseText = await response.text();
+    console.log('Test response body:', responseText);
     
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('UAZAPI test failed - Status:', response.status, 'Error:', errorText);
-      
-      // Tenta endpoint alternativo
-      console.log('Trying alternative endpoint /status');
-      const altResponse = await fetch(`${baseUrl}/status`, {
-        method: 'GET',
-        headers: {
-          'token': instanceToken,
-          'Content-Type': 'application/json'
-        },
-      });
-      
-      if (altResponse.ok) {
-        console.log('Alternative endpoint works');
-        return true;
-      }
-      
+      console.error('UAZAPI test failed - Status:', response.status);
       return false;
     }
     
-    const data = await response.json();
-    console.log('UAZAPI test response:', JSON.stringify(data));
     return true;
   } catch (error) {
     console.error('UAZAPI test exception:', error);
@@ -96,19 +72,25 @@ async function initializeUAZAPI(baseUrl: string, instanceToken: string) {
     });
 
     console.log('Status response:', statusResponse.status);
+    const statusText = await statusResponse.text();
+    console.log('Status response body:', statusText);
 
     if (statusResponse.ok) {
-      const statusData = await statusResponse.json();
-      console.log('UAZAPI status response:', JSON.stringify(statusData));
-      
-      // Check if already connected
-      const state = statusData.state || statusData.status || statusData.connectionStatus;
-      if (state === 'connected' || state === 'open' || statusData.connected === true) {
-        return {
-          status: 'connected',
-          phoneNumber: statusData.phone || statusData.wid || statusData.jid?.split('@')[0] || null,
-          provider: 'UAZAPI'
-        };
+      try {
+        const statusData = JSON.parse(statusText);
+        console.log('UAZAPI status:', JSON.stringify(statusData));
+        
+        // Check if already connected
+        const state = statusData.state || statusData.status || statusData.connectionStatus;
+        if (state === 'connected' || state === 'open' || statusData.connected === true) {
+          return {
+            status: 'connected',
+            phoneNumber: statusData.phone || statusData.wid || statusData.jid?.split('@')[0] || null,
+            provider: 'UAZAPI'
+          };
+        }
+      } catch (e) {
+        console.log('Could not parse status response as JSON');
       }
     }
 
@@ -123,22 +105,14 @@ async function initializeUAZAPI(baseUrl: string, instanceToken: string) {
     });
 
     console.log('QR response status:', qrResponse.status);
+    const qrText = await qrResponse.text();
+    console.log('QR response body (first 300 chars):', qrText.substring(0, 300));
 
-    if (!qrResponse.ok) {
-      // Try alternative endpoint
-      console.log('Trying alternative QR endpoint');
-      const altQrResponse = await fetch(`${baseUrl}/instance/connect`, {
-        method: 'GET',
-        headers: {
-          'token': instanceToken,
-          'Content-Type': 'application/json'
-        },
-      });
-      
-      if (altQrResponse.ok) {
-        const altQrData = await altQrResponse.json();
-        console.log('Alternative QR response:', JSON.stringify(altQrData).substring(0, 200));
-        const qrCode = altQrData.qrcode || altQrData.base64 || altQrData.code || altQrData.qr;
+    if (qrResponse.ok) {
+      try {
+        const qrData = JSON.parse(qrText);
+        const qrCode = qrData.qrcode || qrData.base64 || qrData.code || qrData.qr || qrData.pairingCode;
+        
         if (qrCode) {
           return {
             status: 'qr',
@@ -146,30 +120,53 @@ async function initializeUAZAPI(baseUrl: string, instanceToken: string) {
             provider: 'UAZAPI'
           };
         }
+      } catch (e) {
+        // Maybe it's a direct base64 image
+        if (qrText.length > 100) {
+          return {
+            status: 'qr',
+            qrCode: qrText,
+            provider: 'UAZAPI'
+          };
+        }
       }
-      
-      const errorText = await qrResponse.text();
-      console.error('UAZAPI QR code generation failed:', qrResponse.status, errorText);
-      throw new Error(`Falha ao gerar QR code: ${errorText}`);
     }
 
-    const qrData = await qrResponse.json();
-    console.log('QR code response received:', JSON.stringify(qrData).substring(0, 200));
-    
-    // UAZAPI returns QR in different formats
-    const qrCode = qrData.qrcode || qrData.base64 || qrData.code || qrData.qr || qrData.pairingCode;
-    
-    if (qrCode) {
-      return {
-        status: 'qr',
-        qrCode: qrCode,
-        provider: 'UAZAPI'
-      };
+    // Try alternative connect endpoint
+    console.log('Trying connect endpoint');
+    const connectResponse = await fetch(`${baseUrl}/instance/connect`, {
+      method: 'GET',
+      headers: {
+        'token': instanceToken,
+        'Content-Type': 'application/json'
+      },
+    });
+
+    console.log('Connect response status:', connectResponse.status);
+    const connectText = await connectResponse.text();
+    console.log('Connect response body (first 300 chars):', connectText.substring(0, 300));
+
+    if (connectResponse.ok) {
+      try {
+        const connectData = JSON.parse(connectText);
+        const qrCode = connectData.qrcode || connectData.base64 || connectData.code || connectData.qr;
+        
+        if (qrCode) {
+          return {
+            status: 'qr',
+            qrCode: qrCode,
+            provider: 'UAZAPI'
+          };
+        }
+      } catch (e) {
+        console.log('Could not parse connect response');
+      }
     }
 
     return {
       status: 'disconnected',
-      provider: 'UAZAPI'
+      provider: 'UAZAPI',
+      message: 'Não foi possível obter QR code. Verifique o Instance Token.'
     };
   });
 }
@@ -185,24 +182,28 @@ async function checkStatusUAZAPI(baseUrl: string, instanceToken: string) {
     });
 
     console.log('Check status response:', statusResponse.status);
+    const statusText = await statusResponse.text();
+    console.log('Status body:', statusText);
 
     if (!statusResponse.ok) {
-      const errorText = await statusResponse.text();
-      console.error('UAZAPI status check failed:', statusResponse.status, errorText);
+      console.error('UAZAPI status check failed:', statusResponse.status);
       throw new Error(`Falha ao verificar status (${statusResponse.status})`);
     }
 
-    const statusData = await statusResponse.json();
-    console.log('UAZAPI status:', JSON.stringify(statusData));
-    
-    // Check connection state - try different field names
-    const state = statusData.state || statusData.status || statusData.connectionStatus;
-    if (state === 'connected' || state === 'open' || statusData.connected === true) {
-      return {
-        status: 'connected',
-        phoneNumber: statusData.phone || statusData.wid || statusData.jid?.split('@')[0] || null,
-        provider: 'UAZAPI'
-      };
+    try {
+      const statusData = JSON.parse(statusText);
+      console.log('UAZAPI status:', JSON.stringify(statusData));
+      
+      const state = statusData.state || statusData.status || statusData.connectionStatus;
+      if (state === 'connected' || state === 'open' || statusData.connected === true) {
+        return {
+          status: 'connected',
+          phoneNumber: statusData.phone || statusData.wid || statusData.jid?.split('@')[0] || null,
+          provider: 'UAZAPI'
+        };
+      }
+    } catch (e) {
+      console.log('Could not parse status as JSON');
     }
 
     return {
@@ -236,11 +237,7 @@ async function disconnectUAZAPI(baseUrl: string, instanceToken: string) {
         },
       });
       
-      if (!altResponse.ok) {
-        const errorText = await response.text();
-        console.error('Disconnect failed:', response.status, errorText);
-        throw new Error('Falha ao desconectar');
-      }
+      console.log('Alt disconnect response:', altResponse.status);
     }
     
     return {
@@ -260,17 +257,15 @@ serve(async (req) => {
     console.log('Action:', action);
 
     // Get UAZAPI credentials
-    // UAZAPI_BASE_URL: URL base (ex: https://base360.uazapi.com)
-    // UAZAPI_ADMIN_TOKEN: Token da instância (usado como 'token' header)
     const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
-    const UAZAPI_ADMIN_TOKEN = Deno.env.get('UAZAPI_ADMIN_TOKEN');
+    const UAZAPI_INSTANCE_TOKEN = Deno.env.get('UAZAPI_INSTANCE_TOKEN');
 
-    if (!UAZAPI_BASE_URL || !UAZAPI_ADMIN_TOKEN) {
+    if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
       console.error('Missing UAZAPI credentials');
       return new Response(
         JSON.stringify({ 
           error: 'Credenciais UAZAPI não configuradas',
-          details: 'Configure UAZAPI_BASE_URL e UAZAPI_ADMIN_TOKEN nos secrets'
+          details: 'Configure UAZAPI_BASE_URL e UAZAPI_INSTANCE_TOKEN nos secrets'
         }),
         { 
           status: 500, 
@@ -279,7 +274,6 @@ serve(async (req) => {
       );
     }
 
-    // Remove trailing slash from base URL if present
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
     console.log('Using base URL:', baseUrl);
 
@@ -288,27 +282,27 @@ serve(async (req) => {
     switch (action) {
       case 'test':
         console.log('Testing UAZAPI credentials');
-        const isValid = await testUAZAPI(baseUrl, UAZAPI_ADMIN_TOKEN);
+        const isValid = await testUAZAPI(baseUrl, UAZAPI_INSTANCE_TOKEN);
         result = { 
           success: isValid,
           provider: 'UAZAPI',
-          message: isValid ? 'Credenciais válidas' : 'Credenciais inválidas. Verifique sua URL e Token.'
+          message: isValid ? 'Credenciais válidas' : 'Credenciais inválidas. Verifique sua URL e Instance Token.'
         };
         break;
 
       case 'initialize':
         console.log('Initializing WhatsApp session');
-        result = await initializeUAZAPI(baseUrl, UAZAPI_ADMIN_TOKEN);
+        result = await initializeUAZAPI(baseUrl, UAZAPI_INSTANCE_TOKEN);
         break;
 
       case 'status':
         console.log('Checking WhatsApp status');
-        result = await checkStatusUAZAPI(baseUrl, UAZAPI_ADMIN_TOKEN);
+        result = await checkStatusUAZAPI(baseUrl, UAZAPI_INSTANCE_TOKEN);
         break;
 
       case 'disconnect':
         console.log('Disconnecting WhatsApp');
-        result = await disconnectUAZAPI(baseUrl, UAZAPI_ADMIN_TOKEN);
+        result = await disconnectUAZAPI(baseUrl, UAZAPI_INSTANCE_TOKEN);
         break;
 
       default:
