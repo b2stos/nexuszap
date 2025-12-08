@@ -24,8 +24,8 @@ export function WhatsAppStatusBanner() {
         return;
       }
 
-      // Check if connected based on Z-API response
-      if (data?.connected === true || data?.status === "connected") {
+      // Check if connected based on UAZAPI response
+      if (data?.status === "connected") {
         setStatus("connected");
       } else {
         setStatus("disconnected");
@@ -42,7 +42,7 @@ export function WhatsAppStatusBanner() {
     checkStatus();
   }, []);
 
-  // Don't show banner if connected
+  // Don't show banner if connected or loading
   if (status === "connected" || status === "loading") {
     return null;
   }
@@ -54,7 +54,7 @@ export function WhatsAppStatusBanner() {
       <AlertDescription className="flex flex-col sm:flex-row sm:items-center gap-3 mt-2">
         <span>
           {status === "error" 
-            ? "Não foi possível verificar o status. Verifique as configurações da API."
+            ? "Não foi possível verificar o status. Verifique as configurações UAZAPI."
             : "Você precisa conectar o WhatsApp para enviar mensagens."}
         </span>
         <div className="flex gap-2">
