@@ -68,121 +68,69 @@ serve(async (req) => {
 
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
-    // UAZAPI uses Evolution API format: /message/sendText with apikey header
-    // The body uses "number" and "text" fields
+    // UAZAPI/Evolution API - try multiple endpoint formats
     console.log(`Sending message to ${cleanPhone} via UAZAPI`);
-    console.log(`Using endpoint: ${baseUrl}/message/sendText`);
     
     const requestBody = {
       number: cleanPhone,
       text: message,
     };
     
-    console.log('Request body:', JSON.stringify(requestBody));
-
-    const uazapiResponse = await fetch(`${baseUrl}/message/sendText`, {
+    // Try /message/send-text endpoint (Evolution API v2 format)
+    console.log(`Trying endpoint: ${baseUrl}/message/send-text`);
+    let uazapiResponse = await fetch(`${baseUrl}/message/send-text`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "apikey": UAZAPI_INSTANCE_TOKEN,
+        "token": UAZAPI_INSTANCE_TOKEN,
       },
       body: JSON.stringify(requestBody),
     });
 
-    console.log('UAZAPI response status:', uazapiResponse.status);
-    const responseText = await uazapiResponse.text();
-    console.log("UAZAPI response:", responseText);
+    console.log('Response status:', uazapiResponse.status);
+    let responseText = await uazapiResponse.text();
+    console.log("Response:", responseText);
+    
+    // If that fails, try /send-text (another common format)
+    if (!uazapiResponse.ok) {
+      console.log(`Trying endpoint: ${baseUrl}/send-text`);
+      uazapiResponse = await fetch(`${baseUrl}/send-text`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "token": UAZAPI_INSTANCE_TOKEN,
+        },
+        body: JSON.stringify({ phone: cleanPhone, message: message }),
+      });
+      
+      console.log('Response status:', uazapiResponse.status);
+      responseText = await uazapiResponse.text();
+      console.log("Response:", responseText);
+    }
+    
+    // If still fails, try /chat/send (WPPConnect format)
+    if (!uazapiResponse.ok) {
+      console.log(`Trying endpoint: ${baseUrl}/chat/send`);
+      uazapiResponse = await fetch(`${baseUrl}/chat/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "token": UAZAPI_INSTANCE_TOKEN,
+        },
+        body: JSON.stringify({ phone: cleanPhone, message: message }),
+      });
+      
+      console.log('Response status:', uazapiResponse.status);
+      responseText = await uazapiResponse.text();
+      console.log("Response:", responseText);
+    }
 
     if (!uazapiResponse.ok) {
-      // If apikey header doesn't work, try with 'token' header
-      if (uazapiResponse.status === 405 || uazapiResponse.status === 401) {
-        console.log("Trying with 'token' header instead...");
-        
-        const retryResponse = await fetch(`${baseUrl}/message/sendText`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "token": UAZAPI_INSTANCE_TOKEN,
-          },
-          body: JSON.stringify(requestBody),
-        });
-
-        console.log('Retry response status:', retryResponse.status);
-        const retryText = await retryResponse.text();
-        console.log("Retry response:", retryText);
-
-        if (!retryResponse.ok) {
-          // Try another endpoint format: /send/text
-          console.log("Trying /send/text endpoint...");
-          
-          const sendTextResponse = await fetch(`${baseUrl}/send/text`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "token": UAZAPI_INSTANCE_TOKEN,
-            },
-            body: JSON.stringify({
-              phone: cleanPhone,
-              message: message,
-            }),
-          });
-
-          console.log('send/text response status:', sendTextResponse.status);
-          const sendTextText = await sendTextResponse.text();
-          console.log("send/text response:", sendTextText);
-
-          if (!sendTextResponse.ok) {
-            return new Response(
-              JSON.stringify({ 
-                error: sendTextText || retryText || "Erro ao enviar mensagem",
-                code: "SEND_ERROR"
-              }),
-              { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-          }
-
-          // Parse successful response from /send/text
-          try {
-            const sendData = JSON.parse(sendTextText);
-            return new Response(
-              JSON.stringify({ 
-                success: true,
-                messageId: sendData.key?.id || sendData.messageId,
-                message: "Mensagem enviada com sucesso"
-              }),
-              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-          } catch {
-            return new Response(
-              JSON.stringify({ success: true, message: "Mensagem enviada" }),
-              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-          }
-        }
-
-        // Parse successful retry response
-        try {
-          const retryData = JSON.parse(retryText);
-          return new Response(
-            JSON.stringify({ 
-              success: true,
-              messageId: retryData.key?.id || retryData.messageId,
-              message: "Mensagem enviada com sucesso"
-            }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        } catch {
-          return new Response(
-            JSON.stringify({ success: true, message: "Mensagem enviada" }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-      }
-
       return new Response(
         JSON.stringify({ 
           error: responseText || "Erro ao enviar mensagem",
-          code: "SEND_ERROR"
+          code: "SEND_ERROR",
+          details: "Nenhum endpoint de envio funcionou. Verifique a documentação da UAZAPI."
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
