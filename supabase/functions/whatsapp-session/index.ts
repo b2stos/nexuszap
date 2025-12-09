@@ -90,6 +90,52 @@ async function testUAZAPI(baseUrl: string, instanceToken: string) {
   }
 }
 
+// Test UAZAPI and return phone number if available
+async function testUAZAPIWithDetails(baseUrl: string, instanceToken: string) {
+  try {
+    console.log('Testing UAZAPI connection with details:', baseUrl);
+    
+    const response = await fetch(`${baseUrl}/instance/status`, {
+      method: 'GET',
+      headers: {
+        'token': instanceToken,
+        'Content-Type': 'application/json'
+      },
+    });
+    
+    console.log('Test response status:', response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('UAZAPI test failed:', errorText);
+      return { 
+        success: false, 
+        provider: 'UAZAPI',
+        message: 'Credenciais inválidas ou instância não encontrada.'
+      };
+    }
+    
+    const data = await response.json();
+    const { connected, phoneNumber, profileName } = parseConnectionStatus(data);
+    
+    return { 
+      success: true, 
+      provider: 'UAZAPI',
+      message: 'Credenciais válidas',
+      phoneNumber,
+      profileName,
+      connected
+    };
+  } catch (error) {
+    console.error('UAZAPI test exception:', error);
+    return { 
+      success: false, 
+      provider: 'UAZAPI',
+      message: 'Erro ao conectar. Verifique a URL da instância.'
+    };
+  }
+}
+
 async function initializeUAZAPI(baseUrl: string, instanceToken: string) {
   console.log('Initializing UAZAPI connection');
   
@@ -226,7 +272,8 @@ serve(async (req) => {
   }
 
   try {
-    const { action } = await req.json();
+    const body = await req.json();
+    const { action, baseUrl: providedBaseUrl, instanceToken: providedToken } = body;
     console.log('Action:', action);
 
     // Get authenticated user
@@ -257,32 +304,44 @@ serve(async (req) => {
       );
     }
 
-    // Try to get user's UAZAPI credentials from database
-    let credentials = await getUserCredentials(supabase, user.id);
+    // For 'test' action, allow using credentials provided directly in body
+    // This allows testing credentials BEFORE saving them
+    let credentials: { baseUrl: string; token: string } | null = null;
     
-    // Fallback to environment variables if no user config
-    if (!credentials) {
-      const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
-      const UAZAPI_INSTANCE_TOKEN = Deno.env.get('UAZAPI_INSTANCE_TOKEN');
-
-      if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
-        console.error('Missing UAZAPI credentials');
-        return new Response(
-          JSON.stringify({ 
-            error: 'Credenciais UAZAPI não configuradas',
-            details: 'Configure suas credenciais na página WhatsApp'
-          }),
-          { 
-            status: 500, 
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-          }
-        );
-      }
-
+    if (providedBaseUrl && providedToken) {
+      console.log('Using provided credentials for testing');
       credentials = {
-        baseUrl: UAZAPI_BASE_URL.replace(/\/$/, ''),
-        token: UAZAPI_INSTANCE_TOKEN
+        baseUrl: providedBaseUrl.replace(/\/$/, ''),
+        token: providedToken
       };
+    } else {
+      // Try to get user's UAZAPI credentials from database
+      credentials = await getUserCredentials(supabase, user.id);
+      
+      // Fallback to environment variables if no user config
+      if (!credentials) {
+        const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
+        const UAZAPI_INSTANCE_TOKEN = Deno.env.get('UAZAPI_INSTANCE_TOKEN');
+
+        if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
+          console.error('Missing UAZAPI credentials');
+          return new Response(
+            JSON.stringify({ 
+              error: 'Credenciais UAZAPI não configuradas',
+              details: 'Configure suas credenciais na página WhatsApp'
+            }),
+            { 
+              status: 500, 
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            }
+          );
+        }
+
+        credentials = {
+          baseUrl: UAZAPI_BASE_URL.replace(/\/$/, ''),
+          token: UAZAPI_INSTANCE_TOKEN
+        };
+      }
     }
 
     console.log('Using base URL:', credentials.baseUrl);
@@ -292,12 +351,8 @@ serve(async (req) => {
     switch (action) {
       case 'test':
         console.log('Testing UAZAPI credentials');
-        const isValid = await testUAZAPI(credentials.baseUrl, credentials.token);
-        result = { 
-          success: isValid,
-          provider: 'UAZAPI',
-          message: isValid ? 'Credenciais válidas' : 'Credenciais inválidas.'
-        };
+        const testResult = await testUAZAPIWithDetails(credentials.baseUrl, credentials.token);
+        result = testResult;
         break;
 
       case 'initialize':
