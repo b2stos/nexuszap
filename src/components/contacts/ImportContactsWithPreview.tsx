@@ -264,13 +264,13 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
         return;
       }
 
-      if (parsedContacts.length > 1000) {
+      if (parsedContacts.length > 5000) {
         toast({
           title: "Muitos contatos",
-          description: `Limite de 1000 contatos por importação. Encontrados: ${parsedContacts.length}. Usando os primeiros 1000.`,
+          description: `Limite de 5000 contatos por importação. Encontrados: ${parsedContacts.length}. Usando os primeiros 5000.`,
           variant: "destructive",
         });
-        parsedContacts = parsedContacts.slice(0, 1000);
+        parsedContacts = parsedContacts.slice(0, 5000);
       }
 
       setContacts(parsedContacts);
@@ -386,9 +386,24 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
         return;
       }
 
-      const { error } = await supabase.from("contacts").insert(contactsToInsert);
-
-      if (error) throw error;
+      // Insert em batches de 500 para evitar timeout
+      const BATCH_SIZE = 500;
+      let inserted = 0;
+      
+      for (let i = 0; i < contactsToInsert.length; i += BATCH_SIZE) {
+        const batch = contactsToInsert.slice(i, i + BATCH_SIZE);
+        const { error } = await supabase.from("contacts").insert(batch);
+        if (error) throw error;
+        inserted += batch.length;
+        
+        // Atualiza progresso
+        if (contactsToInsert.length > BATCH_SIZE) {
+          toast({
+            title: "Importando...",
+            description: `${inserted} de ${contactsToInsert.length} contatos inseridos`,
+          });
+        }
+      }
 
       const invalidCount = contacts.filter((c) => c.status === "invalid").length;
 
