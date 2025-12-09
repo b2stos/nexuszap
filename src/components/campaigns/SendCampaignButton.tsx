@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Send, RotateCcw } from "lucide-react";
 
 interface SendCampaignButtonProps {
   campaignId: string;
@@ -19,21 +19,23 @@ export function SendCampaignButton({
 }: SendCampaignButtonProps) {
   const [loading, setLoading] = useState(false);
 
-  const handleSend = async () => {
+  const handleSend = async (resend: boolean = false) => {
     setLoading(true);
 
     try {
       const { data, error } = await supabase.functions.invoke("send-whatsapp-messages", {
         body: { 
           campaignId,
+          resend,
           instanceName: "whatsapp-business"
         },
       });
 
       if (error) throw error;
 
+      const action = resend ? "reenviada" : "enviada";
       toast({
-        title: "Campanha enviada!",
+        title: `Campanha ${action}!`,
         description: `${data.sent} mensagens enviadas com sucesso${data.failed > 0 ? `, ${data.failed} falharam` : ''}.`,
       });
 
@@ -49,20 +51,28 @@ export function SendCampaignButton({
     }
   };
 
-  if (status !== 'draft' && status !== 'failed') {
+  if (status === 'sending' || status === 'completed') {
     return null;
   }
 
+  const isFailed = status === 'failed';
+
   return (
     <Button 
-      onClick={handleSend} 
+      onClick={() => handleSend(isFailed)} 
       disabled={loading}
       size="sm"
+      variant={isFailed ? "outline" : "default"}
     >
       {loading ? (
         <>
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          Enviando...
+          {isFailed ? "Reenviando..." : "Enviando..."}
+        </>
+      ) : isFailed ? (
+        <>
+          <RotateCcw className="mr-2 h-4 w-4" />
+          Reenviar Campanha
         </>
       ) : (
         <>

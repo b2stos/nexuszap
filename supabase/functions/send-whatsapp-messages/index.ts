@@ -108,7 +108,7 @@ serve(async (req) => {
   }
 
   try {
-    const { campaignId } = await req.json();
+    const { campaignId, resend = false } = await req.json();
     
     const authHeader = req.headers.get('authorization');
     if (!authHeader) {
@@ -158,7 +158,27 @@ serve(async (req) => {
     // Now use service role for updates
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    console.log(`User ${user.id} sending campaign ${campaignId} via UAZAPI`);
+    console.log(`User ${user.id} sending campaign ${campaignId} via UAZAPI (resend: ${resend})`);
+
+    // If resend is true, reset failed messages to pending first
+    if (resend) {
+      console.log('Resending: Resetting failed messages to pending...');
+      const { data: resetData, error: resetError } = await supabase
+        .from('messages')
+        .update({ 
+          status: 'pending', 
+          error_message: null,
+          sent_at: null 
+        })
+        .eq('campaign_id', campaignId)
+        .eq('status', 'failed');
+      
+      if (resetError) {
+        console.error('Error resetting failed messages:', resetError);
+      } else {
+        console.log(`Reset messages for resend`);
+      }
+    }
 
     // Update campaign status to sending
     await supabase
