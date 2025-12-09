@@ -11,7 +11,6 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Detect media type from URL - remove query string first for accurate detection
 function getMediaType(url: string): 'image' | 'video' | 'audio' | 'document' {
-  // Remove query string first to avoid issues with tokens
   const urlWithoutQuery = url.split('?')[0];
   const ext = urlWithoutQuery.split('.').pop()?.toLowerCase() || '';
   
@@ -23,10 +22,70 @@ function getMediaType(url: string): 'image' | 'video' | 'audio' | 'document' {
   return 'document';
 }
 
+// Get MIME type from extension
+function getMimeType(url: string): string {
+  const urlWithoutQuery = url.split('?')[0];
+  const ext = urlWithoutQuery.split('.').pop()?.toLowerCase() || '';
+  
+  const mimeTypes: Record<string, string> = {
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'webp': 'image/webp',
+    'mp4': 'video/mp4',
+    'mov': 'video/quicktime',
+    'avi': 'video/x-msvideo',
+    'webm': 'video/webm',
+    '3gp': 'video/3gpp',
+    'mp3': 'audio/mpeg',
+    'wav': 'audio/wav',
+    'ogg': 'audio/ogg',
+    'm4a': 'audio/mp4',
+    'aac': 'audio/aac',
+    'pdf': 'application/pdf',
+  };
+  
+  return mimeTypes[ext] || 'application/octet-stream';
+}
+
 // Get clean filename from URL (without query string)
 function getCleanFileName(url: string): string {
   const urlWithoutQuery = url.split('?')[0];
   return urlWithoutQuery.split('/').pop() || 'file';
+}
+
+// Download media and convert to base64 data URI
+async function downloadMediaAsBase64(url: string): Promise<{ base64: string; mimeType: string } | null> {
+  try {
+    console.log(`Downloading media from: ${url.substring(0, 100)}...`);
+    
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.error(`Failed to download media: ${response.status}`);
+      return null;
+    }
+    
+    const arrayBuffer = await response.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    
+    // Convert to base64
+    let binary = '';
+    for (let i = 0; i < uint8Array.length; i++) {
+      binary += String.fromCharCode(uint8Array[i]);
+    }
+    const base64 = btoa(binary);
+    
+    const mimeType = getMimeType(url);
+    const dataUri = `data:${mimeType};base64,${base64}`;
+    
+    console.log(`Downloaded ${uint8Array.length} bytes, converted to base64 (${mimeType})`);
+    
+    return { base64: dataUri, mimeType };
+  } catch (error) {
+    console.error(`Error downloading media:`, error);
+    return null;
+  }
 }
 
 // Function to send media via UAZAPI
@@ -42,6 +101,14 @@ async function tryUAZAPISendMedia(
   const fileName = getCleanFileName(mediaUrl);
   console.log(`Sending ${mediaType} (${fileName}): ${mediaUrl.substring(0, 100)}...`);
 
+  // Download and convert to base64 (required by UAZAPI/Wuzapi)
+  const mediaData = await downloadMediaAsBase64(mediaUrl);
+  if (!mediaData) {
+    return { success: false, error: 'Falha ao baixar mídia para conversão base64' };
+  }
+
+  const base64Data = mediaData.base64;
+
   const numberFormats = [
     phone,
     `${phone}@s.whatsapp.net`,
@@ -54,55 +121,34 @@ async function tryUAZAPISendMedia(
     { key: 'apikey', value: token },
   ];
 
-  // Endpoint patterns for media - UAZAPI style (based on /send/text working)
-  const getMediaEndpoints = (type: string, instance?: string) => {
+  // Endpoint patterns for media - UAZAPI/Wuzapi requires base64 data URI
+  const getMediaEndpoints = (type: string) => {
     const endpoints = [];
     
-    // UAZAPI/Wuzapi standard endpoints for media
+    // UAZAPI/Wuzapi standard endpoints for media (use base64 data URI)
     if (type === 'image') {
       endpoints.push(
-        // Try /send/image first since /send/text worked
-        { path: '/send/image', bodyFn: (num: string) => ({ number: num, image: mediaUrl, caption: caption || '' }) },
-        { path: '/send/image', bodyFn: (num: string) => ({ number: num, url: mediaUrl, caption: caption || '' }) },
-        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: mediaUrl, Caption: caption || '' }) },
-        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Url: mediaUrl, Caption: caption || '' }) },
-        { path: '/sendImage', bodyFn: (num: string) => ({ number: num, image: mediaUrl, caption: caption || '' }) },
-        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'image', media: mediaUrl, caption: caption || '' }) },
+        // Wuzapi format: {"Phone":"...", "Image":"data:image/jpeg;base64,...", "Caption":"..."}
+        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: base64Data, Caption: caption || '' }) },
       );
     } else if (type === 'video') {
       endpoints.push(
-        { path: '/send/video', bodyFn: (num: string) => ({ number: num, video: mediaUrl, caption: caption || '' }) },
-        { path: '/chat/send/video', bodyFn: (num: string) => ({ Phone: num, Video: mediaUrl, Caption: caption || '' }) },
-        { path: '/sendVideo', bodyFn: (num: string) => ({ number: num, video: mediaUrl, caption: caption || '' }) },
-        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'video', media: mediaUrl, caption: caption || '' }) },
+        { path: '/chat/send/video', bodyFn: (num: string) => ({ Phone: num, Video: base64Data, Caption: caption || '' }) },
       );
     } else if (type === 'audio') {
       endpoints.push(
-        { path: '/send/audio', bodyFn: (num: string) => ({ number: num, audio: mediaUrl }) },
-        { path: '/chat/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: mediaUrl }) },
-        { path: '/sendAudio', bodyFn: (num: string) => ({ number: num, audio: mediaUrl }) },
-        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'audio', media: mediaUrl }) },
+        { path: '/chat/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: base64Data }) },
       );
     } else {
       endpoints.push(
-        { path: '/send/document', bodyFn: (num: string) => ({ number: num, document: mediaUrl, filename: fileName, caption: caption || '' }) },
-        { path: '/chat/send/document', bodyFn: (num: string) => ({ Phone: num, Document: mediaUrl, FileName: fileName, Caption: caption || '' }) },
-        { path: '/sendDocument', bodyFn: (num: string) => ({ number: num, document: mediaUrl, filename: fileName, caption: caption || '' }) },
-        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'document', media: mediaUrl, caption: caption || '' }) },
-      );
-    }
-
-    // Evolution API style with instance
-    if (instance) {
-      endpoints.push(
-        { path: `/message/sendMedia/${instance}`, bodyFn: (num: string) => ({ number: num, mediatype: type, media: mediaUrl, caption: caption || '' }) },
+        { path: '/chat/send/document', bodyFn: (num: string) => ({ Phone: num, Document: base64Data, FileName: fileName, Caption: caption || '' }) },
       );
     }
 
     return endpoints;
   };
 
-  const endpoints = getMediaEndpoints(mediaType, instanceName);
+  const endpoints = getMediaEndpoints(mediaType);
   let attempts = 0;
   const maxAttempts = 10;
 
