@@ -76,34 +76,59 @@ export function WebhookDiagnostics() {
         .order("created_at", { ascending: false })
         .limit(10);
 
-      if (error) throw error;
-      setEvents(data || []);
+      if (error) {
+        console.error("Error fetching webhook events:", error);
+        setEvents([]);
+      } else {
+        setEvents(data || []);
+      }
 
-      // Get stats
+      // Get stats - wrap each in try-catch to prevent partial failures
       const now = new Date();
       const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-      const { count: totalCount } = await supabase
-        .from("webhook_events")
-        .select("*", { count: "exact", head: true });
+      let totalCount = 0;
+      let last24hCount = 0;
+      let processedCount = 0;
 
-      const { count: last24hCount } = await supabase
-        .from("webhook_events")
-        .select("*", { count: "exact", head: true })
-        .gte("created_at", last24h.toISOString());
+      try {
+        const { count } = await supabase
+          .from("webhook_events")
+          .select("*", { count: "exact", head: true });
+        totalCount = count || 0;
+      } catch (e) {
+        console.error("Error counting total events:", e);
+      }
 
-      const { count: processedCount } = await supabase
-        .from("webhook_events")
-        .select("*", { count: "exact", head: true })
-        .eq("processed", true);
+      try {
+        const { count } = await supabase
+          .from("webhook_events")
+          .select("*", { count: "exact", head: true })
+          .gte("created_at", last24h.toISOString());
+        last24hCount = count || 0;
+      } catch (e) {
+        console.error("Error counting last 24h events:", e);
+      }
+
+      try {
+        const { count } = await supabase
+          .from("webhook_events")
+          .select("*", { count: "exact", head: true })
+          .eq("processed", true);
+        processedCount = count || 0;
+      } catch (e) {
+        console.error("Error counting processed events:", e);
+      }
 
       setStats({
-        total: totalCount || 0,
-        last24h: last24hCount || 0,
-        processed: processedCount || 0,
+        total: totalCount,
+        last24h: last24hCount,
+        processed: processedCount,
       });
     } catch (error) {
       console.error("Error loading webhook events:", error);
+      setEvents([]);
+      setStats({ total: 0, last24h: 0, processed: 0 });
     } finally {
       setLoading(false);
     }
