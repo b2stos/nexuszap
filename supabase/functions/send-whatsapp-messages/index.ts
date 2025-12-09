@@ -99,7 +99,9 @@ async function tryUAZAPISendMedia(
 ): Promise<{ success: boolean; response?: any; error?: string }> {
   const mediaType = getMediaType(mediaUrl);
   const fileName = getCleanFileName(mediaUrl);
-  console.log(`Sending ${mediaType} (${fileName}): ${mediaUrl.substring(0, 100)}...`);
+  console.log(`=== SENDING MEDIA ===`);
+  console.log(`Type: ${mediaType}, File: ${fileName}`);
+  console.log(`URL: ${mediaUrl.substring(0, 100)}...`);
 
   // Download and convert to base64 (required by UAZAPI/Wuzapi)
   const mediaData = await downloadMediaAsBase64(mediaUrl);
@@ -108,6 +110,7 @@ async function tryUAZAPISendMedia(
   }
 
   const base64Data = mediaData.base64;
+  console.log(`Base64 ready, length: ${base64Data.length}`);
 
   const numberFormats = [
     phone,
@@ -115,32 +118,45 @@ async function tryUAZAPISendMedia(
     `${phone}@c.us`,
   ];
 
+  // Prioritize 'token' (lowercase) - it worked for text
   const headerSets = [
     { key: 'token', value: token },
     { key: 'Token', value: token },
     { key: 'apikey', value: token },
   ];
 
-  // Endpoint patterns for media - UAZAPI/Wuzapi requires base64 data URI
+  // Build media endpoints - PRIORITIZE /send/image pattern (like working /send/text)
   const getMediaEndpoints = (type: string) => {
     const endpoints = [];
     
-    // UAZAPI/Wuzapi standard endpoints for media (use base64 data URI)
     if (type === 'image') {
+      // Base360/UAZAPI pattern - /send/image (like /send/text that worked)
       endpoints.push(
-        // Wuzapi format: {"Phone":"...", "Image":"data:image/jpeg;base64,...", "Caption":"..."}
+        { path: '/send/image', bodyFn: (num: string) => ({ Phone: num, Image: base64Data, Caption: caption || '' }) },
+        { path: '/send/image', bodyFn: (num: string) => ({ phone: num, image: base64Data, caption: caption || '' }) },
+        { path: '/send/image', bodyFn: (num: string) => ({ number: num, image: base64Data, caption: caption || '' }) },
+        // Try with URL instead of base64
+        { path: '/send/image', bodyFn: (num: string) => ({ Phone: num, Image: mediaUrl, Caption: caption || '' }) },
+        // Wuzapi pattern
         { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: base64Data, Caption: caption || '' }) },
+        { path: '/chat/send/image', bodyFn: (num: string) => ({ phone: num, image: base64Data, caption: caption || '' }) },
       );
     } else if (type === 'video') {
       endpoints.push(
+        { path: '/send/video', bodyFn: (num: string) => ({ Phone: num, Video: base64Data, Caption: caption || '' }) },
+        { path: '/send/video', bodyFn: (num: string) => ({ phone: num, video: base64Data, caption: caption || '' }) },
         { path: '/chat/send/video', bodyFn: (num: string) => ({ Phone: num, Video: base64Data, Caption: caption || '' }) },
       );
     } else if (type === 'audio') {
       endpoints.push(
+        { path: '/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: base64Data }) },
+        { path: '/send/audio', bodyFn: (num: string) => ({ phone: num, audio: base64Data }) },
         { path: '/chat/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: base64Data }) },
       );
     } else {
       endpoints.push(
+        { path: '/send/document', bodyFn: (num: string) => ({ Phone: num, Document: base64Data, FileName: fileName, Caption: caption || '' }) },
+        { path: '/send/document', bodyFn: (num: string) => ({ phone: num, document: base64Data, fileName: fileName, caption: caption || '' }) },
         { path: '/chat/send/document', bodyFn: (num: string) => ({ Phone: num, Document: base64Data, FileName: fileName, Caption: caption || '' }) },
       );
     }
@@ -150,7 +166,7 @@ async function tryUAZAPISendMedia(
 
   const endpoints = getMediaEndpoints(mediaType);
   let attempts = 0;
-  const maxAttempts = 10;
+  const maxAttempts = 20; // Increased since we have more variants
 
   for (const headerSet of headerSets) {
     const headers: Record<string, string> = {
@@ -158,17 +174,26 @@ async function tryUAZAPISendMedia(
       'Content-Type': 'application/json'
     };
 
-    for (const numberFormat of numberFormats) {
-      for (const endpoint of endpoints) {
+    for (const endpoint of endpoints) {
+      for (const numberFormat of numberFormats) {
         if (attempts >= maxAttempts) {
+          console.log(`Max attempts (${maxAttempts}) reached for media`);
           return { success: false, error: `Falha ao enviar mídia após ${attempts} tentativas.` };
         }
 
         const url = `${baseUrl}${endpoint.path}`;
         const body = endpoint.bodyFn(numberFormat);
+        
+        // Log body without the full base64 for readability
+        const bodyLog: Record<string, any> = { ...body };
+        for (const key of Object.keys(bodyLog)) {
+          if (typeof bodyLog[key] === 'string' && bodyLog[key].length > 100) {
+            bodyLog[key] = bodyLog[key].substring(0, 50) + '...[truncated]';
+          }
+        }
 
-        console.log(`[Media ${++attempts}] Trying: ${url}`);
-        console.log(`Body: ${JSON.stringify(body)}`);
+        console.log(`[Media ${++attempts}] ${headerSet.key}: ${url}`);
+        console.log(`Body: ${JSON.stringify(bodyLog)}`);
 
         try {
           const response = await fetch(url, {
@@ -178,23 +203,34 @@ async function tryUAZAPISendMedia(
           });
 
           const responseText = await response.text();
-          console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 300)}`);
+          console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 500)}`);
 
           if (response.ok) {
             try {
               const data = JSON.parse(responseText);
               if (!data.error && !data.message?.toLowerCase().includes('not allowed')) {
-                console.log(`SUCCESS media with: ${url}`);
+                console.log(`✅ SUCCESS media with: ${url}, header: ${headerSet.key}`);
                 return { success: true, response: data };
               }
             } catch {
               if (!responseText.toLowerCase().includes('error')) {
+                console.log(`✅ SUCCESS media (non-JSON) with: ${url}`);
                 return { success: true, response: responseText };
               }
             }
           }
 
-          if (response.status === 404) break;
+          // If 404, this endpoint doesn't exist - try next endpoint
+          if (response.status === 404) {
+            console.log(`404 - endpoint ${endpoint.path} not found, trying next...`);
+            break;
+          }
+          
+          // If 405, method not allowed - try next endpoint
+          if (response.status === 405) {
+            console.log(`405 - method not allowed for ${endpoint.path}, trying next...`);
+            break;
+          }
         } catch (fetchError) {
           console.error(`Fetch error for ${url}:`, fetchError);
         }
@@ -202,6 +238,7 @@ async function tryUAZAPISendMedia(
     }
   }
 
+  console.log(`❌ All ${attempts} media attempts failed`);
   return { success: false, error: `Falha ao enviar mídia após ${attempts} tentativas.` };
 }
 
