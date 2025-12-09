@@ -25,11 +25,13 @@ type ApiStatus = "loading" | "connected" | "disconnected" | "error";
 
 export default function Settings() {
   const user = useProtectedUser();
-  const [apiStatus, setApiStatus] = useState<ApiStatus>("loading");
+  const [apiStatus, setApiStatus] = useState<ApiStatus>("disconnected");
   const [checking, setChecking] = useState(false);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
 
   const checkApiStatus = async () => {
+    if (!user) return;
+    
     setChecking(true);
     try {
       const { data, error } = await supabase.functions.invoke("whatsapp-session", {
@@ -38,7 +40,7 @@ export default function Settings() {
 
       if (error) {
         console.error("Error checking API status:", error);
-        setApiStatus("error");
+        setApiStatus("disconnected");
         return;
       }
 
@@ -49,7 +51,7 @@ export default function Settings() {
       }
     } catch (err) {
       console.error("Failed to check API status:", err);
-      setApiStatus("error");
+      setApiStatus("disconnected");
     } finally {
       setChecking(false);
       setLastChecked(new Date());
@@ -57,8 +59,10 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    checkApiStatus();
-  }, []);
+    if (user) {
+      checkApiStatus();
+    }
+  }, [user]);
 
   const getStatusBadge = () => {
     switch (apiStatus) {
@@ -70,6 +74,8 @@ export default function Settings() {
         return <Badge variant="destructive">Desconectado</Badge>;
       case "error":
         return <Badge variant="destructive">Erro</Badge>;
+      default:
+        return <Badge variant="secondary">Desconhecido</Badge>;
     }
   };
 
@@ -81,6 +87,7 @@ export default function Settings() {
         return <CheckCircle2 className="h-5 w-5 text-green-500" />;
       case "disconnected":
       case "error":
+      default:
         return <XCircle className="h-5 w-5 text-destructive" />;
     }
   };
