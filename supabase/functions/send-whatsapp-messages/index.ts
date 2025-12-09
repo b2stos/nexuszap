@@ -9,6 +9,134 @@ const corsHeaders = {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Detect media type from URL
+function getMediaType(url: string): 'image' | 'video' | 'audio' | 'document' {
+  const ext = url.split('.').pop()?.toLowerCase().split('?')[0] || '';
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) return 'image';
+  if (['mp4', 'mov', 'avi', 'webm', '3gp'].includes(ext)) return 'video';
+  if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext)) return 'audio';
+  return 'document';
+}
+
+// Function to send media via UAZAPI
+async function tryUAZAPISendMedia(
+  baseUrl: string,
+  token: string,
+  phone: string,
+  mediaUrl: string,
+  caption?: string,
+  instanceName?: string
+): Promise<{ success: boolean; response?: any; error?: string }> {
+  const mediaType = getMediaType(mediaUrl);
+  console.log(`Sending ${mediaType}: ${mediaUrl}`);
+
+  const numberFormats = [
+    phone,
+    `${phone}@s.whatsapp.net`,
+    `${phone}@c.us`,
+  ];
+
+  const headerSets = [
+    { key: 'token', value: token },
+    { key: 'Token', value: token },
+    { key: 'apikey', value: token },
+  ];
+
+  // Endpoint patterns for media - UAZAPI style
+  const getMediaEndpoints = (type: string, instance?: string) => {
+    const endpoints = [];
+    
+    // UAZAPI/Wuzapi standard endpoints for media
+    if (type === 'image') {
+      endpoints.push(
+        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: mediaUrl, Caption: caption || '' }) },
+        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Url: mediaUrl, Caption: caption || '' }) },
+        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'image', media: mediaUrl, caption: caption || '' }) },
+      );
+    } else if (type === 'video') {
+      endpoints.push(
+        { path: '/chat/send/video', bodyFn: (num: string) => ({ Phone: num, Video: mediaUrl, Caption: caption || '' }) },
+        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'video', media: mediaUrl, caption: caption || '' }) },
+      );
+    } else if (type === 'audio') {
+      endpoints.push(
+        { path: '/chat/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: mediaUrl }) },
+        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'audio', media: mediaUrl }) },
+      );
+    } else {
+      endpoints.push(
+        { path: '/chat/send/document', bodyFn: (num: string) => ({ Phone: num, Document: mediaUrl, FileName: mediaUrl.split('/').pop() || 'document', Caption: caption || '' }) },
+        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'document', media: mediaUrl, caption: caption || '' }) },
+      );
+    }
+
+    // Evolution API style with instance
+    if (instance) {
+      endpoints.push(
+        { path: `/message/sendMedia/${instance}`, bodyFn: (num: string) => ({ number: num, mediatype: type, media: mediaUrl, caption: caption || '' }) },
+      );
+    }
+
+    return endpoints;
+  };
+
+  const endpoints = getMediaEndpoints(mediaType, instanceName);
+  let attempts = 0;
+  const maxAttempts = 10;
+
+  for (const headerSet of headerSets) {
+    const headers: Record<string, string> = {
+      [headerSet.key]: headerSet.value,
+      'Content-Type': 'application/json'
+    };
+
+    for (const numberFormat of numberFormats) {
+      for (const endpoint of endpoints) {
+        if (attempts >= maxAttempts) {
+          return { success: false, error: `Falha ao enviar mídia após ${attempts} tentativas.` };
+        }
+
+        const url = `${baseUrl}${endpoint.path}`;
+        const body = endpoint.bodyFn(numberFormat);
+
+        console.log(`[Media ${++attempts}] Trying: ${url}`);
+        console.log(`Body: ${JSON.stringify(body)}`);
+
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: headers,
+            body: JSON.stringify(body),
+          });
+
+          const responseText = await response.text();
+          console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 300)}`);
+
+          if (response.ok) {
+            try {
+              const data = JSON.parse(responseText);
+              if (!data.error && !data.message?.toLowerCase().includes('not allowed')) {
+                console.log(`SUCCESS media with: ${url}`);
+                return { success: true, response: data };
+              }
+            } catch {
+              if (!responseText.toLowerCase().includes('error')) {
+                return { success: true, response: responseText };
+              }
+            }
+          }
+
+          if (response.status === 404) break;
+        } catch (fetchError) {
+          console.error(`Fetch error for ${url}:`, fetchError);
+        }
+      }
+    }
+  }
+
+  return { success: false, error: `Falha ao enviar mídia após ${attempts} tentativas.` };
+}
+
 // Get instance info first to know the instance name/id
 async function getInstanceInfo(baseUrl: string, token: string): Promise<{ instanceName?: string; instanceId?: string }> {
   console.log('Fetching instance info...');
@@ -297,6 +425,7 @@ serve(async (req) => {
     }
 
     console.log(`Found ${messages.length} messages to send`);
+    console.log(`Campaign has ${campaign.media_urls?.length || 0} media files`);
 
     let successCount = 0;
     let failCount = 0;
@@ -308,40 +437,79 @@ serve(async (req) => {
         
         console.log(`\n--- Sending to ${phoneNumber} ---`);
 
-        // Try sending with multiple endpoint/format combinations
-        const result = await tryUAZAPISend(
-          baseUrl, 
-          UAZAPI_INSTANCE_TOKEN, 
-          phoneNumber, 
-          campaign.message_content,
-          instanceInfo.instanceName
-        );
+        let mediaSuccess = true;
+        const mediaUrls = campaign.media_urls || [];
 
-        if (!result.success) {
-          console.error(`Failed to send to ${phoneNumber}:`, result.error);
-          
-          await supabase
-            .from('messages')
-            .update({
-              status: 'failed',
-              error_message: result.error || 'UAZAPI error'
-            })
-            .eq('id', message.id);
-          
-          failCount++;
-        } else {
-          console.log(`Message sent successfully to ${phoneNumber}`);
-          
-          await supabase
-            .from('messages')
-            .update({
-              status: 'sent',
-              sent_at: new Date().toISOString()
-            })
-            .eq('id', message.id);
-          
-          successCount++;
+        // Send media first (if any)
+        if (mediaUrls.length > 0) {
+          for (let i = 0; i < mediaUrls.length; i++) {
+            const mediaUrl = mediaUrls[i];
+            // First media gets the caption (message_content), others don't
+            const caption = i === 0 ? campaign.message_content : undefined;
+            
+            console.log(`Sending media ${i + 1}/${mediaUrls.length}: ${mediaUrl}`);
+            
+            const mediaResult = await tryUAZAPISendMedia(
+              baseUrl,
+              UAZAPI_INSTANCE_TOKEN,
+              phoneNumber,
+              mediaUrl,
+              caption,
+              instanceInfo.instanceName
+            );
+
+            if (!mediaResult.success) {
+              console.error(`Failed to send media to ${phoneNumber}:`, mediaResult.error);
+              mediaSuccess = false;
+              break;
+            }
+            
+            // Small delay between media files
+            if (i < mediaUrls.length - 1) {
+              await sleep(500);
+            }
+          }
         }
+
+        // If no media or media failed, send text message
+        // If media was sent with caption, no need to send text again
+        if (!mediaSuccess || mediaUrls.length === 0) {
+          const result = await tryUAZAPISend(
+            baseUrl, 
+            UAZAPI_INSTANCE_TOKEN, 
+            phoneNumber, 
+            campaign.message_content,
+            instanceInfo.instanceName
+          );
+
+          if (!result.success) {
+            console.error(`Failed to send to ${phoneNumber}:`, result.error);
+            
+            await supabase
+              .from('messages')
+              .update({
+                status: 'failed',
+                error_message: result.error || 'UAZAPI error'
+              })
+              .eq('id', message.id);
+            
+            failCount++;
+            continue;
+          }
+        }
+
+        // Success - either media with caption was sent, or text was sent
+        console.log(`Message sent successfully to ${phoneNumber}`);
+        
+        await supabase
+          .from('messages')
+          .update({
+            status: 'sent',
+            sent_at: new Date().toISOString()
+          })
+          .eq('id', message.id);
+        
+        successCount++;
 
         // Add delay between messages (1.5 seconds) to avoid rate limiting
         if (messages.indexOf(message) < messages.length - 1) {
