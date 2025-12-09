@@ -6,6 +6,26 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Get user's UAZAPI credentials from database
+async function getUserCredentials(supabase: any, userId: string): Promise<{ baseUrl: string; token: string } | null> {
+  const { data, error } = await supabase
+    .from('uazapi_config')
+    .select('base_url, instance_token')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (error || !data) {
+    console.log('No user UAZAPI config found');
+    return null;
+  }
+
+  return {
+    baseUrl: data.base_url.replace(/\/$/, ''),
+    token: data.instance_token
+  };
+}
+
 // Get instance info first to know the instance name/id
 async function getInstanceInfo(baseUrl: string, token: string): Promise<{ instanceName?: string; instanceId?: string }> {
   try {
@@ -159,15 +179,14 @@ serve(async (req) => {
   }
 
   try {
-    const supabaseClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      {
-        global: {
-          headers: { Authorization: req.headers.get("Authorization")! },
-        },
-      }
-    );
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+
+    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: {
+        headers: { Authorization: req.headers.get("Authorization")! },
+      },
+    });
 
     // Get authenticated user
     const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
@@ -198,34 +217,42 @@ serve(async (req) => {
       );
     }
 
-    // Get UAZAPI credentials
-    const UAZAPI_BASE_URL = Deno.env.get("UAZAPI_BASE_URL");
-    const UAZAPI_INSTANCE_TOKEN = Deno.env.get("UAZAPI_INSTANCE_TOKEN");
+    // Try to get user's UAZAPI credentials from database
+    let credentials = await getUserCredentials(supabaseClient, user.id);
+    
+    // Fallback to environment variables if no user config
+    if (!credentials) {
+      const UAZAPI_BASE_URL = Deno.env.get("UAZAPI_BASE_URL");
+      const UAZAPI_INSTANCE_TOKEN = Deno.env.get("UAZAPI_INSTANCE_TOKEN");
 
-    if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
-      console.error("UAZAPI credentials not configured");
-      return new Response(
-        JSON.stringify({ 
-          error: "API do WhatsApp não configurada",
-          code: "WHATSAPP_NOT_CONFIGURED"
-        }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
+        console.error("UAZAPI credentials not configured");
+        return new Response(
+          JSON.stringify({ 
+            error: "API do WhatsApp não configurada",
+            code: "WHATSAPP_NOT_CONFIGURED"
+          }),
+          { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      credentials = {
+        baseUrl: UAZAPI_BASE_URL.replace(/\/$/, ''),
+        token: UAZAPI_INSTANCE_TOKEN
+      };
     }
 
-    const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
-
     console.log(`=== Sending message to ${cleanPhone} via UAZAPI ===`);
-    console.log(`Base URL: ${baseUrl}`);
+    console.log(`Base URL: ${credentials.baseUrl}`);
     
     // Get instance info
-    const instanceInfo = await getInstanceInfo(baseUrl, UAZAPI_INSTANCE_TOKEN);
+    const instanceInfo = await getInstanceInfo(credentials.baseUrl, credentials.token);
     console.log(`Instance info: ${JSON.stringify(instanceInfo)}`);
     
     // Try all endpoint/format combinations
     const result = await tryUAZAPISend(
-      baseUrl, 
-      UAZAPI_INSTANCE_TOKEN, 
+      credentials.baseUrl, 
+      credentials.token, 
       cleanPhone, 
       message,
       instanceInfo.instanceName

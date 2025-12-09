@@ -1,5 +1,6 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.81.1';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -29,11 +30,28 @@ async function retryWithBackoff<T>(
   }
 }
 
+// Get user's UAZAPI credentials from database
+async function getUserCredentials(supabase: any, userId: string): Promise<{ baseUrl: string; token: string } | null> {
+  const { data, error } = await supabase
+    .from('uazapi_config')
+    .select('base_url, instance_token')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (error || !data) {
+    console.log('No user UAZAPI config found, checking env fallback');
+    return null;
+  }
+
+  return {
+    baseUrl: data.base_url.replace(/\/$/, ''),
+    token: data.instance_token
+  };
+}
+
 // Parse UAZAPI response to check connection status
 function parseConnectionStatus(data: any): { connected: boolean; phoneNumber: string | null; profileName: string | null } {
-  // UAZAPI response structure:
-  // { instance: { status: "connected", owner: "5511...", profileName: "..." }, status: { connected: true, loggedIn: true } }
-  
   const instanceStatus = data.instance?.status;
   const statusConnected = data.status?.connected;
   const statusLoggedIn = data.status?.loggedIn;
@@ -76,7 +94,6 @@ async function initializeUAZAPI(baseUrl: string, instanceToken: string) {
   console.log('Initializing UAZAPI connection');
   
   return await retryWithBackoff(async () => {
-    // Check current status
     const statusResponse = await fetch(`${baseUrl}/instance/status`, {
       method: 'GET',
       headers: {
@@ -102,7 +119,6 @@ async function initializeUAZAPI(baseUrl: string, instanceToken: string) {
         };
       }
       
-      // Check if there's a QR code in the response
       const qrCode = statusData.instance?.qrcode || statusData.qrcode;
       if (qrCode && qrCode.length > 10) {
         return {
@@ -113,7 +129,6 @@ async function initializeUAZAPI(baseUrl: string, instanceToken: string) {
       }
     }
 
-    // Get QR code if not connected
     console.log('Requesting QR code from UAZAPI');
     const qrResponse = await fetch(`${baseUrl}/instance/qrcode`, {
       method: 'GET',
@@ -214,32 +229,70 @@ serve(async (req) => {
     const { action } = await req.json();
     console.log('Action:', action);
 
-    const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
-    const UAZAPI_INSTANCE_TOKEN = Deno.env.get('UAZAPI_INSTANCE_TOKEN');
-
-    if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
-      console.error('Missing UAZAPI credentials');
+    // Get authenticated user
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader) {
       return new Response(
-        JSON.stringify({ 
-          error: 'Credenciais UAZAPI não configuradas',
-          details: 'Configure UAZAPI_BASE_URL e UAZAPI_INSTANCE_TOKEN nos secrets'
-        }),
-        { 
-          status: 500, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-        }
+        JSON.stringify({ error: 'Não autorizado' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
-    console.log('Using base URL:', baseUrl);
+    const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+    const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
+    
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      throw new Error('Supabase credentials not configured');
+    }
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } }
+    });
+
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      return new Response(
+        JSON.stringify({ error: 'Não autorizado' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Try to get user's UAZAPI credentials from database
+    let credentials = await getUserCredentials(supabase, user.id);
+    
+    // Fallback to environment variables if no user config
+    if (!credentials) {
+      const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
+      const UAZAPI_INSTANCE_TOKEN = Deno.env.get('UAZAPI_INSTANCE_TOKEN');
+
+      if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
+        console.error('Missing UAZAPI credentials');
+        return new Response(
+          JSON.stringify({ 
+            error: 'Credenciais UAZAPI não configuradas',
+            details: 'Configure suas credenciais na página WhatsApp'
+          }),
+          { 
+            status: 500, 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+          }
+        );
+      }
+
+      credentials = {
+        baseUrl: UAZAPI_BASE_URL.replace(/\/$/, ''),
+        token: UAZAPI_INSTANCE_TOKEN
+      };
+    }
+
+    console.log('Using base URL:', credentials.baseUrl);
 
     let result;
 
     switch (action) {
       case 'test':
         console.log('Testing UAZAPI credentials');
-        const isValid = await testUAZAPI(baseUrl, UAZAPI_INSTANCE_TOKEN);
+        const isValid = await testUAZAPI(credentials.baseUrl, credentials.token);
         result = { 
           success: isValid,
           provider: 'UAZAPI',
@@ -249,17 +302,17 @@ serve(async (req) => {
 
       case 'initialize':
         console.log('Initializing WhatsApp session');
-        result = await initializeUAZAPI(baseUrl, UAZAPI_INSTANCE_TOKEN);
+        result = await initializeUAZAPI(credentials.baseUrl, credentials.token);
         break;
 
       case 'status':
         console.log('Checking WhatsApp status');
-        result = await checkStatusUAZAPI(baseUrl, UAZAPI_INSTANCE_TOKEN);
+        result = await checkStatusUAZAPI(credentials.baseUrl, credentials.token);
         break;
 
       case 'disconnect':
         console.log('Disconnecting WhatsApp');
-        result = await disconnectUAZAPI(baseUrl, UAZAPI_INSTANCE_TOKEN);
+        result = await disconnectUAZAPI(credentials.baseUrl, credentials.token);
         break;
 
       default:
