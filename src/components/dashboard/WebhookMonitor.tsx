@@ -198,9 +198,9 @@ export function WebhookMonitor() {
       <Card>
         <CardHeader>
           <CardTitle>Webhooks Recebidos (Tempo Real)</CardTitle>
-          <CardDescription>
-            Últimos 50 eventos recebidos da Z-API
-          </CardDescription>
+        <CardDescription>
+          Últimos 50 eventos recebidos da Base360
+        </CardDescription>
         </CardHeader>
         <CardContent>
           <ScrollArea className="h-[400px] pr-4">
@@ -210,7 +210,7 @@ export function WebhookMonitor() {
                   <XCircle className="h-12 w-12 mx-auto mb-2 opacity-50" />
                   <p>Nenhum webhook recebido ainda</p>
                   <p className="text-sm mt-1">
-                    Configure o webhook no painel Z-API
+                    Configure o webhook no painel Base360
                   </p>
                 </div>
               ) : (
