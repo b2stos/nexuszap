@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { supabase } from "@/integrations/supabase/client";
+import { WebhookDiagnostics } from "@/components/dashboard/WebhookDiagnostics";
 import { 
   CheckCircle2, 
   XCircle, 
@@ -167,6 +168,9 @@ export default function Settings() {
             )}
           </CardContent>
         </Card>
+
+        {/* Webhook Diagnostics Card */}
+        <WebhookDiagnostics />
 
         {/* User Info Card */}
         <Card>
