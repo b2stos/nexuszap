@@ -9,6 +9,26 @@ const corsHeaders = {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Get user's UAZAPI credentials from database
+async function getUserCredentials(supabase: any, userId: string): Promise<{ baseUrl: string; token: string } | null> {
+  const { data, error } = await supabase
+    .from('uazapi_config')
+    .select('base_url, instance_token')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (error || !data) {
+    console.log('No user UAZAPI config found');
+    return null;
+  }
+
+  return {
+    baseUrl: data.base_url.replace(/\/$/, ''),
+    token: data.instance_token
+  };
+}
+
 // Detect media type from URL
 function getMediaType(url: string): 'image' | 'video' | 'audio' | 'document' {
   const urlWithoutQuery = url.split('?')[0];
@@ -79,7 +99,6 @@ async function downloadMediaAsBase64(url: string): Promise<{ base64: string; mim
 function extractMessageId(response: any): string | null {
   if (!response) return null;
   
-  // Base360 format: { messageid: "3EB0..." } or { id: "5511913185456:3EB0..." }
   if (response.messageid) return response.messageid;
   
   if (response.id) {
@@ -87,17 +106,13 @@ function extractMessageId(response: any): string | null {
     return parts.length > 1 ? parts[1] : parts[0];
   }
   
-  // Try nested structures
   if (response.message?.messageid) return response.message.messageid;
   if (response.data?.messageid) return response.data.messageid;
   
   return null;
 }
 
-// ============================================================
 // MEDIA SENDING - Using /send/media endpoint (UAZAPI docs)
-// Format: { number, type, file, text }
-// ============================================================
 async function tryUAZAPISendMedia(
   baseUrl: string,
   token: string,
@@ -116,10 +131,7 @@ async function tryUAZAPISendMedia(
     'Content-Type': 'application/json'
   };
 
-  // ============================================================
   // STRATEGY 1: /send/media with URL (preferred per UAZAPI docs)
-  // Format: { number, type, file, text }
-  // ============================================================
   console.log(`[1] Trying /send/media with URL...`);
   try {
     const payload: any = {
@@ -166,9 +178,7 @@ async function tryUAZAPISendMedia(
     console.error(`Error with /send/media (URL):`, e);
   }
 
-  // ============================================================
   // STRATEGY 2: /send/media with base64 (fallback)
-  // ============================================================
   console.log(`[2] Trying /send/media with base64...`);
   
   const mediaData = await downloadMediaAsBase64(mediaUrl);
@@ -224,9 +234,7 @@ async function tryUAZAPISendMedia(
   return { success: false, error: `Failed to send media via /send/media` };
 }
 
-// ============================================================
 // TEXT MESSAGE SENDING
-// ============================================================
 async function tryUAZAPISend(
   baseUrl: string, 
   token: string, 
@@ -319,21 +327,13 @@ serve(async (req) => {
       throw new Error('Unauthorized');
     }
 
-    const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
-    const UAZAPI_INSTANCE_TOKEN = Deno.env.get('UAZAPI_INSTANCE_TOKEN');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
 
-    if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
-      throw new Error('UAZAPI credentials not configured');
-    }
-
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
       throw new Error('Supabase credentials not configured');
     }
-
-    const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
     const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } }
@@ -354,10 +354,28 @@ serve(async (req) => {
       throw new Error('Campaign not found or access denied');
     }
 
+    // Try to get user's UAZAPI credentials from database
+    let credentials = await getUserCredentials(userClient, user.id);
+    
+    // Fallback to environment variables if no user config
+    if (!credentials) {
+      const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
+      const UAZAPI_INSTANCE_TOKEN = Deno.env.get('UAZAPI_INSTANCE_TOKEN');
+
+      if (!UAZAPI_BASE_URL || !UAZAPI_INSTANCE_TOKEN) {
+        throw new Error('UAZAPI credentials not configured. Configure na página WhatsApp.');
+      }
+
+      credentials = {
+        baseUrl: UAZAPI_BASE_URL.replace(/\/$/, ''),
+        token: UAZAPI_INSTANCE_TOKEN
+      };
+    }
+
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
     console.log(`=== Sending campaign ${campaignId} ===`);
-    console.log(`Base URL: ${baseUrl}, Resend: ${resend}`);
+    console.log(`Base URL: ${credentials.baseUrl}, Resend: ${resend}`);
 
     if (resend) {
       await supabase
@@ -403,8 +421,8 @@ serve(async (req) => {
             const caption = i === 0 ? campaign.message_content : undefined;
             
             const mediaResult = await tryUAZAPISendMedia(
-              baseUrl,
-              UAZAPI_INSTANCE_TOKEN,
+              credentials.baseUrl,
+              credentials.token,
               phoneNumber,
               mediaUrl,
               caption
@@ -428,8 +446,8 @@ serve(async (req) => {
         if (!messageSent) {
           console.log(`Sending text-only message...`);
           const result = await tryUAZAPISend(
-            baseUrl, 
-            UAZAPI_INSTANCE_TOKEN, 
+            credentials.baseUrl, 
+            credentials.token, 
             phoneNumber, 
             campaign.message_content
           );
@@ -502,11 +520,9 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('Edge function error:', error);
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    const status = message.includes('Unauthorized') || message.includes('access denied') ? 403 : 500;
     return new Response(
-      JSON.stringify({ error: message }),
-      { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });

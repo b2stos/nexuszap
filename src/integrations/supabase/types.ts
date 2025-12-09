@@ -168,6 +168,45 @@ export type Database = {
         }
         Relationships: []
       }
+      uazapi_config: {
+        Row: {
+          base_url: string
+          created_at: string | null
+          id: string
+          instance_name: string | null
+          instance_token: string
+          is_active: boolean | null
+          last_connected_at: string | null
+          phone_number: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          base_url: string
+          created_at?: string | null
+          id?: string
+          instance_name?: string | null
+          instance_token: string
+          is_active?: boolean | null
+          last_connected_at?: string | null
+          phone_number?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          base_url?: string
+          created_at?: string | null
+          id?: string
+          instance_name?: string | null
+          instance_token?: string
+          is_active?: boolean | null
+          last_connected_at?: string | null
+          phone_number?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string
