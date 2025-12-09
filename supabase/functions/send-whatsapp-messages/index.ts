@@ -9,97 +9,187 @@ const corsHeaders = {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Get instance info first to know the instance name/id
+async function getInstanceInfo(baseUrl: string, token: string): Promise<{ instanceName?: string; instanceId?: string }> {
+  console.log('Fetching instance info...');
+  
+  const headerSets = [
+    { key: 'token', value: token },
+    { key: 'apikey', value: token },
+    { key: 'Authorization', value: `Bearer ${token}` },
+  ];
+  
+  for (const headerSet of headerSets) {
+    const headers: Record<string, string> = { 
+      [headerSet.key]: headerSet.value, 
+      'Content-Type': 'application/json' 
+    };
+    try {
+      const response = await fetch(`${baseUrl}/instance/status`, {
+        method: 'GET',
+        headers: headers,
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Instance info response:', JSON.stringify(data));
+        return {
+          instanceName: data.instance?.name || data.instance?.systemName || data.instanceName,
+          instanceId: data.instance?.id || data.instanceId
+        };
+      }
+    } catch (e) {
+      console.error('Error getting instance info with headers:', Object.keys(headers), e);
+    }
+  }
+  
+  // Try fetchInstances endpoint
+  try {
+    const response = await fetch(`${baseUrl}/instance/fetchInstances`, {
+      method: 'GET',
+      headers: { 'apikey': token },
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log('FetchInstances response:', JSON.stringify(data));
+      if (Array.isArray(data) && data.length > 0) {
+        return {
+          instanceName: data[0].instance?.instanceName || data[0].instanceName,
+          instanceId: data[0].instance?.instanceId || data[0].instanceId
+        };
+      }
+    }
+  } catch (e) {
+    console.error('Error fetching instances:', e);
+  }
+  
+  return {};
+}
+
 // Function to try sending message with different endpoint/format combinations
 async function tryUAZAPISend(
   baseUrl: string, 
   token: string, 
   phone: string, 
-  message: string
+  message: string,
+  instanceName?: string
 ): Promise<{ success: boolean; response?: any; error?: string }> {
   
   // Different number formats to try
   const numberFormats = [
     phone,                          // Just numbers: 5511947892299
-    `${phone}@c.us`,               // WhatsApp contact: 5511947892299@c.us
-    `${phone}@s.whatsapp.net`,     // Alternative format
+    `${phone}@c.us`,               // WhatsApp contact format
   ];
   
-  // Different endpoint/body combinations to try
-  const endpoints = [
-    { 
-      path: '/message/sendText', 
-      bodyFn: (num: string) => ({ number: num, text: message })
-    },
-    { 
-      path: '/message/text', 
-      bodyFn: (num: string) => ({ number: num, text: message })
-    },
-    { 
-      path: '/sendText', 
-      bodyFn: (num: string) => ({ number: num, text: message })
-    },
-    { 
-      path: '/chat/send/text', 
-      bodyFn: (num: string) => ({ Phone: num, Body: message })
-    },
-    { 
-      path: '/send-message', 
-      bodyFn: (num: string) => ({ chatId: num, contentType: 'string', content: message })
-    },
-    { 
-      path: '/message/send', 
-      bodyFn: (num: string) => ({ to: num, type: 'text', text: { body: message } })
-    },
+  // Different header combinations
+  const headerSets = [
+    { key: 'apikey', value: token },
+    { key: 'token', value: token },
+    { key: 'Authorization', value: `Bearer ${token}` },
+    { key: 'Authorization', value: token },
   ];
+  
+  // Different endpoint patterns (with and without instance name)
+  const getEndpoints = (instance?: string) => {
+    const endpoints = [];
+    
+    // Evolution API style with instance (prioritize these)
+    if (instance) {
+      endpoints.push(
+        { path: `/message/sendText/${instance}`, bodyFn: (num: string) => ({ number: num, text: message }) },
+        { path: `/message/sendText/${instance}`, bodyFn: (num: string) => ({ number: num, textMessage: { text: message } }) },
+      );
+    }
+    
+    // Direct endpoints
+    endpoints.push(
+      { path: '/message/sendText', bodyFn: (num: string) => ({ number: num, text: message }) },
+      { path: '/message/text', bodyFn: (num: string) => ({ number: num, text: message }) },
+      { path: '/send/text', bodyFn: (num: string) => ({ number: num, text: message }) },
+      { path: '/sendText', bodyFn: (num: string) => ({ number: num, text: message }) },
+      { path: '/chat/send/text', bodyFn: (num: string) => ({ Phone: num, Body: message }) },
+      { path: '/send-message', bodyFn: (num: string) => ({ chatId: num, text: message }) },
+      { path: '/message/send', bodyFn: (num: string) => ({ to: num, type: 'text', text: { body: message } }) },
+    );
+    
+    return endpoints;
+  };
 
-  // Try each combination
-  for (const numberFormat of numberFormats) {
-    for (const endpoint of endpoints) {
-      const url = `${baseUrl}${endpoint.path}`;
-      const body = endpoint.bodyFn(numberFormat);
-      
-      console.log(`Trying: ${url} with number: ${numberFormat}`);
-      
-      try {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "token": token,
-          },
-          body: JSON.stringify(body),
-        });
+  const endpoints = getEndpoints(instanceName);
+  
+  // Try each combination (limit attempts to avoid timeout)
+  let attempts = 0;
+  const maxAttempts = 15;
+  
+  for (const headerSet of headerSets) {
+    const headers: Record<string, string> = { 
+      [headerSet.key]: headerSet.value, 
+      'Content-Type': 'application/json' 
+    };
+    
+    for (const numberFormat of numberFormats) {
+      for (const endpoint of endpoints) {
+        if (attempts >= maxAttempts) {
+          console.log(`Reached max attempts (${maxAttempts}), stopping...`);
+          return { 
+            success: false, 
+            error: `Nenhum endpoint funcionou após ${attempts} tentativas.` 
+          };
+        }
         
-        const responseText = await response.text();
-        console.log(`Status: ${response.status}`);
+        const url = `${baseUrl}${endpoint.path}`;
+        const body = endpoint.bodyFn(numberFormat);
         
-        // Check if successful
-        if (response.ok) {
-          try {
-            const data = JSON.parse(responseText);
-            if (!data.error && !data.message?.includes('Not Allowed') && !data.message?.includes('not found')) {
-              console.log(`SUCCESS with: ${url} and number format: ${numberFormat}`);
-              return { success: true, response: data };
-            }
-          } catch {
-            if (!responseText.includes('error') && !responseText.includes('Not Allowed')) {
-              return { success: true, response: responseText };
+        console.log(`[${++attempts}] Trying: ${url}`);
+        console.log(`Headers: ${JSON.stringify(Object.keys(headers))}`);
+        console.log(`Body: ${JSON.stringify(body)}`);
+        
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: headers,
+            body: JSON.stringify(body),
+          });
+          
+          const responseText = await response.text();
+          console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 300)}`);
+          
+          // Check if successful (status 200-299)
+          if (response.ok) {
+            try {
+              const data = JSON.parse(responseText);
+              // Check if response indicates success (not an error)
+              if (!data.error && !data.message?.toLowerCase().includes('not allowed') && !data.message?.toLowerCase().includes('not found')) {
+                console.log(`SUCCESS with: ${url}`);
+                return { success: true, response: data };
+              }
+            } catch {
+              // Response wasn't JSON but was 200 OK - might still be success
+              if (!responseText.toLowerCase().includes('error') && !responseText.toLowerCase().includes('not allowed')) {
+                console.log(`SUCCESS (non-JSON) with: ${url}`);
+                return { success: true, response: responseText };
+              }
             }
           }
+          
+          // If 404, the endpoint doesn't exist - skip other variations
+          if (response.status === 404) {
+            console.log(`404 - endpoint doesn't exist, trying next...`);
+            break;
+          }
+          
+        } catch (fetchError) {
+          console.error(`Fetch error for ${url}:`, fetchError);
         }
-        
-        if (response.status >= 400 && response.status < 500) {
-          continue;
-        }
-        
-      } catch (fetchError) {
-        console.error(`Fetch error for ${url}:`, fetchError);
-        continue;
       }
     }
   }
   
-  return { success: false, error: "Nenhum endpoint funcionou" };
+  return { 
+    success: false, 
+    error: `Nenhum endpoint funcionou após ${attempts} tentativas. Verifique as configurações da UAZAPI.` 
+  };
 }
 
 serve(async (req) => {
@@ -158,12 +248,18 @@ serve(async (req) => {
     // Now use service role for updates
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    console.log(`User ${user.id} sending campaign ${campaignId} via UAZAPI (resend: ${resend})`);
+    console.log(`=== User ${user.id} sending campaign ${campaignId} via UAZAPI ===`);
+    console.log(`Base URL: ${baseUrl}`);
+    console.log(`Resend mode: ${resend}`);
+
+    // Get instance info first
+    const instanceInfo = await getInstanceInfo(baseUrl, UAZAPI_INSTANCE_TOKEN);
+    console.log(`Instance info: ${JSON.stringify(instanceInfo)}`);
 
     // If resend is true, reset failed messages to pending first
     if (resend) {
       console.log('Resending: Resetting failed messages to pending...');
-      const { data: resetData, error: resetError } = await supabase
+      const { error: resetError } = await supabase
         .from('messages')
         .update({ 
           status: 'pending', 
@@ -176,7 +272,7 @@ serve(async (req) => {
       if (resetError) {
         console.error('Error resetting failed messages:', resetError);
       } else {
-        console.log(`Reset messages for resend`);
+        console.log('Reset failed messages to pending');
       }
     }
 
@@ -207,10 +303,16 @@ serve(async (req) => {
       try {
         const phoneNumber = message.contacts.phone.replace(/\D/g, '');
         
-        console.log(`Sending to ${phoneNumber}`);
+        console.log(`\n--- Sending to ${phoneNumber} ---`);
 
         // Try sending with multiple endpoint/format combinations
-        const result = await tryUAZAPISend(baseUrl, UAZAPI_INSTANCE_TOKEN, phoneNumber, campaign.message_content);
+        const result = await tryUAZAPISend(
+          baseUrl, 
+          UAZAPI_INSTANCE_TOKEN, 
+          phoneNumber, 
+          campaign.message_content,
+          instanceInfo.instanceName
+        );
 
         if (!result.success) {
           console.error(`Failed to send to ${phoneNumber}:`, result.error);
@@ -225,7 +327,7 @@ serve(async (req) => {
           
           failCount++;
         } else {
-          console.log(`Message sent to ${phoneNumber}`);
+          console.log(`Message sent successfully to ${phoneNumber}`);
           
           await supabase
             .from('messages')
@@ -238,9 +340,9 @@ serve(async (req) => {
           successCount++;
         }
 
-        // Add delay between messages (1 second) to avoid rate limiting
+        // Add delay between messages (1.5 seconds) to avoid rate limiting
         if (messages.indexOf(message) < messages.length - 1) {
-          await sleep(1000);
+          await sleep(1500);
         }
 
       } catch (error) {
@@ -268,7 +370,7 @@ serve(async (req) => {
       })
       .eq('id', campaignId);
 
-    console.log(`Campaign completed: ${successCount} sent, ${failCount} failed`);
+    console.log(`\n=== Campaign completed: ${successCount} sent, ${failCount} failed ===`);
 
     return new Response(
       JSON.stringify({
