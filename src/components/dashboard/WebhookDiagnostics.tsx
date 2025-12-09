@@ -11,7 +11,8 @@ import {
   RefreshCw, 
   Copy, 
   AlertTriangle,
-  Clock
+  Clock,
+  Loader2
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -26,16 +27,44 @@ interface WebhookEvent {
   created_at: string;
 }
 
+interface UserConfig {
+  base_url: string;
+  instance_name: string | null;
+}
+
 export function WebhookDiagnostics() {
   const [events, setEvents] = useState<WebhookEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
   const [stats, setStats] = useState({
     total: 0,
     last24h: 0,
     processed: 0,
   });
 
+  // Base webhook URL from Supabase
   const webhookUrl = `https://xaypooqwcrhytkfqyzha.supabase.co/functions/v1/uazapi-webhook`;
+
+  // Load user's UAZAPI config to get their base_url
+  const loadUserConfig = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from("uazapi_config")
+        .select("base_url, instance_name")
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (!error && data) {
+        setUserConfig(data);
+      }
+    } catch (error) {
+      console.error("Error loading user config:", error);
+    }
+  };
 
   const loadEvents = async () => {
     setLoading(true);
@@ -81,6 +110,7 @@ export function WebhookDiagnostics() {
   };
 
   useEffect(() => {
+    loadUserConfig();
     loadEvents();
   }, []);
 
@@ -110,6 +140,19 @@ export function WebhookDiagnostics() {
   };
 
   const hasRecentWebhooks = stats.last24h > 0;
+
+  // Extract domain from user's base_url for display
+  const getUserPanelUrl = () => {
+    if (!userConfig?.base_url) return null;
+    try {
+      const url = new URL(userConfig.base_url);
+      return `https://${url.hostname}`;
+    } catch {
+      return userConfig.base_url;
+    }
+  };
+
+  const userPanelUrl = getUserPanelUrl();
 
   return (
     <Card>
@@ -172,7 +215,23 @@ export function WebhookDiagnostics() {
                   Não estamos recebendo eventos da UAZAPI. Configure o webhook no painel da UAZAPI:
                 </p>
                 <ol className="text-sm text-muted-foreground list-decimal list-inside space-y-1">
-                  <li>Acesse <a href="https://base360.uazapi.com" target="_blank" rel="noopener noreferrer" className="text-primary underline">base360.uazapi.com</a></li>
+                  <li>
+                    Acesse{" "}
+                    {userPanelUrl ? (
+                      <a 
+                        href={userPanelUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-primary underline"
+                      >
+                        {userPanelUrl}
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground italic">
+                        (Configure suas credenciais UAZAPI primeiro)
+                      </span>
+                    )}
+                  </li>
                   <li>Vá em Configurações → Webhooks</li>
                   <li>Adicione a URL acima como webhook</li>
                   <li>Ative os eventos: <strong>messages.update</strong>, <strong>connection.update</strong></li>

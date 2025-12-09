@@ -314,6 +314,148 @@ async function tryUAZAPISend(
   return { success: false, error: `Failed to send message` };
 }
 
+// BACKGROUND TASK: Send messages in batches
+async function sendMessagesInBackground(
+  supabase: any,
+  campaignId: string,
+  messages: any[],
+  campaign: any,
+  credentials: { baseUrl: string; token: string }
+) {
+  console.log(`🚀 BACKGROUND TASK STARTED: ${messages.length} messages to send`);
+  
+  const BATCH_SIZE = 50;
+  const DELAY_BETWEEN_MESSAGES = 800; // 800ms between messages (faster but safe)
+  const DELAY_BETWEEN_BATCHES = 2000; // 2s pause between batches
+  
+  let successCount = 0;
+  let failCount = 0;
+  
+  // Process in batches
+  for (let batchStart = 0; batchStart < messages.length; batchStart += BATCH_SIZE) {
+    const batch = messages.slice(batchStart, batchStart + BATCH_SIZE);
+    const batchNumber = Math.floor(batchStart / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(messages.length / BATCH_SIZE);
+    
+    console.log(`\n📦 Processing batch ${batchNumber}/${totalBatches} (${batch.length} messages)`);
+    
+    for (const message of batch) {
+      try {
+        const phoneNumber = message.contacts.phone.replace(/\D/g, '');
+        console.log(`--- Sending to ${phoneNumber} ---`);
+
+        let messageSent = false;
+        let whatsappMessageId: string | null = null;
+        const mediaUrls = campaign.media_urls || [];
+
+        // Try to send media if present
+        if (mediaUrls.length > 0) {
+          for (let i = 0; i < mediaUrls.length; i++) {
+            const mediaUrl = mediaUrls[i];
+            const caption = i === 0 ? campaign.message_content : undefined;
+            
+            const mediaResult = await tryUAZAPISendMedia(
+              credentials.baseUrl,
+              credentials.token,
+              phoneNumber,
+              mediaUrl,
+              caption
+            );
+
+            if (mediaResult.success) {
+              messageSent = true;
+              if (mediaResult.messageId) {
+                whatsappMessageId = mediaResult.messageId;
+              }
+            }
+            
+            if (i < mediaUrls.length - 1) await sleep(500);
+          }
+        }
+
+        // If no media sent, send text only
+        if (!messageSent) {
+          const result = await tryUAZAPISend(
+            credentials.baseUrl, 
+            credentials.token, 
+            phoneNumber, 
+            campaign.message_content
+          );
+
+          if (!result.success) {
+            await supabase
+              .from('messages')
+              .update({ status: 'failed', error_message: result.error })
+              .eq('id', message.id);
+            
+            failCount++;
+            continue;
+          }
+          
+          messageSent = true;
+          if (result.messageId) {
+            whatsappMessageId = result.messageId;
+          }
+        }
+
+        // Success - update with whatsapp_message_id
+        const updateData: Record<string, any> = { 
+          status: 'sent', 
+          sent_at: new Date().toISOString() 
+        };
+        
+        if (whatsappMessageId) {
+          updateData.whatsapp_message_id = whatsappMessageId;
+        }
+        
+        await supabase
+          .from('messages')
+          .update(updateData)
+          .eq('id', message.id);
+        
+        successCount++;
+
+        // Delay between messages (800ms)
+        await sleep(DELAY_BETWEEN_MESSAGES);
+
+      } catch (error) {
+        console.error(`Error sending message ${message.id}:`, error);
+        
+        await supabase
+          .from('messages')
+          .update({
+            status: 'failed',
+            error_message: error instanceof Error ? error.message : 'Unknown error'
+          })
+          .eq('id', message.id);
+        
+        failCount++;
+      }
+    }
+    
+    // Log progress after each batch
+    console.log(`✅ Batch ${batchNumber} complete: ${successCount} sent, ${failCount} failed`);
+    
+    // Pause between batches (except for last batch)
+    if (batchStart + BATCH_SIZE < messages.length) {
+      console.log(`⏸️ Pausing ${DELAY_BETWEEN_BATCHES}ms before next batch...`);
+      await sleep(DELAY_BETWEEN_BATCHES);
+    }
+  }
+
+  // Update campaign status
+  const finalStatus = failCount === messages.length ? 'failed' : 'completed';
+  await supabase
+    .from('campaigns')
+    .update({ 
+      status: finalStatus, 
+      completed_at: new Date().toISOString() 
+    })
+    .eq('id', campaignId);
+
+  console.log(`\n🏁 CAMPAIGN COMPLETE: ${successCount} sent, ${failCount} failed, status: ${finalStatus}`);
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -374,7 +516,7 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    console.log(`=== Sending campaign ${campaignId} ===`);
+    console.log(`=== Starting campaign ${campaignId} ===`);
     console.log(`Base URL: ${credentials.baseUrl}, Resend: ${resend}`);
 
     if (resend) {
@@ -385,6 +527,7 @@ serve(async (req) => {
         .eq('status', 'failed');
     }
 
+    // Update campaign status to sending
     await supabase
       .from('campaigns')
       .update({ status: 'sending' })
@@ -400,129 +543,42 @@ serve(async (req) => {
       throw new Error('Failed to fetch messages');
     }
 
-    console.log(`${messages.length} messages to send, ${campaign.media_urls?.length || 0} media files`);
-
-    let successCount = 0;
-    let failCount = 0;
-
-    for (const message of messages) {
-      try {
-        const phoneNumber = message.contacts.phone.replace(/\D/g, '');
-        console.log(`\n--- Sending to ${phoneNumber} ---`);
-
-        let messageSent = false;
-        let whatsappMessageId: string | null = null;
-        const mediaUrls = campaign.media_urls || [];
-
-        // Try to send media if present
-        if (mediaUrls.length > 0) {
-          for (let i = 0; i < mediaUrls.length; i++) {
-            const mediaUrl = mediaUrls[i];
-            const caption = i === 0 ? campaign.message_content : undefined;
-            
-            const mediaResult = await tryUAZAPISendMedia(
-              credentials.baseUrl,
-              credentials.token,
-              phoneNumber,
-              mediaUrl,
-              caption
-            );
-
-            if (mediaResult.success) {
-              messageSent = true;
-              if (mediaResult.messageId) {
-                whatsappMessageId = mediaResult.messageId;
-              }
-              console.log(`Media ${i + 1} sent with caption`);
-            } else {
-              console.log(`Media ${i + 1} failed: ${mediaResult.error}`);
-            }
-            
-            if (i < mediaUrls.length - 1) await sleep(500);
-          }
-        }
-
-        // If no media sent, send text only
-        if (!messageSent) {
-          console.log(`Sending text-only message...`);
-          const result = await tryUAZAPISend(
-            credentials.baseUrl, 
-            credentials.token, 
-            phoneNumber, 
-            campaign.message_content
-          );
-
-          if (!result.success) {
-            await supabase
-              .from('messages')
-              .update({ status: 'failed', error_message: result.error })
-              .eq('id', message.id);
-            
-            failCount++;
-            continue;
-          }
-          
-          messageSent = true;
-          if (result.messageId) {
-            whatsappMessageId = result.messageId;
-          }
-        }
-
-        // Success - update with whatsapp_message_id for webhook correlation
-        const updateData: Record<string, any> = { 
-          status: 'sent', 
-          sent_at: new Date().toISOString() 
-        };
-        
-        if (whatsappMessageId) {
-          updateData.whatsapp_message_id = whatsappMessageId;
-          console.log(`Saved whatsapp_message_id: ${whatsappMessageId}`);
-        }
-        
-        await supabase
-          .from('messages')
-          .update(updateData)
-          .eq('id', message.id);
-        
-        successCount++;
-
-        if (messages.indexOf(message) < messages.length - 1) {
-          await sleep(1500);
-        }
-
-      } catch (error) {
-        console.error(`Error sending message ${message.id}:`, error);
-        
-        await supabase
-          .from('messages')
-          .update({
-            status: 'failed',
-            error_message: error instanceof Error ? error.message : 'Unknown error'
-          })
-          .eq('id', message.id);
-        
-        failCount++;
-      }
+    if (!messages || messages.length === 0) {
+      return new Response(
+        JSON.stringify({ 
+          success: true, 
+          message: 'Nenhuma mensagem pendente para enviar',
+          sent: 0, 
+          failed: 0 
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    const finalStatus = failCount === messages.length ? 'failed' : 'completed';
-    await supabase
-      .from('campaigns')
-      .update({ status: finalStatus, completed_at: new Date().toISOString() })
-      .eq('id', campaignId);
+    console.log(`📬 ${messages.length} messages to send, ${campaign.media_urls?.length || 0} media files`);
 
-    console.log(`\n=== Campaign done: ${successCount} sent, ${failCount} failed ===`);
+    // START BACKGROUND TASK - This continues after response is sent!
+    // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
+    EdgeRuntime.waitUntil(
+      sendMessagesInBackground(supabase, campaignId, messages, campaign, credentials)
+    );
 
+    // RESPOND IMMEDIATELY - don't wait for messages to be sent
     return new Response(
-      JSON.stringify({ success: true, total: messages.length, sent: successCount, failed: failCount }),
+      JSON.stringify({ 
+        success: true, 
+        message: `Enviando ${messages.length} mensagens em segundo plano...`,
+        total: messages.length,
+        status: 'processing'
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error) {
-    console.error('Edge function error:', error);
+    console.error('Error:', error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
     );
   }
 });
