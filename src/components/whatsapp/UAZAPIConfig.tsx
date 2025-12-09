@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Settings, TestTube, Save, Loader2, CheckCircle, XCircle, Eye, EyeOff } from "lucide-react";
-import { toast } from "sonner";
+import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
 interface UAZAPIConfigProps {
@@ -24,6 +24,7 @@ interface UAZAPIConfigData {
 }
 
 export function UAZAPIConfig({ userId, onConfigured }: UAZAPIConfigProps) {
+  const { toast } = useToast();
   const [config, setConfig] = useState<UAZAPIConfigData>({
     base_url: "",
     instance_token: "",
@@ -69,7 +70,11 @@ export function UAZAPIConfig({ userId, onConfigured }: UAZAPIConfigProps) {
       }
     } catch (error) {
       console.error('Error loading config:', error);
-      toast.error('Erro ao carregar configuração');
+      toast({
+        title: "Erro",
+        description: "Erro ao carregar configuração",
+        variant: "destructive"
+      });
     } finally {
       setLoading(false);
     }
@@ -77,7 +82,11 @@ export function UAZAPIConfig({ userId, onConfigured }: UAZAPIConfigProps) {
 
   async function handleTest() {
     if (!config.base_url || !config.instance_token) {
-      toast.error('Preencha a URL base e o token');
+      toast({
+        title: "Campos obrigatórios",
+        description: "Preencha a URL base e o token",
+        variant: "destructive"
+      });
       return;
     }
 
@@ -85,7 +94,6 @@ export function UAZAPIConfig({ userId, onConfigured }: UAZAPIConfigProps) {
     try {
       const baseUrl = config.base_url.replace(/\/$/, '');
       
-      // Use edge function to avoid CORS issues
       const { data, error } = await supabase.functions.invoke('whatsapp-session', {
         body: { 
           action: 'test',
@@ -101,13 +109,24 @@ export function UAZAPIConfig({ userId, onConfigured }: UAZAPIConfigProps) {
         if (phoneNumber) {
           setConfig(prev => ({ ...prev, phone_number: phoneNumber }));
         }
-        toast.success('Conexão testada com sucesso!');
+        toast({
+          title: "Sucesso",
+          description: "Conexão testada com sucesso!"
+        });
       } else {
-        toast.error(data?.message || 'Falha na conexão. Verifique as credenciais.');
+        toast({
+          title: "Falha na conexão",
+          description: data?.message || "Verifique as credenciais.",
+          variant: "destructive"
+        });
       }
     } catch (error: any) {
       console.error('Test error:', error);
-      toast.error(error?.message || 'Erro ao testar conexão');
+      toast({
+        title: "Erro",
+        description: error?.message || "Erro ao testar conexão",
+        variant: "destructive"
+      });
     } finally {
       setTesting(false);
     }
@@ -115,7 +134,11 @@ export function UAZAPIConfig({ userId, onConfigured }: UAZAPIConfigProps) {
 
   async function handleSave() {
     if (!config.base_url || !config.instance_token) {
-      toast.error('Preencha a URL base e o token');
+      toast({
+        title: "Campos obrigatórios",
+        description: "Preencha a URL base e o token",
+        variant: "destructive"
+      });
       return;
     }
 
@@ -152,11 +175,18 @@ export function UAZAPIConfig({ userId, onConfigured }: UAZAPIConfigProps) {
         setHasExisting(true);
       }
 
-      toast.success('Configuração salva com sucesso!');
+      toast({
+        title: "Sucesso",
+        description: "Configuração salva com sucesso!"
+      });
       onConfigured?.(true);
     } catch (error) {
       console.error('Save error:', error);
-      toast.error('Erro ao salvar configuração');
+      toast({
+        title: "Erro",
+        description: "Erro ao salvar configuração",
+        variant: "destructive"
+      });
     } finally {
       setSaving(false);
     }
@@ -185,10 +215,17 @@ export function UAZAPIConfig({ userId, onConfigured }: UAZAPIConfigProps) {
       });
       setHasExisting(false);
       onConfigured?.(false);
-      toast.success('Configuração removida');
+      toast({
+        title: "Removido",
+        description: "Configuração removida"
+      });
     } catch (error) {
       console.error('Delete error:', error);
-      toast.error('Erro ao remover configuração');
+      toast({
+        title: "Erro",
+        description: "Erro ao remover configuração",
+        variant: "destructive"
+      });
     }
   }
 
