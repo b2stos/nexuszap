@@ -101,6 +101,7 @@ export type Database = {
           read_at: string | null
           sent_at: string | null
           status: Database["public"]["Enums"]["message_status"]
+          whatsapp_message_id: string | null
         }
         Insert: {
           campaign_id: string
@@ -112,6 +113,7 @@ export type Database = {
           read_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["message_status"]
+          whatsapp_message_id?: string | null
         }
         Update: {
           campaign_id?: string
@@ -123,6 +125,7 @@ export type Database = {
           read_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["message_status"]
+          whatsapp_message_id?: string | null
         }
         Relationships: [
           {

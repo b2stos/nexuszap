@@ -14,16 +14,10 @@ serve(async (req) => {
 
   try {
     const webhookData = await req.json();
-    console.log('UAZAPI Webhook received:', JSON.stringify(webhookData, null, 2));
-
-    // Validate webhook payload
-    if (!webhookData || typeof webhookData !== 'object') {
-      console.log('Invalid payload: not an object');
-      return new Response(JSON.stringify({ error: 'Invalid payload' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    }
+    console.log('=== BASE360 WEBHOOK RECEIVED ===');
+    console.log('EventType:', webhookData.EventType);
+    console.log('State:', webhookData.state);
+    console.log('Type:', webhookData.type);
 
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -34,31 +28,66 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // UAZAPI webhook event structure
-    // Events: messages.upsert, connection.update, qrcode.updated, messages.update
-    const event = webhookData.event || 'unknown';
-    const instance = webhookData.instance || webhookData.instanceName;
-    const data = webhookData.data || webhookData;
+    // Extract Base360 specific fields
+    const eventType = webhookData.EventType || 'unknown';
+    const state = webhookData.state; // "Delivered", "Read", "Sent", etc
+    const type = webhookData.type; // "ReadReceipt", etc
+    const chat = webhookData.chat;
+    const message = webhookData.message;
+    const event = webhookData.event;
 
-    // Extract phone number from different UAZAPI event formats
-    let phone = null;
-    if (data.key?.remoteJid) {
-      phone = data.key.remoteJid.split('@')[0];
-    } else if (data.remoteJid) {
-      phone = data.remoteJid.split('@')[0];
-    } else if (data.from) {
-      phone = data.from.split('@')[0];
-    } else if (data.phone) {
-      phone = data.phone;
+    // Extract phone number from Base360 format
+    let phone: string | null = null;
+    if (chat?.wa_chatid) {
+      // Format: "5511989404212@s.whatsapp.net" -> "5511989404212"
+      phone = chat.wa_chatid.split('@')[0];
+    } else if (chat?.phone) {
+      // Format: "+55 11 98940-4212" -> "5511989404212"
+      phone = chat.phone.replace(/\D/g, '');
+    } else if (event?.Chat) {
+      // For messages_update events: "214220218081350@lid" 
+      // Need to get from chat object instead
+      phone = event.Chat.split('@')[0];
+    }
+
+    // Extract message ID for correlation
+    let messageId: string | null = null;
+    if (message?.messageid) {
+      messageId = message.messageid;
+    } else if (message?.id) {
+      // Format: "5511913185456:3EB0A7F1340EA7803FC9BE" -> "3EB0A7F1340EA7803FC9BE"
+      const parts = message.id.split(':');
+      messageId = parts.length > 1 ? parts[1] : parts[0];
+    } else if (event?.MessageIDs && event.MessageIDs.length > 0) {
+      messageId = event.MessageIDs[0];
+    }
+
+    console.log('Extracted phone:', phone);
+    console.log('Extracted messageId:', messageId);
+    console.log('State:', state);
+
+    // Determine status from Base360 state
+    let status: string | null = null;
+    const stateUpper = state?.toUpperCase() || '';
+    const eventTypeUpper = event?.Type?.toUpperCase() || '';
+    
+    if (stateUpper === 'DELIVERED' || eventTypeUpper === 'DELIVERED') {
+      status = 'delivered';
+    } else if (stateUpper === 'READ' || eventTypeUpper === 'READ') {
+      status = 'read';
+    } else if (stateUpper === 'SENT' || eventTypeUpper === 'SENT') {
+      status = 'sent';
+    } else if (stateUpper === 'ERROR' || stateUpper === 'FAILED') {
+      status = 'failed';
     }
 
     // Save webhook event to database for monitoring
     const { error: eventError } = await supabase
       .from('webhook_events')
       .insert({
-        event_type: event,
+        event_type: eventType,
         phone: phone,
-        status: data.status || data.messageStatus || null,
+        status: status || state,
         payload: webhookData,
         processed: false
       });
@@ -67,94 +96,103 @@ serve(async (req) => {
       console.error('Error saving webhook event:', eventError);
     }
 
-    // Handle message status updates
-    if (event === 'messages.update' || event === 'message.update' || data.status) {
-      if (!phone) {
-        console.log('No phone number in webhook');
-        return new Response(JSON.stringify({ received: true }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
+    // Only process status updates
+    if (status && (eventType === 'messages_update' || type === 'ReadReceipt')) {
+      console.log(`Processing status update: ${status}`);
 
-      // UAZAPI status values: PENDING, SENT, DELIVERY_ACK (delivered), READ, PLAYED
-      const messageStatus = data.status || data.update?.status;
-      
-      console.log(`Status update for ${phone}: ${messageStatus}`);
+      let foundMessage = null;
 
-      // Find message by phone number
-      const { data: messages, error: findError } = await supabase
-        .from('messages')
-        .select('*, contacts(*)')
-        .eq('contacts.phone', phone)
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      if (findError || !messages || messages.length === 0) {
-        console.log('Message not found for phone:', phone);
-        return new Response(JSON.stringify({ received: true }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-
-      const message = messages[0];
-      const updateData: Record<string, unknown> = {};
-
-      // Map UAZAPI status to our status
-      switch (messageStatus?.toUpperCase()) {
-        case 'PENDING':
-          updateData.status = 'pending';
-          break;
-        case 'SENT':
-        case 'SERVER_ACK':
-          updateData.status = 'sent';
-          updateData.sent_at = new Date().toISOString();
-          break;
-        case 'DELIVERY_ACK':
-        case 'DELIVERED':
-          updateData.status = 'delivered';
-          updateData.delivered_at = new Date().toISOString();
-          break;
-        case 'READ':
-        case 'PLAYED':
-          updateData.status = 'read';
-          updateData.read_at = new Date().toISOString();
-          break;
-        case 'ERROR':
-        case 'FAILED':
-          updateData.status = 'failed';
-          updateData.error_message = data.error || 'Message failed';
-          break;
-      }
-
-      if (Object.keys(updateData).length > 0) {
-        const { error: updateError } = await supabase
+      // Strategy 1: Find by whatsapp_message_id (most reliable)
+      if (messageId) {
+        console.log('Searching by whatsapp_message_id:', messageId);
+        const { data: messages, error: findError } = await supabase
           .from('messages')
-          .update(updateData)
-          .eq('id', message.id);
+          .select('*')
+          .eq('whatsapp_message_id', messageId)
+          .limit(1);
 
-        if (updateError) {
-          console.error('Error updating message:', updateError);
-        } else {
-          console.log(`Message ${message.id} updated:`, updateData);
-          
-          // Update webhook event with message_id and mark as processed
-          await supabase
-            .from('webhook_events')
-            .update({ 
-              message_id: message.id,
-              processed: true 
-            })
-            .eq('phone', phone)
-            .is('processed', false)
-            .order('created_at', { ascending: false })
-            .limit(1);
+        if (!findError && messages && messages.length > 0) {
+          foundMessage = messages[0];
+          console.log('Found message by whatsapp_message_id:', foundMessage.id);
         }
       }
-    }
 
-    // Handle connection updates
-    if (event === 'connection.update') {
-      console.log('Connection update:', data.state || data.status);
+      // Strategy 2: Find by phone number in contacts (fallback)
+      if (!foundMessage && phone) {
+        console.log('Searching by phone:', phone);
+        
+        // Find contact by phone
+        const { data: contacts } = await supabase
+          .from('contacts')
+          .select('id')
+          .or(`phone.eq.${phone},phone.like.%${phone.slice(-8)}%`)
+          .limit(5);
+
+        if (contacts && contacts.length > 0) {
+          const contactIds = contacts.map(c => c.id);
+          console.log('Found contacts:', contactIds);
+
+          // Find most recent message for these contacts
+          const { data: messages } = await supabase
+            .from('messages')
+            .select('*')
+            .in('contact_id', contactIds)
+            .in('status', ['pending', 'sent', 'delivered'])
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (messages && messages.length > 0) {
+            foundMessage = messages[0];
+            console.log('Found message by phone:', foundMessage.id);
+          }
+        }
+      }
+
+      if (foundMessage) {
+        const updateData: Record<string, unknown> = { status };
+
+        if (status === 'sent') {
+          updateData.sent_at = new Date().toISOString();
+        } else if (status === 'delivered') {
+          updateData.delivered_at = new Date().toISOString();
+        } else if (status === 'read') {
+          updateData.read_at = new Date().toISOString();
+        }
+
+        // Update if new status is "higher" than current
+        const statusOrder = { pending: 0, sent: 1, delivered: 2, read: 3, failed: -1 };
+        const currentOrder = statusOrder[foundMessage.status as keyof typeof statusOrder] || 0;
+        const newOrder = statusOrder[status as keyof typeof statusOrder] || 0;
+
+        if (newOrder > currentOrder || status === 'failed') {
+          const { error: updateError } = await supabase
+            .from('messages')
+            .update(updateData)
+            .eq('id', foundMessage.id);
+
+          if (updateError) {
+            console.error('Error updating message:', updateError);
+          } else {
+            console.log(`✅ Message ${foundMessage.id} updated to ${status}`);
+
+            // Mark webhook event as processed
+            await supabase
+              .from('webhook_events')
+              .update({ 
+                message_id: foundMessage.id,
+                processed: true 
+              })
+              .eq('phone', phone)
+              .is('processed', false)
+              .order('created_at', { ascending: false })
+              .limit(1);
+          }
+        } else {
+          console.log(`Skipping update: current ${foundMessage.status} >= new ${status}`);
+        }
+      } else {
+        console.log('No message found for webhook event');
+      }
     }
 
     return new Response(JSON.stringify({ received: true }), {
