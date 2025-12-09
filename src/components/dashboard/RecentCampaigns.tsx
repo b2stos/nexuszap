@@ -6,18 +6,20 @@ import { Button } from "@/components/ui/button";
 import { Eye } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-const statusLabels = {
+const statusLabels: Record<string, string> = {
   draft: "Rascunho",
   sending: "Enviando",
   completed: "Concluída",
   failed: "Falhou",
+  cancelled: "Cancelada",
 };
 
-const statusColors = {
+const statusColors: Record<string, string> = {
   draft: "bg-gray-500",
   sending: "bg-blue-500",
   completed: "bg-green-500",
   failed: "bg-red-500",
+  cancelled: "bg-orange-500",
 };
 
 export function RecentCampaigns() {
