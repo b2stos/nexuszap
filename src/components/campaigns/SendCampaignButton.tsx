@@ -3,6 +3,14 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { Loader2, Send, RotateCcw } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { CampaignProgress } from "./CampaignProgress";
 
 interface SendCampaignButtonProps {
   campaignId: string;
@@ -18,6 +26,7 @@ export function SendCampaignButton({
   onStatusChange 
 }: SendCampaignButtonProps) {
   const [loading, setLoading] = useState(false);
+  const [showProgress, setShowProgress] = useState(false);
 
   const handleSend = async (resend: boolean = false) => {
     setLoading(true);
@@ -27,16 +36,18 @@ export function SendCampaignButton({
         body: { 
           campaignId,
           resend,
-          instanceName: "whatsapp-business"
         },
       });
 
       if (error) throw error;
 
-      const action = resend ? "reenviada" : "enviada";
+      // Show progress dialog
+      setShowProgress(true);
+
+      const action = resend ? "reenviada" : "iniciada";
       toast({
         title: `Campanha ${action}!`,
-        description: `${data.sent} mensagens enviadas com sucesso${data.failed > 0 ? `, ${data.failed} falharam` : ''}.`,
+        description: data.message || `Enviando mensagens em segundo plano...`,
       });
 
       onStatusChange?.();
@@ -51,35 +62,87 @@ export function SendCampaignButton({
     }
   };
 
-  if (status === 'sending' || status === 'completed') {
+  const handleProgressComplete = () => {
+    onStatusChange?.();
+  };
+
+  // Show progress dialog for sending campaigns
+  if (status === 'sending') {
+    return (
+      <>
+        <Button 
+          variant="outline"
+          size="sm"
+          onClick={() => setShowProgress(true)}
+        >
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Ver Progresso
+        </Button>
+
+        <Dialog open={showProgress} onOpenChange={setShowProgress}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>{campaignName}</DialogTitle>
+              <DialogDescription>
+                Acompanhe o progresso do envio em tempo real
+              </DialogDescription>
+            </DialogHeader>
+            <CampaignProgress 
+              campaignId={campaignId} 
+              onComplete={handleProgressComplete}
+            />
+          </DialogContent>
+        </Dialog>
+      </>
+    );
+  }
+
+  if (status === 'completed') {
     return null;
   }
 
   const isFailed = status === 'failed';
 
   return (
-    <Button 
-      onClick={() => handleSend(isFailed)} 
-      disabled={loading}
-      size="sm"
-      variant={isFailed ? "outline" : "default"}
-    >
-      {loading ? (
-        <>
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          {isFailed ? "Reenviando..." : "Enviando..."}
-        </>
-      ) : isFailed ? (
-        <>
-          <RotateCcw className="mr-2 h-4 w-4" />
-          Reenviar Campanha
-        </>
-      ) : (
-        <>
-          <Send className="mr-2 h-4 w-4" />
-          Enviar Campanha
-        </>
-      )}
-    </Button>
+    <>
+      <Button 
+        onClick={() => handleSend(isFailed)} 
+        disabled={loading}
+        size="sm"
+        variant={isFailed ? "outline" : "default"}
+      >
+        {loading ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            {isFailed ? "Reenviando..." : "Iniciando..."}
+          </>
+        ) : isFailed ? (
+          <>
+            <RotateCcw className="mr-2 h-4 w-4" />
+            Reenviar Campanha
+          </>
+        ) : (
+          <>
+            <Send className="mr-2 h-4 w-4" />
+            Enviar Campanha
+          </>
+        )}
+      </Button>
+
+      <Dialog open={showProgress} onOpenChange={setShowProgress}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{campaignName}</DialogTitle>
+            <DialogDescription>
+              Acompanhe o progresso do envio em tempo real
+            </DialogDescription>
+          </DialogHeader>
+          <CampaignProgress 
+            campaignId={campaignId} 
+            onComplete={handleProgressComplete}
+          />
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
