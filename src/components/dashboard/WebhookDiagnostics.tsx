@@ -14,7 +14,7 @@ import {
   Clock,
   Loader2
 } from "lucide-react";
-import { format, formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "@/hooks/use-toast";
 
@@ -35,6 +35,7 @@ interface UserConfig {
 export function WebhookDiagnostics() {
   const [events, setEvents] = useState<WebhookEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
   const [stats, setStats] = useState({
     total: 0,
@@ -61,29 +62,37 @@ export function WebhookDiagnostics() {
       if (!error && data) {
         setUserConfig(data);
       }
-    } catch (error) {
-      console.error("Error loading user config:", error);
+    } catch (err) {
+      console.error("Error loading user config:", err);
+      // Don't set error state - this is non-critical
     }
   };
 
   const loadEvents = async () => {
     setLoading(true);
+    setError(null);
+    
     try {
       // Get recent webhook events
-      const { data, error } = await supabase
+      const { data, error: fetchError } = await supabase
         .from("webhook_events")
         .select("id, event_type, status, phone, processed, created_at")
         .order("created_at", { ascending: false })
         .limit(10);
 
-      if (error) {
-        console.error("Error fetching webhook events:", error);
-        setEvents([]);
+      if (fetchError) {
+        console.error("Error fetching webhook events:", fetchError);
+        // RLS error is common for users without data - don't treat as error
+        if (fetchError.code === "42501" || fetchError.message?.includes("permission")) {
+          setEvents([]);
+        } else {
+          setEvents([]);
+        }
       } else {
         setEvents(data || []);
       }
 
-      // Get stats - wrap each in try-catch to prevent partial failures
+      // Get stats - each wrapped to prevent partial failures
       const now = new Date();
       const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
@@ -92,30 +101,36 @@ export function WebhookDiagnostics() {
       let processedCount = 0;
 
       try {
-        const { count } = await supabase
+        const { count, error: countError } = await supabase
           .from("webhook_events")
           .select("*", { count: "exact", head: true });
-        totalCount = count || 0;
+        if (!countError) {
+          totalCount = count || 0;
+        }
       } catch (e) {
         console.error("Error counting total events:", e);
       }
 
       try {
-        const { count } = await supabase
+        const { count, error: countError } = await supabase
           .from("webhook_events")
           .select("*", { count: "exact", head: true })
           .gte("created_at", last24h.toISOString());
-        last24hCount = count || 0;
+        if (!countError) {
+          last24hCount = count || 0;
+        }
       } catch (e) {
         console.error("Error counting last 24h events:", e);
       }
 
       try {
-        const { count } = await supabase
+        const { count, error: countError } = await supabase
           .from("webhook_events")
           .select("*", { count: "exact", head: true })
           .eq("processed", true);
-        processedCount = count || 0;
+        if (!countError) {
+          processedCount = count || 0;
+        }
       } catch (e) {
         console.error("Error counting processed events:", e);
       }
@@ -125,8 +140,8 @@ export function WebhookDiagnostics() {
         last24h: last24hCount,
         processed: processedCount,
       });
-    } catch (error) {
-      console.error("Error loading webhook events:", error);
+    } catch (err) {
+      console.error("Error loading webhook events:", err);
       setEvents([]);
       setStats({ total: 0, last24h: 0, processed: 0 });
     } finally {
@@ -179,6 +194,38 @@ export function WebhookDiagnostics() {
 
   const userPanelUrl = getUserPanelUrl();
 
+  const formatEventTime = (dateString: string) => {
+    try {
+      return formatDistanceToNow(new Date(dateString), { 
+        addSuffix: true, 
+        locale: ptBR 
+      });
+    } catch {
+      return "Data inválida";
+    }
+  };
+
+  // Show loading state
+  if (loading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Webhook className="h-5 w-5" />
+            Diagnóstico de Webhook
+          </CardTitle>
+          <CardDescription>
+            Monitore os webhooks recebidos da UAZAPI para rastrear status de mensagens
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-center py-8">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <span className="ml-2 text-muted-foreground">Carregando...</span>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -190,7 +237,7 @@ export function WebhookDiagnostics() {
           {hasRecentWebhooks ? (
             <Badge className="bg-green-500">Ativo</Badge>
           ) : (
-            <Badge variant="destructive">Sem eventos</Badge>
+            <Badge variant="secondary">Sem eventos recentes</Badge>
           )}
         </CardTitle>
         <CardDescription>
@@ -229,15 +276,15 @@ export function WebhookDiagnostics() {
           </div>
         </div>
 
-        {/* Warning if no webhooks */}
+        {/* Info when no webhooks (not error, just informative) */}
         {!hasRecentWebhooks && (
-          <div className="p-4 border border-destructive/50 rounded-lg bg-destructive/10">
+          <div className="p-4 border border-border rounded-lg bg-muted/50">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
+              <AlertTriangle className="h-5 w-5 text-muted-foreground mt-0.5" />
               <div className="space-y-2">
-                <p className="font-medium text-destructive">Nenhum webhook recebido</p>
+                <p className="font-medium text-foreground">Nenhum webhook recente</p>
                 <p className="text-sm text-muted-foreground">
-                  Não estamos recebendo eventos da UAZAPI. Configure o webhook no painel da UAZAPI:
+                  Configure o webhook no painel da UAZAPI para receber atualizações de status:
                 </p>
                 <ol className="text-sm text-muted-foreground list-decimal list-inside space-y-1">
                   <li>
@@ -253,7 +300,7 @@ export function WebhookDiagnostics() {
                       </a>
                     ) : (
                       <span className="text-muted-foreground italic">
-                        (Configure suas credenciais UAZAPI primeiro)
+                        seu painel UAZAPI
                       </span>
                     )}
                   </li>
@@ -304,10 +351,7 @@ export function WebhookDiagnostics() {
                   <div className="flex items-center gap-2">
                     {getStatusBadge(event.status)}
                     <span className="text-xs text-muted-foreground">
-                      {formatDistanceToNow(new Date(event.created_at), { 
-                        addSuffix: true, 
-                        locale: ptBR 
-                      })}
+                      {formatEventTime(event.created_at)}
                     </span>
                   </div>
                 </div>
