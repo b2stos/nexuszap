@@ -76,25 +76,30 @@ async function tryUAZAPISend(
   instanceName?: string
 ): Promise<{ success: boolean; response?: any; error?: string }> {
   
-  // Different number formats to try
+  // Different number formats to try - prioritize raw number first
   const numberFormats = [
     phone,                          // Just numbers: 5511947892299
+    `${phone}@s.whatsapp.net`,     // WhatsApp internal format
     `${phone}@c.us`,               // WhatsApp contact format
   ];
   
-  // Different header combinations
+  // Header combinations - uazapi uses lowercase 'token'
   const headerSets = [
-    { key: 'apikey', value: token },
     { key: 'token', value: token },
-    { key: 'Authorization', value: `Bearer ${token}` },
-    { key: 'Authorization', value: token },
+    { key: 'Token', value: token },
+    { key: 'apikey', value: token },
   ];
   
-  // Different endpoint patterns (with and without instance name)
+  // Endpoint patterns - PRIORITIZE /chat/send/text (uazapi/wuzapi standard)
   const getEndpoints = (instance?: string) => {
     const endpoints = [];
     
-    // Evolution API style with instance (prioritize these)
+    // UAZAPI/Wuzapi standard endpoint - PRIORITIZE THIS
+    endpoints.push(
+      { path: '/chat/send/text', bodyFn: (num: string) => ({ Phone: num, Body: message }) },
+    );
+    
+    // Evolution API style with instance
     if (instance) {
       endpoints.push(
         { path: `/message/sendText/${instance}`, bodyFn: (num: string) => ({ number: num, text: message }) },
@@ -102,15 +107,13 @@ async function tryUAZAPISend(
       );
     }
     
-    // Direct endpoints
+    // Other common endpoints
     endpoints.push(
       { path: '/message/sendText', bodyFn: (num: string) => ({ number: num, text: message }) },
-      { path: '/message/text', bodyFn: (num: string) => ({ number: num, text: message }) },
       { path: '/send/text', bodyFn: (num: string) => ({ number: num, text: message }) },
       { path: '/sendText', bodyFn: (num: string) => ({ number: num, text: message }) },
-      { path: '/chat/send/text', bodyFn: (num: string) => ({ Phone: num, Body: message }) },
+      { path: '/message/text', bodyFn: (num: string) => ({ number: num, text: message }) },
       { path: '/send-message', bodyFn: (num: string) => ({ chatId: num, text: message }) },
-      { path: '/message/send', bodyFn: (num: string) => ({ to: num, type: 'text', text: { body: message } }) },
     );
     
     return endpoints;
