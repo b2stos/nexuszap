@@ -389,7 +389,12 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "user"
-      campaign_status: "draft" | "sending" | "completed" | "failed"
+      campaign_status:
+        | "draft"
+        | "sending"
+        | "completed"
+        | "failed"
+        | "cancelled"
       message_status: "pending" | "sent" | "delivered" | "read" | "failed"
     }
     CompositeTypes: {
@@ -519,7 +524,7 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "user"],
-      campaign_status: ["draft", "sending", "completed", "failed"],
+      campaign_status: ["draft", "sending", "completed", "failed", "cancelled"],
       message_status: ["pending", "sent", "delivered", "read", "failed"],
     },
   },

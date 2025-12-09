@@ -2,13 +2,17 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "@/hooks/use-toast";
 import { 
   CheckCircle2, 
   XCircle, 
   Clock,
   Send,
-  Loader2
+  Loader2,
+  StopCircle,
+  Ban
 } from "lucide-react";
 
 interface CampaignProgressProps {
@@ -36,6 +40,7 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
   });
   const [campaignStatus, setCampaignStatus] = useState<string>("sending");
   const [loading, setLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
 
   const loadStats = async () => {
     try {
@@ -88,7 +93,7 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
       if (campaign) {
         setCampaignStatus(campaign.status);
         
-        if (campaign.status === "completed" || campaign.status === "failed") {
+        if (campaign.status === "completed" || campaign.status === "failed" || campaign.status === "cancelled") {
           onComplete?.();
         }
       }
@@ -133,8 +138,9 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
         },
         (payload) => {
           if (payload.new) {
-            setCampaignStatus((payload.new as any).status);
-            if ((payload.new as any).status === "completed" || (payload.new as any).status === "failed") {
+            const newStatus = (payload.new as any).status;
+            setCampaignStatus(newStatus);
+            if (newStatus === "completed" || newStatus === "failed" || newStatus === "cancelled") {
               onComplete?.();
             }
           }
@@ -155,6 +161,32 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
   const processedCount = stats.sent + stats.delivered + stats.read + stats.failed;
   const successCount = stats.sent + stats.delivered + stats.read;
   const progressPercent = stats.total > 0 ? (processedCount / stats.total) * 100 : 0;
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    try {
+      const { error } = await supabase
+        .from("campaigns")
+        .update({ status: "cancelled" as any })
+        .eq("id", campaignId);
+
+      if (error) throw error;
+
+      toast({
+        title: "Campanha cancelada",
+        description: "O envio será interrompido em breve.",
+      });
+    } catch (error) {
+      console.error("Error cancelling campaign:", error);
+      toast({
+        title: "Erro ao cancelar",
+        description: "Não foi possível cancelar a campanha.",
+        variant: "destructive",
+      });
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   const getStatusBadge = () => {
     switch (campaignStatus) {
@@ -177,6 +209,13 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
           <Badge variant="destructive">
             <XCircle className="h-3 w-3 mr-1" />
             Falhou
+          </Badge>
+        );
+      case "cancelled":
+        return (
+          <Badge variant="secondary">
+            <Ban className="h-3 w-3 mr-1" />
+            Cancelada
           </Badge>
         );
       default:
@@ -253,15 +292,43 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
         </div>
 
         {/* Status message */}
+        {/* Cancel button */}
         {campaignStatus === "sending" && (
-          <p className="text-sm text-muted-foreground text-center">
-            ⏳ Enviando mensagens em segundo plano... Você pode sair desta página.
-          </p>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground text-center">
+              ⏳ Enviando mensagens em segundo plano... Você pode sair desta página.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+              onClick={handleCancel}
+              disabled={cancelling}
+            >
+              {cancelling ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelando...
+                </>
+              ) : (
+                <>
+                  <StopCircle className="mr-2 h-4 w-4" />
+                  Cancelar Envio
+                </>
+              )}
+            </Button>
+          </div>
         )}
         
         {campaignStatus === "completed" && (
           <p className="text-sm text-green-600 text-center">
             ✅ Campanha concluída! {successCount} mensagens enviadas com sucesso.
+          </p>
+        )}
+        
+        {campaignStatus === "cancelled" && (
+          <p className="text-sm text-muted-foreground text-center">
+            🛑 Campanha cancelada. {successCount} mensagens foram enviadas antes do cancelamento.
           </p>
         )}
         
