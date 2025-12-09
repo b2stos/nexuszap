@@ -118,46 +118,67 @@ async function tryUAZAPISendMedia(
     `${phone}@c.us`,
   ];
 
-  // Prioritize 'token' (lowercase) - it worked for text
+  // Prioritize headers in order that worked
   const headerSets = [
     { key: 'token', value: token },
     { key: 'Token', value: token },
+    { key: 'Authorization', value: token },  // Some APIs use Authorization header
     { key: 'apikey', value: token },
   ];
 
-  // Build media endpoints - PRIORITIZE /send/image pattern (like working /send/text)
+  // Build media endpoints - try multiple patterns
+  // Based on Wuzapi docs: /chat/send/image with Token header and base64 data URI
   const getMediaEndpoints = (type: string) => {
     const endpoints = [];
     
     if (type === 'image') {
-      // Base360/UAZAPI pattern - /send/image (like /send/text that worked)
+      // Pattern 1: Wuzapi standard (from official docs)
+      // curl -X POST -H 'Token: 1234ABCD' --data '{"Phone":"...","Caption":"...","Image":"data:image/jpeg;base64,..."}' /chat/send/image
+      endpoints.push(
+        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: base64Data, Caption: caption || '' }) },
+      );
+      
+      // Pattern 2: Try /send/image (same as working /send/text)
       endpoints.push(
         { path: '/send/image', bodyFn: (num: string) => ({ Phone: num, Image: base64Data, Caption: caption || '' }) },
-        { path: '/send/image', bodyFn: (num: string) => ({ phone: num, image: base64Data, caption: caption || '' }) },
         { path: '/send/image', bodyFn: (num: string) => ({ number: num, image: base64Data, caption: caption || '' }) },
-        // Try with URL instead of base64
+      );
+      
+      // Pattern 3: Maybe the API wants URL-based media
+      endpoints.push(
+        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: mediaUrl, Caption: caption || '' }) },
         { path: '/send/image', bodyFn: (num: string) => ({ Phone: num, Image: mediaUrl, Caption: caption || '' }) },
-        // Wuzapi pattern
-        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: base64Data, Caption: caption || '' }) },
-        { path: '/chat/send/image', bodyFn: (num: string) => ({ phone: num, image: base64Data, caption: caption || '' }) },
+      );
+
+      // Pattern 4: sendMedia endpoint with type specified
+      endpoints.push(
+        { path: '/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'image', Caption: caption || '' }) },
+        { path: '/chat/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'image', Caption: caption || '' }) },
+        { path: '/sendMedia', bodyFn: (num: string) => ({ number: num, media: base64Data, type: 'image', caption: caption || '' }) },
+      );
+
+      // Pattern 5: message/sendMedia with Evolution API style
+      endpoints.push(
+        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'image', media: base64Data, caption: caption || '' }) },
+        { path: '/message/sendImage', bodyFn: (num: string) => ({ number: num, image: base64Data, caption: caption || '' }) },
       );
     } else if (type === 'video') {
       endpoints.push(
-        { path: '/send/video', bodyFn: (num: string) => ({ Phone: num, Video: base64Data, Caption: caption || '' }) },
-        { path: '/send/video', bodyFn: (num: string) => ({ phone: num, video: base64Data, caption: caption || '' }) },
         { path: '/chat/send/video', bodyFn: (num: string) => ({ Phone: num, Video: base64Data, Caption: caption || '' }) },
+        { path: '/send/video', bodyFn: (num: string) => ({ Phone: num, Video: base64Data, Caption: caption || '' }) },
+        { path: '/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'video', Caption: caption || '' }) },
       );
     } else if (type === 'audio') {
       endpoints.push(
-        { path: '/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: base64Data }) },
-        { path: '/send/audio', bodyFn: (num: string) => ({ phone: num, audio: base64Data }) },
         { path: '/chat/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: base64Data }) },
+        { path: '/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: base64Data }) },
+        { path: '/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'audio' }) },
       );
     } else {
       endpoints.push(
-        { path: '/send/document', bodyFn: (num: string) => ({ Phone: num, Document: base64Data, FileName: fileName, Caption: caption || '' }) },
-        { path: '/send/document', bodyFn: (num: string) => ({ phone: num, document: base64Data, fileName: fileName, caption: caption || '' }) },
         { path: '/chat/send/document', bodyFn: (num: string) => ({ Phone: num, Document: base64Data, FileName: fileName, Caption: caption || '' }) },
+        { path: '/send/document', bodyFn: (num: string) => ({ Phone: num, Document: base64Data, FileName: fileName, Caption: caption || '' }) },
+        { path: '/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'document', FileName: fileName, Caption: caption || '' }) },
       );
     }
 
