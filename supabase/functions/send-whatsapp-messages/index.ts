@@ -314,6 +314,17 @@ async function tryUAZAPISend(
   return { success: false, error: `Failed to send message` };
 }
 
+// Check if campaign was cancelled
+async function checkCancelled(supabase: any, campaignId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('campaigns')
+    .select('status')
+    .eq('id', campaignId)
+    .single();
+  
+  return data?.status === 'cancelled';
+}
+
 // BACKGROUND TASK: Send messages in batches
 async function sendMessagesInBackground(
   supabase: any,
@@ -330,9 +341,17 @@ async function sendMessagesInBackground(
   
   let successCount = 0;
   let failCount = 0;
+  let cancelled = false;
   
   // Process in batches
   for (let batchStart = 0; batchStart < messages.length; batchStart += BATCH_SIZE) {
+    // Check for cancellation at the start of each batch
+    if (await checkCancelled(supabase, campaignId)) {
+      console.log(`🛑 CAMPAIGN CANCELLED by user`);
+      cancelled = true;
+      break;
+    }
+    
     const batch = messages.slice(batchStart, batchStart + BATCH_SIZE);
     const batchNumber = Math.floor(batchStart / BATCH_SIZE) + 1;
     const totalBatches = Math.ceil(messages.length / BATCH_SIZE);
@@ -444,7 +463,15 @@ async function sendMessagesInBackground(
   }
 
   // Update campaign status
-  const finalStatus = failCount === messages.length ? 'failed' : 'completed';
+  let finalStatus: string;
+  if (cancelled) {
+    finalStatus = 'cancelled';
+  } else if (failCount === messages.length) {
+    finalStatus = 'failed';
+  } else {
+    finalStatus = 'completed';
+  }
+  
   await supabase
     .from('campaigns')
     .update({ 
@@ -453,7 +480,7 @@ async function sendMessagesInBackground(
     })
     .eq('id', campaignId);
 
-  console.log(`\n🏁 CAMPAIGN COMPLETE: ${successCount} sent, ${failCount} failed, status: ${finalStatus}`);
+  console.log(`\n🏁 CAMPAIGN FINISHED: ${successCount} sent, ${failCount} failed, status: ${finalStatus}`);
 }
 
 serve(async (req) => {
