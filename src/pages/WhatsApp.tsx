@@ -3,10 +3,20 @@ import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { WhatsAppConnection } from "@/components/whatsapp/WhatsAppConnection";
 import { UAZAPIConfig } from "@/components/whatsapp/UAZAPIConfig";
 import { useProtectedUser } from "@/components/auth/ProtectedRoute";
+import { Loader2 } from "lucide-react";
 
 export default function WhatsApp() {
   const user = useProtectedUser();
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
+
+  // Show loading while user is being fetched
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <DashboardLayout user={user}>
