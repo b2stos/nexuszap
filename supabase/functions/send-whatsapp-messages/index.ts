@@ -9,12 +9,10 @@ const corsHeaders = {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Detect media type from URL - remove query string first for accurate detection
+// Detect media type from URL
 function getMediaType(url: string): 'image' | 'video' | 'audio' | 'document' {
   const urlWithoutQuery = url.split('?')[0];
   const ext = urlWithoutQuery.split('.').pop()?.toLowerCase() || '';
-  
-  console.log(`Detecting media type - URL: ${url.substring(0, 80)}..., ext: ${ext}`);
   
   if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) return 'image';
   if (['mp4', 'mov', 'avi', 'webm', '3gp'].includes(ext)) return 'video';
@@ -28,28 +26,18 @@ function getMimeType(url: string): string {
   const ext = urlWithoutQuery.split('.').pop()?.toLowerCase() || '';
   
   const mimeTypes: Record<string, string> = {
-    'jpg': 'image/jpeg',
-    'jpeg': 'image/jpeg',
-    'png': 'image/png',
-    'gif': 'image/gif',
-    'webp': 'image/webp',
-    'mp4': 'video/mp4',
-    'mov': 'video/quicktime',
-    'avi': 'video/x-msvideo',
-    'webm': 'video/webm',
-    '3gp': 'video/3gpp',
-    'mp3': 'audio/mpeg',
-    'wav': 'audio/wav',
-    'ogg': 'audio/ogg',
-    'm4a': 'audio/mp4',
-    'aac': 'audio/aac',
+    'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+    'gif': 'image/gif', 'webp': 'image/webp', 'mp4': 'video/mp4',
+    'mov': 'video/quicktime', 'avi': 'video/x-msvideo', 'webm': 'video/webm',
+    '3gp': 'video/3gpp', 'mp3': 'audio/mpeg', 'wav': 'audio/wav',
+    'ogg': 'audio/ogg', 'm4a': 'audio/mp4', 'aac': 'audio/aac',
     'pdf': 'application/pdf',
   };
   
   return mimeTypes[ext] || 'application/octet-stream';
 }
 
-// Get clean filename from URL (without query string)
+// Get clean filename from URL
 function getCleanFileName(url: string): string {
   const urlWithoutQuery = url.split('?')[0];
   return urlWithoutQuery.split('/').pop() || 'file';
@@ -58,7 +46,7 @@ function getCleanFileName(url: string): string {
 // Download media and convert to base64 data URI
 async function downloadMediaAsBase64(url: string): Promise<{ base64: string; mimeType: string } | null> {
   try {
-    console.log(`Downloading media from: ${url.substring(0, 100)}...`);
+    console.log(`Downloading media from: ${url.substring(0, 80)}...`);
     
     const response = await fetch(url);
     if (!response.ok) {
@@ -69,7 +57,6 @@ async function downloadMediaAsBase64(url: string): Promise<{ base64: string; mim
     const arrayBuffer = await response.arrayBuffer();
     const uint8Array = new Uint8Array(arrayBuffer);
     
-    // Convert to base64
     let binary = '';
     for (let i = 0; i < uint8Array.length; i++) {
       binary += String.fromCharCode(uint8Array[i]);
@@ -79,7 +66,7 @@ async function downloadMediaAsBase64(url: string): Promise<{ base64: string; mim
     const mimeType = getMimeType(url);
     const dataUri = `data:${mimeType};base64,${base64}`;
     
-    console.log(`Downloaded ${uint8Array.length} bytes, converted to base64 (${mimeType})`);
+    console.log(`Downloaded ${uint8Array.length} bytes, MIME: ${mimeType}`);
     
     return { base64: dataUri, mimeType };
   } catch (error) {
@@ -88,364 +75,228 @@ async function downloadMediaAsBase64(url: string): Promise<{ base64: string; mim
   }
 }
 
-// Function to send media via UAZAPI
+// ============================================================
+// SIMPLIFIED MEDIA SENDING - Based on working /send/text pattern
+// ============================================================
 async function tryUAZAPISendMedia(
   baseUrl: string,
   token: string,
   phone: string,
   mediaUrl: string,
-  caption?: string,
-  instanceName?: string
+  caption?: string
 ): Promise<{ success: boolean; response?: any; error?: string }> {
   const mediaType = getMediaType(mediaUrl);
   const fileName = getCleanFileName(mediaUrl);
-  console.log(`=== SENDING MEDIA ===`);
-  console.log(`Type: ${mediaType}, File: ${fileName}`);
-  console.log(`URL: ${mediaUrl.substring(0, 100)}...`);
+  
+  console.log(`=== SENDING MEDIA (${mediaType}) ===`);
+  console.log(`File: ${fileName}, Caption: ${caption?.substring(0, 50)}...`);
 
-  // Download and convert to base64 (required by UAZAPI/Wuzapi)
-  const mediaData = await downloadMediaAsBase64(mediaUrl);
-  if (!mediaData) {
-    return { success: false, error: 'Falha ao baixar mídia para conversão base64' };
-  }
-
-  const base64Data = mediaData.base64;
-  console.log(`Base64 ready, length: ${base64Data.length}`);
-
-  const numberFormats = [
-    phone,
-    `${phone}@s.whatsapp.net`,
-    `${phone}@c.us`,
-  ];
-
-  // Prioritize headers in order that worked
-  const headerSets = [
-    { key: 'token', value: token },
-    { key: 'Token', value: token },
-    { key: 'Authorization', value: token },  // Some APIs use Authorization header
-    { key: 'apikey', value: token },
-  ];
-
-  // Build media endpoints - try multiple patterns
-  // Based on Wuzapi docs: /chat/send/image with Token header and base64 data URI
-  const getMediaEndpoints = (type: string) => {
-    const endpoints = [];
-    
-    if (type === 'image') {
-      // Pattern 1: Wuzapi standard (from official docs)
-      // curl -X POST -H 'Token: 1234ABCD' --data '{"Phone":"...","Caption":"...","Image":"data:image/jpeg;base64,..."}' /chat/send/image
-      endpoints.push(
-        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: base64Data, Caption: caption || '' }) },
-      );
-      
-      // Pattern 2: Try /send/image (same as working /send/text)
-      endpoints.push(
-        { path: '/send/image', bodyFn: (num: string) => ({ Phone: num, Image: base64Data, Caption: caption || '' }) },
-        { path: '/send/image', bodyFn: (num: string) => ({ number: num, image: base64Data, caption: caption || '' }) },
-      );
-      
-      // Pattern 3: Maybe the API wants URL-based media
-      endpoints.push(
-        { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: mediaUrl, Caption: caption || '' }) },
-        { path: '/send/image', bodyFn: (num: string) => ({ Phone: num, Image: mediaUrl, Caption: caption || '' }) },
-      );
-
-      // Pattern 4: sendMedia endpoint with type specified
-      endpoints.push(
-        { path: '/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'image', Caption: caption || '' }) },
-        { path: '/chat/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'image', Caption: caption || '' }) },
-        { path: '/sendMedia', bodyFn: (num: string) => ({ number: num, media: base64Data, type: 'image', caption: caption || '' }) },
-      );
-
-      // Pattern 5: message/sendMedia with Evolution API style
-      endpoints.push(
-        { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'image', media: base64Data, caption: caption || '' }) },
-        { path: '/message/sendImage', bodyFn: (num: string) => ({ number: num, image: base64Data, caption: caption || '' }) },
-      );
-    } else if (type === 'video') {
-      endpoints.push(
-        { path: '/chat/send/video', bodyFn: (num: string) => ({ Phone: num, Video: base64Data, Caption: caption || '' }) },
-        { path: '/send/video', bodyFn: (num: string) => ({ Phone: num, Video: base64Data, Caption: caption || '' }) },
-        { path: '/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'video', Caption: caption || '' }) },
-      );
-    } else if (type === 'audio') {
-      endpoints.push(
-        { path: '/chat/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: base64Data }) },
-        { path: '/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: base64Data }) },
-        { path: '/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'audio' }) },
-      );
-    } else {
-      endpoints.push(
-        { path: '/chat/send/document', bodyFn: (num: string) => ({ Phone: num, Document: base64Data, FileName: fileName, Caption: caption || '' }) },
-        { path: '/send/document', bodyFn: (num: string) => ({ Phone: num, Document: base64Data, FileName: fileName, Caption: caption || '' }) },
-        { path: '/send/media', bodyFn: (num: string) => ({ Phone: num, Media: base64Data, Type: 'document', FileName: fileName, Caption: caption || '' }) },
-      );
-    }
-
-    return endpoints;
+  // Standard headers - same as working text endpoint
+  const headers = {
+    'token': token,
+    'Content-Type': 'application/json'
   };
 
-  const endpoints = getMediaEndpoints(mediaType);
-  let attempts = 0;
-  const maxAttempts = 20; // Increased since we have more variants
-
-  for (const headerSet of headerSets) {
-    const headers: Record<string, string> = {
-      [headerSet.key]: headerSet.value,
-      'Content-Type': 'application/json'
-    };
-
-    for (const endpoint of endpoints) {
-      for (const numberFormat of numberFormats) {
-        if (attempts >= maxAttempts) {
-          console.log(`Max attempts (${maxAttempts}) reached for media`);
-          return { success: false, error: `Falha ao enviar mídia após ${attempts} tentativas.` };
-        }
-
-        const url = `${baseUrl}${endpoint.path}`;
-        const body = endpoint.bodyFn(numberFormat);
-        
-        // Log body without the full base64 for readability
-        const bodyLog: Record<string, any> = { ...body };
-        for (const key of Object.keys(bodyLog)) {
-          if (typeof bodyLog[key] === 'string' && bodyLog[key].length > 100) {
-            bodyLog[key] = bodyLog[key].substring(0, 50) + '...[truncated]';
-          }
-        }
-
-        console.log(`[Media ${++attempts}] ${headerSet.key}: ${url}`);
-        console.log(`Body: ${JSON.stringify(bodyLog)}`);
-
-        try {
-          const response = await fetch(url, {
-            method: "POST",
-            headers: headers,
-            body: JSON.stringify(body),
-          });
-
-          const responseText = await response.text();
-          console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 500)}`);
-
-          if (response.ok) {
-            try {
-              const data = JSON.parse(responseText);
-              if (!data.error && !data.message?.toLowerCase().includes('not allowed')) {
-                console.log(`✅ SUCCESS media with: ${url}, header: ${headerSet.key}`);
-                return { success: true, response: data };
-              }
-            } catch {
-              if (!responseText.toLowerCase().includes('error')) {
-                console.log(`✅ SUCCESS media (non-JSON) with: ${url}`);
-                return { success: true, response: responseText };
-              }
-            }
-          }
-
-          // If 404, this endpoint doesn't exist - try next endpoint
-          if (response.status === 404) {
-            console.log(`404 - endpoint ${endpoint.path} not found, trying next...`);
-            break;
-          }
-          
-          // If 405, method not allowed - try next endpoint
-          if (response.status === 405) {
-            console.log(`405 - method not allowed for ${endpoint.path}, trying next...`);
-            break;
-          }
-        } catch (fetchError) {
-          console.error(`Fetch error for ${url}:`, fetchError);
-        }
-      }
-    }
-  }
-
-  console.log(`❌ All ${attempts} media attempts failed`);
-  return { success: false, error: `Falha ao enviar mídia após ${attempts} tentativas.` };
-}
-
-// Get instance info first to know the instance name/id
-async function getInstanceInfo(baseUrl: string, token: string): Promise<{ instanceName?: string; instanceId?: string }> {
-  console.log('Fetching instance info...');
-  
-  const headerSets = [
-    { key: 'token', value: token },
-    { key: 'apikey', value: token },
-    { key: 'Authorization', value: `Bearer ${token}` },
-  ];
-  
-  for (const headerSet of headerSets) {
-    const headers: Record<string, string> = { 
-      [headerSet.key]: headerSet.value, 
-      'Content-Type': 'application/json' 
-    };
-    try {
-      const response = await fetch(`${baseUrl}/instance/status`, {
-        method: 'GET',
-        headers: headers,
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Instance info response:', JSON.stringify(data));
-        return {
-          instanceName: data.instance?.name || data.instance?.systemName || data.instanceName,
-          instanceId: data.instance?.id || data.instanceId
-        };
-      }
-    } catch (e) {
-      console.error('Error getting instance info with headers:', Object.keys(headers), e);
-    }
-  }
-  
-  // Try fetchInstances endpoint
+  // ============================================================
+  // STRATEGY 1: Try /send/text with mediaUrl field
+  // Some APIs accept media via the text endpoint
+  // ============================================================
+  console.log(`[1] Trying /send/text with mediaUrl field...`);
   try {
-    const response = await fetch(`${baseUrl}/instance/fetchInstances`, {
-      method: 'GET',
-      headers: { 'apikey': token },
+    const response = await fetch(`${baseUrl}/send/text`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        number: phone,
+        text: caption || '',
+        mediaUrl: mediaUrl
+      }),
     });
     
-    if (response.ok) {
-      const data = await response.json();
-      console.log('FetchInstances response:', JSON.stringify(data));
-      if (Array.isArray(data) && data.length > 0) {
-        return {
-          instanceName: data[0].instance?.instanceName || data[0].instanceName,
-          instanceId: data[0].instance?.instanceId || data[0].instanceId
-        };
-      }
+    const responseText = await response.text();
+    console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
+    
+    if (response.ok && !responseText.toLowerCase().includes('error')) {
+      console.log(`✅ SUCCESS with /send/text + mediaUrl`);
+      return { success: true, response: responseText };
     }
   } catch (e) {
-    console.error('Error fetching instances:', e);
+    console.error(`Error with /send/text + mediaUrl:`, e);
   }
+
+  // ============================================================
+  // STRATEGY 2: Try /send/file endpoint
+  // ============================================================
+  console.log(`[2] Trying /send/file endpoint...`);
   
-  return {};
+  const mediaData = await downloadMediaAsBase64(mediaUrl);
+  if (!mediaData) {
+    console.log(`Failed to download media, skipping base64 attempts`);
+  } else {
+    try {
+      const response = await fetch(`${baseUrl}/send/file`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          number: phone,
+          file: mediaData.base64,
+          filename: fileName,
+          caption: caption || ''
+        }),
+      });
+      
+      const responseText = await response.text();
+      console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
+      
+      if (response.ok && !responseText.toLowerCase().includes('error')) {
+        console.log(`✅ SUCCESS with /send/file`);
+        return { success: true, response: responseText };
+      }
+    } catch (e) {
+      console.error(`Error with /send/file:`, e);
+    }
+  }
+
+  // ============================================================
+  // STRATEGY 3: Try specific media endpoint (/send/image, /send/video, etc)
+  // ============================================================
+  const typeEndpoint = `/send/${mediaType}`;
+  console.log(`[3] Trying ${typeEndpoint}...`);
+  
+  if (mediaData) {
+    try {
+      const response = await fetch(`${baseUrl}${typeEndpoint}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          number: phone,
+          [mediaType]: mediaData.base64,
+          caption: caption || ''
+        }),
+      });
+      
+      const responseText = await response.text();
+      console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
+      
+      if (response.ok && !responseText.toLowerCase().includes('error')) {
+        console.log(`✅ SUCCESS with ${typeEndpoint}`);
+        return { success: true, response: responseText };
+      }
+    } catch (e) {
+      console.error(`Error with ${typeEndpoint}:`, e);
+    }
+    
+    // Try with URL instead of base64
+    try {
+      const response = await fetch(`${baseUrl}${typeEndpoint}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          number: phone,
+          [mediaType]: mediaUrl,
+          caption: caption || ''
+        }),
+      });
+      
+      const responseText = await response.text();
+      console.log(`Status: ${response.status} (URL mode)`);
+      
+      if (response.ok && !responseText.toLowerCase().includes('error')) {
+        console.log(`✅ SUCCESS with ${typeEndpoint} (URL mode)`);
+        return { success: true, response: responseText };
+      }
+    } catch (e) {
+      console.error(`Error with ${typeEndpoint} (URL):`, e);
+    }
+  }
+
+  // ============================================================
+  // MEDIA FAILED - Return failure so caller can fallback to text
+  // ============================================================
+  console.log(`❌ All media attempts failed`);
+  return { 
+    success: false, 
+    error: `API não suporta envio de mídia. Verifique a documentação do provedor.` 
+  };
 }
 
-// Function to try sending message with different endpoint/format combinations
+// ============================================================
+// TEXT MESSAGE SENDING (already working)
+// ============================================================
 async function tryUAZAPISend(
   baseUrl: string, 
   token: string, 
   phone: string, 
-  message: string,
-  instanceName?: string
+  message: string
 ): Promise<{ success: boolean; response?: any; error?: string }> {
   
-  // Different number formats to try - prioritize raw number first
-  const numberFormats = [
-    phone,                          // Just numbers: 5511947892299
-    `${phone}@s.whatsapp.net`,     // WhatsApp internal format
-    `${phone}@c.us`,               // WhatsApp contact format
-  ];
-  
-  // Header combinations - uazapi uses lowercase 'token'
-  const headerSets = [
-    { key: 'token', value: token },
-    { key: 'Token', value: token },
-    { key: 'apikey', value: token },
-  ];
-  
-  // Endpoint patterns - PRIORITIZE /chat/send/text (uazapi/wuzapi standard)
-  const getEndpoints = (instance?: string) => {
-    const endpoints = [];
-    
-    // UAZAPI/Wuzapi standard endpoint - PRIORITIZE THIS
-    endpoints.push(
-      { path: '/chat/send/text', bodyFn: (num: string) => ({ Phone: num, Body: message }) },
-    );
-    
-    // Evolution API style with instance
-    if (instance) {
-      endpoints.push(
-        { path: `/message/sendText/${instance}`, bodyFn: (num: string) => ({ number: num, text: message }) },
-        { path: `/message/sendText/${instance}`, bodyFn: (num: string) => ({ number: num, textMessage: { text: message } }) },
-      );
-    }
-    
-    // Other common endpoints
-    endpoints.push(
-      { path: '/message/sendText', bodyFn: (num: string) => ({ number: num, text: message }) },
-      { path: '/send/text', bodyFn: (num: string) => ({ number: num, text: message }) },
-      { path: '/sendText', bodyFn: (num: string) => ({ number: num, text: message }) },
-      { path: '/message/text', bodyFn: (num: string) => ({ number: num, text: message }) },
-      { path: '/send-message', bodyFn: (num: string) => ({ chatId: num, text: message }) },
-    );
-    
-    return endpoints;
+  // Headers that work with Base360
+  const headers = {
+    'token': token,
+    'Content-Type': 'application/json'
   };
 
-  const endpoints = getEndpoints(instanceName);
+  // Try /send/text first (known working endpoint)
+  console.log(`Sending text to ${phone} via /send/text...`);
   
-  // Try each combination (limit attempts to avoid timeout)
-  let attempts = 0;
-  const maxAttempts = 15;
-  
-  for (const headerSet of headerSets) {
-    const headers: Record<string, string> = { 
-      [headerSet.key]: headerSet.value, 
-      'Content-Type': 'application/json' 
-    };
+  try {
+    const response = await fetch(`${baseUrl}/send/text`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        number: phone,
+        text: message
+      }),
+    });
     
-    for (const numberFormat of numberFormats) {
-      for (const endpoint of endpoints) {
-        if (attempts >= maxAttempts) {
-          console.log(`Reached max attempts (${maxAttempts}), stopping...`);
-          return { 
-            success: false, 
-            error: `Nenhum endpoint funcionou após ${attempts} tentativas.` 
-          };
+    const responseText = await response.text();
+    console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
+    
+    if (response.ok) {
+      try {
+        const data = JSON.parse(responseText);
+        if (!data.error) {
+          console.log(`✅ Text sent successfully`);
+          return { success: true, response: data };
         }
-        
-        const url = `${baseUrl}${endpoint.path}`;
-        const body = endpoint.bodyFn(numberFormat);
-        
-        console.log(`[${++attempts}] Trying: ${url}`);
-        console.log(`Headers: ${JSON.stringify(Object.keys(headers))}`);
-        console.log(`Body: ${JSON.stringify(body)}`);
-        
-        try {
-          const response = await fetch(url, {
-            method: "POST",
-            headers: headers,
-            body: JSON.stringify(body),
-          });
-          
-          const responseText = await response.text();
-          console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 300)}`);
-          
-          // Check if successful (status 200-299)
-          if (response.ok) {
-            try {
-              const data = JSON.parse(responseText);
-              // Check if response indicates success (not an error)
-              if (!data.error && !data.message?.toLowerCase().includes('not allowed') && !data.message?.toLowerCase().includes('not found')) {
-                console.log(`SUCCESS with: ${url}`);
-                return { success: true, response: data };
-              }
-            } catch {
-              // Response wasn't JSON but was 200 OK - might still be success
-              if (!responseText.toLowerCase().includes('error') && !responseText.toLowerCase().includes('not allowed')) {
-                console.log(`SUCCESS (non-JSON) with: ${url}`);
-                return { success: true, response: responseText };
-              }
-            }
-          }
-          
-          // If 404, the endpoint doesn't exist - skip other variations
-          if (response.status === 404) {
-            console.log(`404 - endpoint doesn't exist, trying next...`);
-            break;
-          }
-          
-        } catch (fetchError) {
-          console.error(`Fetch error for ${url}:`, fetchError);
+      } catch {
+        if (!responseText.toLowerCase().includes('error')) {
+          console.log(`✅ Text sent successfully (non-JSON)`);
+          return { success: true, response: responseText };
         }
       }
     }
+  } catch (e) {
+    console.error(`Error with /send/text:`, e);
   }
+
+  // Fallback: try /chat/send/text (Wuzapi standard)
+  console.log(`Trying fallback /chat/send/text...`);
   
+  try {
+    const response = await fetch(`${baseUrl}/chat/send/text`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        Phone: phone,
+        Body: message
+      }),
+    });
+    
+    const responseText = await response.text();
+    console.log(`Status: ${response.status}`);
+    
+    if (response.ok && !responseText.toLowerCase().includes('error')) {
+      console.log(`✅ Text sent via /chat/send/text`);
+      return { success: true, response: responseText };
+    }
+  } catch (e) {
+    console.error(`Error with /chat/send/text:`, e);
+  }
+
   return { 
     success: false, 
-    error: `Nenhum endpoint funcionou após ${attempts} tentativas. Verifique as configurações da UAZAPI.` 
+    error: `Falha ao enviar mensagem. Verifique as configurações da API.` 
   };
 }
 
@@ -462,7 +313,6 @@ serve(async (req) => {
       throw new Error('Unauthorized');
     }
 
-    // Get credentials
     const UAZAPI_BASE_URL = Deno.env.get('UAZAPI_BASE_URL');
     const UAZAPI_INSTANCE_TOKEN = Deno.env.get('UAZAPI_INSTANCE_TOKEN');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
@@ -479,18 +329,15 @@ serve(async (req) => {
 
     const baseUrl = UAZAPI_BASE_URL.replace(/\/$/, '');
 
-    // Create user client to verify ownership (uses RLS)
     const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } }
     });
 
-    // Verify the authenticated user owns this campaign
     const { data: { user }, error: userError } = await userClient.auth.getUser();
     if (userError || !user) {
       throw new Error('Unauthorized: Invalid token');
     }
 
-    // Check campaign ownership via RLS-protected query
     const { data: campaign, error: campaignError } = await userClient
       .from('campaigns')
       .select('*')
@@ -498,48 +345,27 @@ serve(async (req) => {
       .single();
 
     if (campaignError || !campaign) {
-      console.log(`Campaign ${campaignId} not found or access denied for user ${user.id}`);
       throw new Error('Campaign not found or access denied');
     }
 
-    // Now use service role for updates
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    console.log(`=== User ${user.id} sending campaign ${campaignId} via UAZAPI ===`);
-    console.log(`Base URL: ${baseUrl}`);
-    console.log(`Resend mode: ${resend}`);
+    console.log(`=== Sending campaign ${campaignId} ===`);
+    console.log(`Base URL: ${baseUrl}, Resend: ${resend}`);
 
-    // Get instance info first
-    const instanceInfo = await getInstanceInfo(baseUrl, UAZAPI_INSTANCE_TOKEN);
-    console.log(`Instance info: ${JSON.stringify(instanceInfo)}`);
-
-    // If resend is true, reset failed messages to pending first
     if (resend) {
-      console.log('Resending: Resetting failed messages to pending...');
-      const { error: resetError } = await supabase
+      await supabase
         .from('messages')
-        .update({ 
-          status: 'pending', 
-          error_message: null,
-          sent_at: null 
-        })
+        .update({ status: 'pending', error_message: null, sent_at: null })
         .eq('campaign_id', campaignId)
         .eq('status', 'failed');
-      
-      if (resetError) {
-        console.error('Error resetting failed messages:', resetError);
-      } else {
-        console.log('Reset failed messages to pending');
-      }
     }
 
-    // Update campaign status to sending
     await supabase
       .from('campaigns')
       .update({ status: 'sending' })
       .eq('id', campaignId);
 
-    // Get pending messages for this campaign
     const { data: messages, error: messagesError } = await supabase
       .from('messages')
       .select('*, contacts(*)')
@@ -550,73 +376,58 @@ serve(async (req) => {
       throw new Error('Failed to fetch messages');
     }
 
-    console.log(`Found ${messages.length} messages to send`);
-    console.log(`Campaign has ${campaign.media_urls?.length || 0} media files`);
+    console.log(`${messages.length} messages to send, ${campaign.media_urls?.length || 0} media files`);
 
     let successCount = 0;
     let failCount = 0;
 
-    // Send messages with delay between each (to avoid rate limiting)
     for (const message of messages) {
       try {
         const phoneNumber = message.contacts.phone.replace(/\D/g, '');
-        
         console.log(`\n--- Sending to ${phoneNumber} ---`);
 
-        let mediaSuccess = true;
+        let messageSent = false;
         const mediaUrls = campaign.media_urls || [];
 
-        // Send media first (if any)
+        // Try to send media if present
         if (mediaUrls.length > 0) {
           for (let i = 0; i < mediaUrls.length; i++) {
             const mediaUrl = mediaUrls[i];
-            // First media gets the caption (message_content), others don't
             const caption = i === 0 ? campaign.message_content : undefined;
-            
-            console.log(`Sending media ${i + 1}/${mediaUrls.length}: ${mediaUrl}`);
             
             const mediaResult = await tryUAZAPISendMedia(
               baseUrl,
               UAZAPI_INSTANCE_TOKEN,
               phoneNumber,
               mediaUrl,
-              caption,
-              instanceInfo.instanceName
+              caption
             );
 
-            if (!mediaResult.success) {
-              console.error(`Failed to send media to ${phoneNumber}:`, mediaResult.error);
-              mediaSuccess = false;
-              break;
+            if (mediaResult.success) {
+              messageSent = true;
+              console.log(`Media ${i + 1} sent with caption`);
+            } else {
+              console.log(`Media ${i + 1} failed, will fallback to text`);
             }
             
-            // Small delay between media files
-            if (i < mediaUrls.length - 1) {
-              await sleep(500);
-            }
+            if (i < mediaUrls.length - 1) await sleep(500);
           }
         }
 
-        // If no media or media failed, send text message
-        // If media was sent with caption, no need to send text again
-        if (!mediaSuccess || mediaUrls.length === 0) {
+        // If no media sent, send text only
+        if (!messageSent) {
+          console.log(`Sending text-only message...`);
           const result = await tryUAZAPISend(
             baseUrl, 
             UAZAPI_INSTANCE_TOKEN, 
             phoneNumber, 
-            campaign.message_content,
-            instanceInfo.instanceName
+            campaign.message_content
           );
 
           if (!result.success) {
-            console.error(`Failed to send to ${phoneNumber}:`, result.error);
-            
             await supabase
               .from('messages')
-              .update({
-                status: 'failed',
-                error_message: result.error || 'UAZAPI error'
-              })
+              .update({ status: 'failed', error_message: result.error })
               .eq('id', message.id);
             
             failCount++;
@@ -624,20 +435,14 @@ serve(async (req) => {
           }
         }
 
-        // Success - either media with caption was sent, or text was sent
-        console.log(`Message sent successfully to ${phoneNumber}`);
-        
+        // Success
         await supabase
           .from('messages')
-          .update({
-            status: 'sent',
-            sent_at: new Date().toISOString()
-          })
+          .update({ status: 'sent', sent_at: new Date().toISOString() })
           .eq('id', message.id);
         
         successCount++;
 
-        // Add delay between messages (1.5 seconds) to avoid rate limiting
         if (messages.indexOf(message) < messages.length - 1) {
           await sleep(1500);
         }
@@ -657,25 +462,16 @@ serve(async (req) => {
       }
     }
 
-    // Update campaign status
     const finalStatus = failCount === messages.length ? 'failed' : 'completed';
     await supabase
       .from('campaigns')
-      .update({
-        status: finalStatus,
-        completed_at: new Date().toISOString()
-      })
+      .update({ status: finalStatus, completed_at: new Date().toISOString() })
       .eq('id', campaignId);
 
-    console.log(`\n=== Campaign completed: ${successCount} sent, ${failCount} failed ===`);
+    console.log(`\n=== Campaign done: ${successCount} sent, ${failCount} failed ===`);
 
     return new Response(
-      JSON.stringify({
-        success: true,
-        total: messages.length,
-        sent: successCount,
-        failed: failCount,
-      }),
+      JSON.stringify({ success: true, total: messages.length, sent: successCount, failed: failCount }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
@@ -685,10 +481,7 @@ serve(async (req) => {
     const status = message.includes('Unauthorized') || message.includes('access denied') ? 403 : 500;
     return new Response(
       JSON.stringify({ error: message }),
-      {
-        status,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      }
+      { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
