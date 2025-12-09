@@ -83,31 +83,31 @@ export function UAZAPIConfig({ userId, onConfigured }: UAZAPIConfigProps) {
 
     setTesting(true);
     try {
-      // Test connection directly to UAZAPI
       const baseUrl = config.base_url.replace(/\/$/, '');
-      const response = await fetch(`${baseUrl}/instance/status`, {
-        method: 'GET',
-        headers: {
-          'token': config.instance_token,
-          'Content-Type': 'application/json'
+      
+      // Use edge function to avoid CORS issues
+      const { data, error } = await supabase.functions.invoke('whatsapp-session', {
+        body: { 
+          action: 'test',
+          baseUrl: baseUrl,
+          instanceToken: config.instance_token
         }
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        const phoneNumber = data.instance?.owner || data.status?.jid?.split('@')[0]?.split(':')[0];
-        
+      if (error) throw error;
+
+      if (data?.success) {
+        const phoneNumber = data.phoneNumber || data.phone_number;
         if (phoneNumber) {
           setConfig(prev => ({ ...prev, phone_number: phoneNumber }));
         }
-        
         toast.success('Conexão testada com sucesso!');
       } else {
-        toast.error('Falha na conexão. Verifique as credenciais.');
+        toast.error(data?.message || 'Falha na conexão. Verifique as credenciais.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Test error:', error);
-      toast.error('Erro ao testar conexão. Verifique a URL.');
+      toast.error(error?.message || 'Erro ao testar conexão');
     } finally {
       setTesting(false);
     }
