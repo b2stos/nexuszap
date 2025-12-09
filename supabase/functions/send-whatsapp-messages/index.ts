@@ -9,13 +9,24 @@ const corsHeaders = {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Detect media type from URL
+// Detect media type from URL - remove query string first for accurate detection
 function getMediaType(url: string): 'image' | 'video' | 'audio' | 'document' {
-  const ext = url.split('.').pop()?.toLowerCase().split('?')[0] || '';
+  // Remove query string first to avoid issues with tokens
+  const urlWithoutQuery = url.split('?')[0];
+  const ext = urlWithoutQuery.split('.').pop()?.toLowerCase() || '';
+  
+  console.log(`Detecting media type - URL: ${url.substring(0, 80)}..., ext: ${ext}`);
+  
   if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) return 'image';
   if (['mp4', 'mov', 'avi', 'webm', '3gp'].includes(ext)) return 'video';
   if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext)) return 'audio';
   return 'document';
+}
+
+// Get clean filename from URL (without query string)
+function getCleanFileName(url: string): string {
+  const urlWithoutQuery = url.split('?')[0];
+  return urlWithoutQuery.split('/').pop() || 'file';
 }
 
 // Function to send media via UAZAPI
@@ -28,7 +39,8 @@ async function tryUAZAPISendMedia(
   instanceName?: string
 ): Promise<{ success: boolean; response?: any; error?: string }> {
   const mediaType = getMediaType(mediaUrl);
-  console.log(`Sending ${mediaType}: ${mediaUrl}`);
+  const fileName = getCleanFileName(mediaUrl);
+  console.log(`Sending ${mediaType} (${fileName}): ${mediaUrl.substring(0, 100)}...`);
 
   const numberFormats = [
     phone,
@@ -42,30 +54,40 @@ async function tryUAZAPISendMedia(
     { key: 'apikey', value: token },
   ];
 
-  // Endpoint patterns for media - UAZAPI style
+  // Endpoint patterns for media - UAZAPI style (based on /send/text working)
   const getMediaEndpoints = (type: string, instance?: string) => {
     const endpoints = [];
     
     // UAZAPI/Wuzapi standard endpoints for media
     if (type === 'image') {
       endpoints.push(
+        // Try /send/image first since /send/text worked
+        { path: '/send/image', bodyFn: (num: string) => ({ number: num, image: mediaUrl, caption: caption || '' }) },
+        { path: '/send/image', bodyFn: (num: string) => ({ number: num, url: mediaUrl, caption: caption || '' }) },
         { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Image: mediaUrl, Caption: caption || '' }) },
         { path: '/chat/send/image', bodyFn: (num: string) => ({ Phone: num, Url: mediaUrl, Caption: caption || '' }) },
+        { path: '/sendImage', bodyFn: (num: string) => ({ number: num, image: mediaUrl, caption: caption || '' }) },
         { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'image', media: mediaUrl, caption: caption || '' }) },
       );
     } else if (type === 'video') {
       endpoints.push(
+        { path: '/send/video', bodyFn: (num: string) => ({ number: num, video: mediaUrl, caption: caption || '' }) },
         { path: '/chat/send/video', bodyFn: (num: string) => ({ Phone: num, Video: mediaUrl, Caption: caption || '' }) },
+        { path: '/sendVideo', bodyFn: (num: string) => ({ number: num, video: mediaUrl, caption: caption || '' }) },
         { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'video', media: mediaUrl, caption: caption || '' }) },
       );
     } else if (type === 'audio') {
       endpoints.push(
+        { path: '/send/audio', bodyFn: (num: string) => ({ number: num, audio: mediaUrl }) },
         { path: '/chat/send/audio', bodyFn: (num: string) => ({ Phone: num, Audio: mediaUrl }) },
+        { path: '/sendAudio', bodyFn: (num: string) => ({ number: num, audio: mediaUrl }) },
         { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'audio', media: mediaUrl }) },
       );
     } else {
       endpoints.push(
-        { path: '/chat/send/document', bodyFn: (num: string) => ({ Phone: num, Document: mediaUrl, FileName: mediaUrl.split('/').pop() || 'document', Caption: caption || '' }) },
+        { path: '/send/document', bodyFn: (num: string) => ({ number: num, document: mediaUrl, filename: fileName, caption: caption || '' }) },
+        { path: '/chat/send/document', bodyFn: (num: string) => ({ Phone: num, Document: mediaUrl, FileName: fileName, Caption: caption || '' }) },
+        { path: '/sendDocument', bodyFn: (num: string) => ({ number: num, document: mediaUrl, filename: fileName, caption: caption || '' }) },
         { path: '/message/sendMedia', bodyFn: (num: string) => ({ number: num, mediatype: 'document', media: mediaUrl, caption: caption || '' }) },
       );
     }
