@@ -75,8 +75,27 @@ async function downloadMediaAsBase64(url: string): Promise<{ base64: string; mim
   }
 }
 
+// Extract message ID from API response
+function extractMessageId(response: any): string | null {
+  if (!response) return null;
+  
+  // Base360 format: { messageid: "3EB0..." } or { id: "5511913185456:3EB0..." }
+  if (response.messageid) return response.messageid;
+  
+  if (response.id) {
+    const parts = response.id.split(':');
+    return parts.length > 1 ? parts[1] : parts[0];
+  }
+  
+  // Try nested structures
+  if (response.message?.messageid) return response.message.messageid;
+  if (response.data?.messageid) return response.data.messageid;
+  
+  return null;
+}
+
 // ============================================================
-// SIMPLIFIED MEDIA SENDING - Based on working /send/text pattern
+// MEDIA SENDING with Base64 - Correct Base360 format
 // ============================================================
 async function tryUAZAPISendMedia(
   baseUrl: string,
@@ -84,159 +103,199 @@ async function tryUAZAPISendMedia(
   phone: string,
   mediaUrl: string,
   caption?: string
-): Promise<{ success: boolean; response?: any; error?: string }> {
+): Promise<{ success: boolean; response?: any; messageId?: string; error?: string }> {
   const mediaType = getMediaType(mediaUrl);
   const fileName = getCleanFileName(mediaUrl);
   
   console.log(`=== SENDING MEDIA (${mediaType}) ===`);
   console.log(`File: ${fileName}, Caption: ${caption?.substring(0, 50)}...`);
 
-  // Standard headers - same as working text endpoint
   const headers = {
     'token': token,
     'Content-Type': 'application/json'
   };
 
+  // Download media first for base64 strategies
+  const mediaData = await downloadMediaAsBase64(mediaUrl);
+  if (!mediaData) {
+    console.log(`Failed to download media`);
+    return { success: false, error: 'Failed to download media' };
+  }
+
   // ============================================================
-  // STRATEGY 1: Try /send/text with mediaUrl field
-  // Some APIs accept media via the text endpoint
+  // STRATEGY 1: /send/image with base64 data URI
+  // Format: { number, image: "data:image/png;base64,...", caption }
   // ============================================================
-  console.log(`[1] Trying /send/text with mediaUrl field...`);
+  if (mediaType === 'image') {
+    console.log(`[1] Trying /send/image with base64...`);
+    try {
+      const response = await fetch(`${baseUrl}/send/image`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          number: phone,
+          image: mediaData.base64,
+          caption: caption || ''
+        }),
+      });
+      
+      const responseText = await response.text();
+      console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
+      
+      if (response.ok) {
+        try {
+          const data = JSON.parse(responseText);
+          if (!data.error) {
+            const msgId = extractMessageId(data);
+            console.log(`✅ SUCCESS with /send/image, messageId: ${msgId}`);
+            return { success: true, response: data, messageId: msgId || undefined };
+          }
+        } catch {
+          if (!responseText.toLowerCase().includes('error')) {
+            console.log(`✅ SUCCESS with /send/image (non-JSON)`);
+            return { success: true, response: responseText };
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`Error with /send/image:`, e);
+    }
+  }
+
+  // ============================================================
+  // STRATEGY 2: /message/sendMedia - Alternative endpoint
+  // ============================================================
+  console.log(`[2] Trying /message/sendMedia...`);
   try {
-    const response = await fetch(`${baseUrl}/send/text`, {
+    const response = await fetch(`${baseUrl}/message/sendMedia`, {
       method: "POST",
       headers,
       body: JSON.stringify({
         number: phone,
-        text: caption || '',
-        mediaUrl: mediaUrl
+        mediatype: mediaType,
+        media: mediaData.base64,
+        caption: caption || '',
+        filename: fileName
       }),
     });
     
     const responseText = await response.text();
     console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
     
-    if (response.ok && !responseText.toLowerCase().includes('error')) {
-      console.log(`✅ SUCCESS with /send/text + mediaUrl`);
-      return { success: true, response: responseText };
+    if (response.ok) {
+      try {
+        const data = JSON.parse(responseText);
+        if (!data.error) {
+          const msgId = extractMessageId(data);
+          console.log(`✅ SUCCESS with /message/sendMedia, messageId: ${msgId}`);
+          return { success: true, response: data, messageId: msgId || undefined };
+        }
+      } catch {
+        if (!responseText.toLowerCase().includes('error')) {
+          console.log(`✅ SUCCESS with /message/sendMedia`);
+          return { success: true, response: responseText };
+        }
+      }
     }
   } catch (e) {
-    console.error(`Error with /send/text + mediaUrl:`, e);
+    console.error(`Error with /message/sendMedia:`, e);
   }
 
   // ============================================================
-  // STRATEGY 2: Try /send/file endpoint
+  // STRATEGY 3: /send/file with base64
   // ============================================================
-  console.log(`[2] Trying /send/file endpoint...`);
-  
-  const mediaData = await downloadMediaAsBase64(mediaUrl);
-  if (!mediaData) {
-    console.log(`Failed to download media, skipping base64 attempts`);
-  } else {
-    try {
-      const response = await fetch(`${baseUrl}/send/file`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          number: phone,
-          file: mediaData.base64,
-          filename: fileName,
-          caption: caption || ''
-        }),
-      });
-      
-      const responseText = await response.text();
-      console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
-      
-      if (response.ok && !responseText.toLowerCase().includes('error')) {
-        console.log(`✅ SUCCESS with /send/file`);
-        return { success: true, response: responseText };
+  console.log(`[3] Trying /send/file...`);
+  try {
+    const response = await fetch(`${baseUrl}/send/file`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        number: phone,
+        file: mediaData.base64,
+        filename: fileName,
+        caption: caption || ''
+      }),
+    });
+    
+    const responseText = await response.text();
+    console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
+    
+    if (response.ok) {
+      try {
+        const data = JSON.parse(responseText);
+        if (!data.error) {
+          const msgId = extractMessageId(data);
+          console.log(`✅ SUCCESS with /send/file, messageId: ${msgId}`);
+          return { success: true, response: data, messageId: msgId || undefined };
+        }
+      } catch {
+        if (!responseText.toLowerCase().includes('error')) {
+          console.log(`✅ SUCCESS with /send/file`);
+          return { success: true, response: responseText };
+        }
       }
-    } catch (e) {
-      console.error(`Error with /send/file:`, e);
     }
+  } catch (e) {
+    console.error(`Error with /send/file:`, e);
   }
 
   // ============================================================
-  // STRATEGY 3: Try specific media endpoint (/send/image, /send/video, etc)
+  // STRATEGY 4: /send/{mediaType} endpoint with base64
   // ============================================================
   const typeEndpoint = `/send/${mediaType}`;
-  console.log(`[3] Trying ${typeEndpoint}...`);
-  
-  if (mediaData) {
-    try {
-      const response = await fetch(`${baseUrl}${typeEndpoint}`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          number: phone,
-          [mediaType]: mediaData.base64,
-          caption: caption || ''
-        }),
-      });
-      
-      const responseText = await response.text();
-      console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
-      
-      if (response.ok && !responseText.toLowerCase().includes('error')) {
-        console.log(`✅ SUCCESS with ${typeEndpoint}`);
-        return { success: true, response: responseText };
-      }
-    } catch (e) {
-      console.error(`Error with ${typeEndpoint}:`, e);
-    }
+  console.log(`[4] Trying ${typeEndpoint} with base64...`);
+  try {
+    const response = await fetch(`${baseUrl}${typeEndpoint}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        number: phone,
+        [mediaType]: mediaData.base64,
+        caption: caption || ''
+      }),
+    });
     
-    // Try with URL instead of base64
-    try {
-      const response = await fetch(`${baseUrl}${typeEndpoint}`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          number: phone,
-          [mediaType]: mediaUrl,
-          caption: caption || ''
-        }),
-      });
-      
-      const responseText = await response.text();
-      console.log(`Status: ${response.status} (URL mode)`);
-      
-      if (response.ok && !responseText.toLowerCase().includes('error')) {
-        console.log(`✅ SUCCESS with ${typeEndpoint} (URL mode)`);
-        return { success: true, response: responseText };
+    const responseText = await response.text();
+    console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
+    
+    if (response.ok) {
+      try {
+        const data = JSON.parse(responseText);
+        if (!data.error) {
+          const msgId = extractMessageId(data);
+          console.log(`✅ SUCCESS with ${typeEndpoint}, messageId: ${msgId}`);
+          return { success: true, response: data, messageId: msgId || undefined };
+        }
+      } catch {
+        if (!responseText.toLowerCase().includes('error')) {
+          console.log(`✅ SUCCESS with ${typeEndpoint}`);
+          return { success: true, response: responseText };
+        }
       }
-    } catch (e) {
-      console.error(`Error with ${typeEndpoint} (URL):`, e);
     }
+  } catch (e) {
+    console.error(`Error with ${typeEndpoint}:`, e);
   }
 
-  // ============================================================
-  // MEDIA FAILED - Return failure so caller can fallback to text
-  // ============================================================
   console.log(`❌ All media attempts failed`);
-  return { 
-    success: false, 
-    error: `API não suporta envio de mídia. Verifique a documentação do provedor.` 
-  };
+  return { success: false, error: `Failed to send media via all endpoints` };
 }
 
 // ============================================================
-// TEXT MESSAGE SENDING (already working)
+// TEXT MESSAGE SENDING
 // ============================================================
 async function tryUAZAPISend(
   baseUrl: string, 
   token: string, 
   phone: string, 
   message: string
-): Promise<{ success: boolean; response?: any; error?: string }> {
+): Promise<{ success: boolean; response?: any; messageId?: string; error?: string }> {
   
-  // Headers that work with Base360
   const headers = {
     'token': token,
     'Content-Type': 'application/json'
   };
 
-  // Try /send/text first (known working endpoint)
   console.log(`Sending text to ${phone} via /send/text...`);
   
   try {
@@ -256,8 +315,9 @@ async function tryUAZAPISend(
       try {
         const data = JSON.parse(responseText);
         if (!data.error) {
-          console.log(`✅ Text sent successfully`);
-          return { success: true, response: data };
+          const msgId = extractMessageId(data);
+          console.log(`✅ Text sent successfully, messageId: ${msgId}`);
+          return { success: true, response: data, messageId: msgId || undefined };
         }
       } catch {
         if (!responseText.toLowerCase().includes('error')) {
@@ -270,7 +330,7 @@ async function tryUAZAPISend(
     console.error(`Error with /send/text:`, e);
   }
 
-  // Fallback: try /chat/send/text (Wuzapi standard)
+  // Fallback: try /chat/send/text
   console.log(`Trying fallback /chat/send/text...`);
   
   try {
@@ -287,17 +347,20 @@ async function tryUAZAPISend(
     console.log(`Status: ${response.status}`);
     
     if (response.ok && !responseText.toLowerCase().includes('error')) {
-      console.log(`✅ Text sent via /chat/send/text`);
-      return { success: true, response: responseText };
+      try {
+        const data = JSON.parse(responseText);
+        const msgId = extractMessageId(data);
+        console.log(`✅ Text sent via /chat/send/text, messageId: ${msgId}`);
+        return { success: true, response: data, messageId: msgId || undefined };
+      } catch {
+        return { success: true, response: responseText };
+      }
     }
   } catch (e) {
     console.error(`Error with /chat/send/text:`, e);
   }
 
-  return { 
-    success: false, 
-    error: `Falha ao enviar mensagem. Verifique as configurações da API.` 
-  };
+  return { success: false, error: `Failed to send message` };
 }
 
 serve(async (req) => {
@@ -356,7 +419,7 @@ serve(async (req) => {
     if (resend) {
       await supabase
         .from('messages')
-        .update({ status: 'pending', error_message: null, sent_at: null })
+        .update({ status: 'pending', error_message: null, sent_at: null, whatsapp_message_id: null })
         .eq('campaign_id', campaignId)
         .eq('status', 'failed');
     }
@@ -387,6 +450,7 @@ serve(async (req) => {
         console.log(`\n--- Sending to ${phoneNumber} ---`);
 
         let messageSent = false;
+        let whatsappMessageId: string | null = null;
         const mediaUrls = campaign.media_urls || [];
 
         // Try to send media if present
@@ -405,9 +469,12 @@ serve(async (req) => {
 
             if (mediaResult.success) {
               messageSent = true;
+              if (mediaResult.messageId) {
+                whatsappMessageId = mediaResult.messageId;
+              }
               console.log(`Media ${i + 1} sent with caption`);
             } else {
-              console.log(`Media ${i + 1} failed, will fallback to text`);
+              console.log(`Media ${i + 1} failed: ${mediaResult.error}`);
             }
             
             if (i < mediaUrls.length - 1) await sleep(500);
@@ -433,12 +500,27 @@ serve(async (req) => {
             failCount++;
             continue;
           }
+          
+          messageSent = true;
+          if (result.messageId) {
+            whatsappMessageId = result.messageId;
+          }
         }
 
-        // Success
+        // Success - update with whatsapp_message_id for webhook correlation
+        const updateData: Record<string, any> = { 
+          status: 'sent', 
+          sent_at: new Date().toISOString() 
+        };
+        
+        if (whatsappMessageId) {
+          updateData.whatsapp_message_id = whatsappMessageId;
+          console.log(`Saved whatsapp_message_id: ${whatsappMessageId}`);
+        }
+        
         await supabase
           .from('messages')
-          .update({ status: 'sent', sent_at: new Date().toISOString() })
+          .update(updateData)
           .eq('id', message.id);
         
         successCount++;
