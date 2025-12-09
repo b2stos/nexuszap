@@ -39,35 +39,44 @@ async function tryUAZAPISend(
   instanceName?: string
 ): Promise<{ success: boolean; response?: any; error?: string }> {
   
-  // Different number formats to try
+  // Different number formats to try - prioritize raw number first
   const numberFormats = [
     phone,                          // Just numbers: 5511947892299
+    `${phone}@s.whatsapp.net`,     // WhatsApp internal format
     `${phone}@c.us`,               // WhatsApp contact format
   ];
   
-  // Different header combinations
-  const headerCombinations: Record<string, string>[] = [
-    { 'token': token, 'Content-Type': 'application/json' },
-    { 'apikey': token, 'Content-Type': 'application/json' },
-    { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    { 'Authorization': token, 'Content-Type': 'application/json' },
+  // Header combinations - uazapi uses lowercase 'token'
+  const headerSets = [
+    { key: 'token', value: token },
+    { key: 'Token', value: token },
+    { key: 'apikey', value: token },
   ];
   
-  // Different endpoint patterns (with and without instance name)
+  // Endpoint patterns - PRIORITIZE /chat/send/text (uazapi/wuzapi standard)
   const getEndpoints = (instance?: string) => {
-    const endpoints = [
-      // Evolution API style with instance
-      ...(instance ? [
+    const endpoints = [];
+    
+    // UAZAPI/Wuzapi standard endpoint - PRIORITIZE THIS
+    endpoints.push(
+      { path: '/chat/send/text', bodyFn: (num: string) => ({ Phone: num, Body: message }) },
+    );
+    
+    // Evolution API style with instance
+    if (instance) {
+      endpoints.push(
         { path: `/message/sendText/${instance}`, bodyFn: (num: string) => ({ number: num, text: message }) },
-      ] : []),
-      // Direct endpoints
+      );
+    }
+    
+    // Other common endpoints
+    endpoints.push(
       { path: '/message/sendText', bodyFn: (num: string) => ({ number: num, text: message }) },
-      { path: '/message/text', bodyFn: (num: string) => ({ number: num, text: message }) },
       { path: '/send/text', bodyFn: (num: string) => ({ number: num, text: message }) },
       { path: '/sendText', bodyFn: (num: string) => ({ number: num, text: message }) },
-      { path: '/chat/send/text', bodyFn: (num: string) => ({ Phone: num, Body: message }) },
       { path: '/send-message', bodyFn: (num: string) => ({ chatId: num, text: message }) },
-    ];
+    );
+    
     return endpoints;
   };
 
@@ -77,7 +86,12 @@ async function tryUAZAPISend(
   let attempts = 0;
   const maxAttempts = 12; // Limit to avoid edge function timeout
   
-  for (const headers of headerCombinations) {
+  for (const headerSet of headerSets) {
+    const headers: Record<string, string> = { 
+      [headerSet.key]: headerSet.value, 
+      'Content-Type': 'application/json' 
+    };
+    
     for (const numberFormat of numberFormats) {
       for (const endpoint of endpoints) {
         if (attempts >= maxAttempts) {
@@ -95,7 +109,7 @@ async function tryUAZAPISend(
         try {
           const response = await fetch(url, {
             method: "POST",
-            headers: headers,
+            headers,
             body: JSON.stringify(body),
           });
           
