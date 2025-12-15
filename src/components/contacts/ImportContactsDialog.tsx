@@ -9,6 +9,7 @@ import { Loader2, Upload, CheckCircle, XCircle } from "lucide-react";
 import * as XLSX from "xlsx";
 import { useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Progress } from "@/components/ui/progress";
 
 interface ImportContactsDialogProps {
   open?: boolean;
@@ -22,10 +23,22 @@ interface ValidationResult {
   reason?: string;
 }
 
+interface BatchProgress {
+  currentBatch: number;
+  totalBatches: number;
+  processedContacts: number;
+  totalContacts: number;
+  phase: "validating" | "importing";
+}
+
+const CONTACTS_PER_BATCH = 5000;
+const VALIDATION_BATCH_SIZE = 100;
+
 export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialogProps) {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [validationResults, setValidationResults] = useState<ValidationResult[] | null>(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const queryClient = useQueryClient();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -33,6 +46,7 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
     if (selectedFile) {
       setFile(selectedFile);
       setValidationResults(null);
+      setBatchProgress(null);
     }
   };
 
@@ -40,6 +54,8 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
     if (!file) return;
 
     setLoading(true);
+    setBatchProgress(null);
+    
     try {
       const reader = new FileReader();
       
@@ -60,12 +76,11 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
             phone: String(row.telefone || row.phone || "").trim(),
           }))
           .filter(contact => {
-            // Pre-validate: remove empty and obviously invalid
             const phone = contact.phone;
             if (!phone) return false;
-            if (phone.length < 8) return false; // Too short
-            if (phone.length > 20) return false; // Too long
-            if (!/\d/.test(phone)) return false; // Must contain digits
+            if (phone.length < 8) return false;
+            if (phone.length > 20) return false;
+            if (!/\d/.test(phone)) return false;
             return true;
           });
 
@@ -79,106 +94,128 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
           return;
         }
 
-        // Limit to 1000 contacts per import
-        const MAX_CONTACTS = 1000;
-        if (rawContacts.length > MAX_CONTACTS) {
-          toast({
-            title: "Muitos contatos",
-            description: `Limite de ${MAX_CONTACTS} contatos por importação. Encontrados: ${rawContacts.length}. Divida em arquivos menores.`,
-            variant: "destructive",
-          });
-          setLoading(false);
-          return;
-        }
+        // Split into batches of 5000
+        const totalBatches = Math.ceil(rawContacts.length / CONTACTS_PER_BATCH);
+        let allValidResults: ValidationResult[] = [];
+        let totalInserted = 0;
 
-        // Process in batches of 100
-        const BATCH_SIZE = 100;
-        const batches: typeof rawContacts[] = [];
-        for (let i = 0; i < rawContacts.length; i += BATCH_SIZE) {
-          batches.push(rawContacts.slice(i, i + BATCH_SIZE));
-        }
+        for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+          const batchStart = batchIndex * CONTACTS_PER_BATCH;
+          const batchEnd = Math.min(batchStart + CONTACTS_PER_BATCH, rawContacts.length);
+          const batchContacts = rawContacts.slice(batchStart, batchEnd);
 
-        let allResults: ValidationResult[] = [];
-        
-        // Process each batch
-        for (let i = 0; i < batches.length; i++) {
-          toast({
-            title: "Validando...",
-            description: `Processando lote ${i + 1} de ${batches.length} (${batches[i].length} números)`,
+          // Update progress - validating phase
+          setBatchProgress({
+            currentBatch: batchIndex + 1,
+            totalBatches,
+            processedContacts: batchStart,
+            totalContacts: rawContacts.length,
+            phase: "validating",
           });
 
-          const phoneNumbers = batches[i].map(c => c.phone);
-          
-          console.log('Calling validate-phone-numbers with:', phoneNumbers.length, 'numbers');
-          
-          const { data: validationData, error: validationError } = await supabase.functions.invoke(
-            'validate-phone-numbers',
-            {
-              body: { phoneNumbers }
+          // Validate in smaller batches
+          const validationBatches: typeof batchContacts[] = [];
+          for (let i = 0; i < batchContacts.length; i += VALIDATION_BATCH_SIZE) {
+            validationBatches.push(batchContacts.slice(i, i + VALIDATION_BATCH_SIZE));
+          }
+
+          let batchResults: ValidationResult[] = [];
+
+          for (let i = 0; i < validationBatches.length; i++) {
+            const phoneNumbers = validationBatches[i].map(c => c.phone);
+            
+            const { data: validationData, error: validationError } = await supabase.functions.invoke(
+              'validate-phone-numbers',
+              { body: { phoneNumbers } }
+            );
+
+            if (validationError) {
+              throw new Error(`Erro na validação: ${validationError.message}`);
             }
-          );
-          
-          console.log('Validation response:', { validationData, validationError });
+            
+            if (!validationData || !validationData.results) {
+              throw new Error('Resposta inválida da validação.');
+            }
+            
+            batchResults = [...batchResults, ...(validationData.results as ValidationResult[])];
 
-          if (validationError) {
-            console.error('Validation error:', validationError);
-            throw new Error(`Erro na validação por IA: ${validationError.message || 'Erro desconhecido'}`);
+            // Update progress during validation
+            setBatchProgress({
+              currentBatch: batchIndex + 1,
+              totalBatches,
+              processedContacts: batchStart + (i + 1) * VALIDATION_BATCH_SIZE,
+              totalContacts: rawContacts.length,
+              phase: "validating",
+            });
           }
-          
-          if (!validationData || !validationData.results) {
-            console.error('Invalid validation response:', validationData);
-            throw new Error('Resposta inválida da validação. Tente novamente.');
-          }
-          
-          allResults = [...allResults, ...(validationData.results as ValidationResult[])];
-        }
 
-        setValidationResults(allResults);
+          allValidResults = [...allValidResults, ...batchResults];
 
-        // Filter valid contacts
-        const validContacts = rawContacts
-          .map((contact, index) => ({
-            ...contact,
-            validation: allResults[index]
-          }))
-          .filter(c => c.validation?.isValid)
-          .map(c => ({
-            user_id: user.id,
-            name: c.name,
-            phone: c.validation.formatted,
-            import_batch_id: crypto.randomUUID(),
-          }));
+          // Filter valid contacts for this batch
+          const validContacts = batchContacts
+            .map((contact, index) => ({
+              ...contact,
+              validation: batchResults[index]
+            }))
+            .filter(c => c.validation?.isValid)
+            .map(c => ({
+              user_id: user.id,
+              name: c.name,
+              phone: c.validation.formatted,
+              import_batch_id: crypto.randomUUID(),
+            }));
 
-        if (validContacts.length === 0) {
-          toast({
-            title: "Nenhum número válido",
-            description: "Nenhum número de telefone válido foi encontrado após validação.",
-            variant: "destructive",
+          // Update progress - importing phase
+          setBatchProgress({
+            currentBatch: batchIndex + 1,
+            totalBatches,
+            processedContacts: batchStart,
+            totalContacts: rawContacts.length,
+            phase: "importing",
           });
-          setLoading(false);
-          return;
+
+          // Insert valid contacts
+          if (validContacts.length > 0) {
+            const INSERT_BATCH_SIZE = 500;
+            for (let i = 0; i < validContacts.length; i += INSERT_BATCH_SIZE) {
+              const insertBatch = validContacts.slice(i, i + INSERT_BATCH_SIZE);
+              const { error } = await supabase
+                .from("contacts")
+                .upsert(insertBatch, { 
+                  onConflict: 'user_id,phone',
+                  ignoreDuplicates: false
+                });
+
+              if (error) throw error;
+              totalInserted += insertBatch.length;
+            }
+          }
+
+          // Notify batch completion
+          if (totalBatches > 1) {
+            toast({
+              title: `Lote ${batchIndex + 1}/${totalBatches} concluído`,
+              description: `${validContacts.length} contatos importados neste lote.`,
+            });
+          }
         }
 
-        const { error } = await supabase
-          .from("contacts")
-          .insert(validContacts);
+        setValidationResults(allValidResults);
 
-        if (error) throw error;
-
-        const invalidCount = allResults.filter(r => !r.isValid).length;
-        const validCount = allResults.filter(r => r.isValid).length;
+        const invalidCount = allValidResults.filter(r => !r.isValid).length;
+        const validCount = allValidResults.filter(r => r.isValid).length;
 
         toast({
-          title: "Importação concluída",
-          description: `${validCount} contatos válidos importados! ${invalidCount > 0 ? `${invalidCount} números inválidos foram ignorados.` : ''}`,
+          title: "Importação concluída!",
+          description: `${validCount} contatos importados! ${invalidCount > 0 ? `${invalidCount} números inválidos foram ignorados.` : ''}`,
         });
 
         queryClient.invalidateQueries({ queryKey: ["contacts"] });
         
-        // Reset after a delay so user can see results
         setTimeout(() => {
           setFile(null);
           setValidationResults(null);
+          setBatchProgress(null);
           onOpenChange?.(false);
         }, 3000);
       };
@@ -192,11 +229,15 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
         variant: "destructive",
       });
       setLoading(false);
+      setBatchProgress(null);
     }
   };
 
   const validCount = validationResults?.filter(r => r.isValid).length || 0;
   const invalidCount = validationResults?.filter(r => !r.isValid).length || 0;
+  const progressPercent = batchProgress 
+    ? Math.round((batchProgress.processedContacts / batchProgress.totalContacts) * 100)
+    : 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -206,6 +247,10 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
           <DialogDescription>
             Envie um arquivo CSV ou XLSX com as colunas "nome" e "telefone". 
             A IA irá validar e formatar os números automaticamente.
+            <br />
+            <span className="text-primary font-medium">
+              Suporta arquivos grandes - processados automaticamente em lotes de 5.000.
+            </span>
           </DialogDescription>
         </DialogHeader>
 
@@ -220,9 +265,28 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
               disabled={loading}
             />
             <p className="text-xs text-muted-foreground">
-              Formatos aceitos: CSV, XLSX, XLS
+              Formatos aceitos: CSV, XLSX, XLS (sem limite de contatos)
             </p>
           </div>
+
+          {/* Batch Progress */}
+          {batchProgress && (
+            <div className="space-y-3 p-4 border rounded-lg bg-muted/30">
+              <div className="flex justify-between text-sm">
+                <span className="font-medium">
+                  {batchProgress.phase === "validating" ? "Validando..." : "Importando..."}
+                </span>
+                <span className="text-muted-foreground">
+                  Lote {batchProgress.currentBatch} de {batchProgress.totalBatches}
+                </span>
+              </div>
+              <Progress value={progressPercent} className="h-2" />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>{batchProgress.processedContacts.toLocaleString()} contatos processados</span>
+                <span>{batchProgress.totalContacts.toLocaleString()} total</span>
+              </div>
+            </div>
+          )}
 
           {validationResults && (
             <Alert>
@@ -230,12 +294,12 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-green-500" />
-                    <span className="font-medium">{validCount} números válidos</span>
+                    <span className="font-medium">{validCount.toLocaleString()} números válidos</span>
                   </div>
                   {invalidCount > 0 && (
                     <div className="flex items-center gap-2">
                       <XCircle className="h-4 w-4 text-red-500" />
-                      <span className="font-medium">{invalidCount} números inválidos (serão ignorados)</span>
+                      <span className="font-medium">{invalidCount.toLocaleString()} números inválidos (ignorados)</span>
                     </div>
                   )}
                 </div>
@@ -245,14 +309,20 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
 
           {validationResults && invalidCount > 0 && (
             <div className="max-h-40 overflow-y-auto space-y-1 text-xs">
-              <p className="font-medium text-muted-foreground mb-2">Números inválidos:</p>
+              <p className="font-medium text-muted-foreground mb-2">Números inválidos (primeiros 100):</p>
               {validationResults
                 .filter(r => !r.isValid)
+                .slice(0, 100)
                 .map((result, index) => (
                   <div key={index} className="text-red-500">
                     {result.original} - {result.reason || 'Formato inválido'}
                   </div>
                 ))}
+              {invalidCount > 100 && (
+                <p className="text-muted-foreground mt-2">
+                  ... e mais {invalidCount - 100} números inválidos
+                </p>
+              )}
             </div>
           )}
 
@@ -264,7 +334,7 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
             {loading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Validando e importando...
+                {batchProgress?.phase === "validating" ? "Validando..." : "Importando..."}
               </>
             ) : (
               <>
