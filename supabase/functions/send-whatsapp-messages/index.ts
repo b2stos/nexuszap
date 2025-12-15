@@ -331,13 +331,24 @@ async function checkCancelled(supabase: any, campaignId: string): Promise<boolea
   return data?.status === 'cancelled';
 }
 
-// Count remaining pending messages
+// Count remaining pending messages (NOT processing - those are already being handled)
 async function countPendingMessages(supabase: any, campaignId: string): Promise<number> {
   const { count } = await supabase
     .from('messages')
     .select('*', { count: 'exact', head: true })
     .eq('campaign_id', campaignId)
     .eq('status', 'pending');
+  
+  return count || 0;
+}
+
+// Count processing messages
+async function countProcessingMessages(supabase: any, campaignId: string): Promise<number> {
+  const { count } = await supabase
+    .from('messages')
+    .select('*', { count: 'exact', head: true })
+    .eq('campaign_id', campaignId)
+    .eq('status', 'processing');
   
   return count || 0;
 }
@@ -584,6 +595,7 @@ serve(async (req) => {
       .eq('id', campaignId);
 
     // IMPORTANT: Limit to MAX_MESSAGES_PER_CALL to avoid timeout
+    // Use FOR UPDATE SKIP LOCKED pattern to prevent race conditions
     const { data: messages, error: messagesError } = await supabase
       .from('messages')
       .select('*, contacts(*)')
@@ -595,10 +607,38 @@ serve(async (req) => {
       throw new Error('Failed to fetch messages');
     }
 
-    // Get total pending count for response
-    const totalPending = await countPendingMessages(supabase, campaignId);
-
     if (!messages || messages.length === 0) {
+      // Check if there are any processing messages (from a previous timeout)
+      const { count: processingCount } = await supabase
+        .from('messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId)
+        .eq('status', 'processing');
+
+      if (processingCount && processingCount > 0) {
+        // Reset stuck processing messages back to pending (older than 2 minutes)
+        const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+        await supabase
+          .from('messages')
+          .update({ status: 'pending', processing_started_at: null })
+          .eq('campaign_id', campaignId)
+          .eq('status', 'processing')
+          .lt('processing_started_at', twoMinutesAgo);
+
+        return new Response(
+          JSON.stringify({ 
+            success: true, 
+            message: `${processingCount} mensagens estão sendo processadas. Aguarde ou tente novamente em breve.`,
+            sent: 0, 
+            failed: 0,
+            remaining: processingCount,
+            needsContinuation: false,
+            status: 'processing_in_progress'
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
       // No pending messages - mark as completed
       await supabase
         .from('campaigns')
@@ -618,11 +658,32 @@ serve(async (req) => {
       );
     }
 
-    const needsContinuation = totalPending > MAX_MESSAGES_PER_CALL;
+    // 🔒 CRITICAL: Mark messages as "processing" IMMEDIATELY to prevent race conditions
+    const messageIds = messages.map(m => m.id);
+    const processingTimestamp = new Date().toISOString();
+    
+    const { error: lockError } = await supabase
+      .from('messages')
+      .update({ 
+        status: 'processing', 
+        processing_started_at: processingTimestamp 
+      })
+      .in('id', messageIds);
 
-    console.log(`📬 Processing ${messages.length} of ${totalPending} pending messages, ${campaign.media_urls?.length || 0} media files`);
+    if (lockError) {
+      console.error('Failed to lock messages:', lockError);
+      throw new Error('Failed to reserve messages for processing');
+    }
+
+    console.log(`🔒 Locked ${messages.length} messages as "processing"`);
+
+    // Get total pending count for response (after locking)
+    const totalPending = await countPendingMessages(supabase, campaignId);
+    const needsContinuation = totalPending > 0;
+
+    console.log(`📬 Processing ${messages.length} messages, ${totalPending} still pending, ${campaign.media_urls?.length || 0} media files`);
     if (needsContinuation) {
-      console.log(`⚠️ Will need continuation - ${totalPending - messages.length} messages remaining after this batch`);
+      console.log(`⚠️ Will need continuation - ${totalPending} messages remaining after this batch`);
     }
 
     // START BACKGROUND TASK - This continues after response is sent!

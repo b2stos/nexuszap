@@ -98,6 +98,7 @@ export type Database = {
           delivered_at: string | null
           error_message: string | null
           id: string
+          processing_started_at: string | null
           read_at: string | null
           sent_at: string | null
           status: Database["public"]["Enums"]["message_status"]
@@ -110,6 +111,7 @@ export type Database = {
           delivered_at?: string | null
           error_message?: string | null
           id?: string
+          processing_started_at?: string | null
           read_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["message_status"]
@@ -122,6 +124,7 @@ export type Database = {
           delivered_at?: string | null
           error_message?: string | null
           id?: string
+          processing_started_at?: string | null
           read_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["message_status"]
@@ -395,7 +398,13 @@ export type Database = {
         | "completed"
         | "failed"
         | "cancelled"
-      message_status: "pending" | "sent" | "delivered" | "read" | "failed"
+      message_status:
+        | "pending"
+        | "sent"
+        | "delivered"
+        | "read"
+        | "failed"
+        | "processing"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -525,7 +534,14 @@ export const Constants = {
     Enums: {
       app_role: ["admin", "user"],
       campaign_status: ["draft", "sending", "completed", "failed", "cancelled"],
-      message_status: ["pending", "sent", "delivered", "read", "failed"],
+      message_status: [
+        "pending",
+        "sent",
+        "delivered",
+        "read",
+        "failed",
+        "processing",
+      ],
     },
   },
 } as const
