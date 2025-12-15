@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,8 @@ import {
   Send,
   Loader2,
   StopCircle,
-  Ban
+  Ban,
+  PlayCircle
 } from "lucide-react";
 
 interface CampaignProgressProps {
@@ -41,6 +42,12 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
   const [campaignStatus, setCampaignStatus] = useState<string>("sending");
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  const [continuing, setContinuing] = useState(false);
+  const [isStalled, setIsStalled] = useState(false);
+  
+  // Track last processed count to detect stalls
+  const lastProcessedRef = useRef(0);
+  const stallCheckCountRef = useRef(0);
 
   const loadStats = async () => {
     try {
@@ -95,8 +102,29 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
         
         if (campaign.status === "completed" || campaign.status === "failed" || campaign.status === "cancelled") {
           onComplete?.();
+          setIsStalled(false);
         }
       }
+
+      // Check for stall: if status is "sending" but no progress in last few checks
+      const currentProcessed = counts.sent + counts.delivered + counts.read + counts.failed;
+      if (campaign?.status === "sending" && counts.pending > 0) {
+        if (currentProcessed === lastProcessedRef.current) {
+          stallCheckCountRef.current++;
+          // Consider stalled after 4 checks (12 seconds) with no progress
+          if (stallCheckCountRef.current >= 4) {
+            setIsStalled(true);
+          }
+        } else {
+          stallCheckCountRef.current = 0;
+          setIsStalled(false);
+        }
+      } else {
+        setIsStalled(false);
+        stallCheckCountRef.current = 0;
+      }
+      
+      lastProcessedRef.current = currentProcessed;
     } catch (error) {
       console.error("Error loading campaign stats:", error);
     } finally {
@@ -142,6 +170,7 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
             setCampaignStatus(newStatus);
             if (newStatus === "completed" || newStatus === "failed" || newStatus === "cancelled") {
               onComplete?.();
+              setIsStalled(false);
             }
           }
         }
@@ -185,6 +214,35 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
       });
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const handleContinue = async () => {
+    setContinuing(true);
+    setIsStalled(false);
+    stallCheckCountRef.current = 0;
+    
+    try {
+      const { data, error } = await supabase.functions.invoke("send-whatsapp-messages", {
+        body: { campaignId },
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Envio retomado",
+        description: data.message || `Continuando envio de ${stats.pending} mensagens...`,
+      });
+    } catch (error: any) {
+      console.error("Error continuing campaign:", error);
+      toast({
+        title: "Erro ao continuar",
+        description: error.message || "Não foi possível continuar o envio.",
+        variant: "destructive",
+      });
+      setIsStalled(true);
+    } finally {
+      setContinuing(false);
     }
   };
 
@@ -291,9 +349,36 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
           </div>
         </div>
 
-        {/* Status message */}
+        {/* Stalled warning + continue button */}
+        {isStalled && stats.pending > 0 && campaignStatus === "sending" && (
+          <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 space-y-2">
+            <p className="text-sm text-yellow-600 dark:text-yellow-400 text-center">
+              ⚠️ O envio parece ter parado. {stats.pending} mensagens ainda pendentes.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full border-yellow-500 text-yellow-600 hover:bg-yellow-500 hover:text-white"
+              onClick={handleContinue}
+              disabled={continuing}
+            >
+              {continuing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Retomando...
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="mr-2 h-4 w-4" />
+                  Continuar Envio ({stats.pending} restantes)
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+
         {/* Cancel button */}
-        {campaignStatus === "sending" && (
+        {campaignStatus === "sending" && !isStalled && (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground text-center">
               ⏳ Enviando mensagens em segundo plano... Você pode sair desta página.

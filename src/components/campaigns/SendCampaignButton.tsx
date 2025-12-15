@@ -97,8 +97,51 @@ export function SendCampaignButton({
     );
   }
 
+  // Don't hide button for completed - allow viewing final status
+  // But don't show send button
   if (status === 'completed') {
     return null;
+  }
+
+  // For cancelled campaigns with pending messages, allow continuing
+  if (status === 'cancelled') {
+    return (
+      <>
+        <Button 
+          onClick={() => handleSend(false)} 
+          disabled={loading}
+          size="sm"
+          variant="outline"
+        >
+          {loading ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Retomando...
+            </>
+          ) : (
+            <>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Retomar Envio
+            </>
+          )}
+        </Button>
+
+        <Dialog open={showProgress} onOpenChange={setShowProgress}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>{campaignName}</DialogTitle>
+              <DialogDescription>
+                Acompanhe o progresso do envio em tempo real
+              </DialogDescription>
+            </DialogHeader>
+            <CampaignProgress 
+              campaignId={campaignId} 
+              onComplete={handleProgressComplete}
+            />
+          </DialogContent>
+        </Dialog>
+      </>
+    );
   }
 
   const isFailed = status === 'failed';
