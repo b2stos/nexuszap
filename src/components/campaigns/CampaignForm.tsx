@@ -31,15 +31,19 @@ export function CampaignForm() {
   const [message, setMessage] = useState("");
   const [mediaUrls, setMediaUrls] = useState<string[]>([]);
 
-  const { data: contacts } = useQuery({
-    queryKey: ["contacts-count"],
+  // Count unique phone numbers (not duplicate contacts)
+  const { data: uniqueContactCount } = useQuery({
+    queryKey: ["contacts-unique-count"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("contacts")
-        .select("id", { count: "exact" });
+        .select("phone");
 
       if (error) throw error;
-      return data;
+      
+      // Get unique phone numbers
+      const uniquePhones = new Set(data.map(c => c.phone));
+      return uniquePhones.size;
     },
   });
 
@@ -58,7 +62,7 @@ export function CampaignForm() {
       return;
     }
     
-    if (!contacts || contacts.length === 0) {
+    if (!uniqueContactCount || uniqueContactCount === 0) {
       toast({
         title: "Nenhum contato disponível",
         description: "Importe contatos antes de criar uma campanha.",
@@ -94,13 +98,24 @@ export function CampaignForm() {
 
       if (campaignError) throw campaignError;
 
+      // Fetch contacts with unique phone numbers (one per phone)
       const { data: allContacts, error: contactsError } = await supabase
         .from("contacts")
-        .select("id");
+        .select("id, phone");
 
       if (contactsError) throw contactsError;
 
-      const messages = allContacts.map((contact) => ({
+      // Deduplicate by phone - keep only one contact per unique phone number
+      const seenPhones = new Set<string>();
+      const uniqueContacts = allContacts.filter(contact => {
+        if (seenPhones.has(contact.phone)) {
+          return false;
+        }
+        seenPhones.add(contact.phone);
+        return true;
+      });
+
+      const messages = uniqueContacts.map((contact) => ({
         campaign_id: campaign.id,
         contact_id: contact.id,
         status: "pending" as const,
@@ -176,7 +191,7 @@ export function CampaignForm() {
 
           <div className="flex items-center justify-between pt-4 border-t">
             <p className="text-sm text-muted-foreground">
-              {contacts?.length || 0} contato(s) receberão esta mensagem
+              {uniqueContactCount || 0} contato(s) receberão esta mensagem
             </p>
             <Button type="submit" disabled={loading}>
               {loading ? (
