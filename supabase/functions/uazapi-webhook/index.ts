@@ -4,8 +4,50 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.81.1';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-webhook-secret',
 };
+
+// Validate webhook secret for security
+function validateWebhookSecret(req: Request): boolean {
+  const WEBHOOK_SECRET = Deno.env.get('WEBHOOK_SECRET');
+  
+  // If no secret is configured, log warning but allow (for backward compatibility during setup)
+  if (!WEBHOOK_SECRET) {
+    console.warn('⚠️ WEBHOOK_SECRET not configured - webhook validation skipped');
+    return true;
+  }
+  
+  const providedSecret = req.headers.get('x-webhook-secret');
+  
+  if (!providedSecret) {
+    console.error('❌ Missing x-webhook-secret header');
+    return false;
+  }
+  
+  if (providedSecret !== WEBHOOK_SECRET) {
+    console.error('❌ Invalid webhook secret provided');
+    return false;
+  }
+  
+  return true;
+}
+
+// Validate payload structure to prevent injection
+function validatePayload(data: unknown): data is Record<string, unknown> {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  
+  const payload = data as Record<string, unknown>;
+  
+  // Must have at least EventType or event
+  if (!payload.EventType && !payload.event && !payload.type) {
+    console.error('❌ Invalid payload: missing required fields');
+    return false;
+  }
+  
+  return true;
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -13,7 +55,30 @@ serve(async (req) => {
   }
 
   try {
+    // Security: Validate webhook secret
+    if (!validateWebhookSecret(req)) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized: Invalid webhook secret' }),
+        { 
+          status: 401, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      );
+    }
+
     const webhookData = await req.json();
+    
+    // Security: Validate payload structure
+    if (!validatePayload(webhookData)) {
+      return new Response(
+        JSON.stringify({ error: 'Bad Request: Invalid payload structure' }),
+        { 
+          status: 400, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      );
+    }
+
     console.log('=== BASE360 WEBHOOK RECEIVED ===');
     console.log('EventType:', webhookData.EventType);
     console.log('State:', webhookData.state);
@@ -28,38 +93,41 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Extract Base360 specific fields
-    const eventType = webhookData.EventType || 'unknown';
-    const state = webhookData.state; // "Delivered", "Read", "Sent", etc
-    const type = webhookData.type; // "ReadReceipt", etc
-    const chat = webhookData.chat;
-    const message = webhookData.message;
-    const event = webhookData.event;
+    // Extract Base360 specific fields with type safety
+    const eventType = String(webhookData.EventType || 'unknown').slice(0, 100);
+    const state = webhookData.state as string | undefined;
+    const type = webhookData.type as string | undefined;
+    const chat = webhookData.chat as Record<string, unknown> | undefined;
+    const message = webhookData.message as Record<string, unknown> | undefined;
+    const event = webhookData.event as Record<string, unknown> | undefined;
 
-    // Extract phone number from Base360 format
+    // Extract phone number from Base360 format (sanitize to digits only)
     let phone: string | null = null;
-    if (chat?.wa_chatid) {
-      // Format: "5511989404212@s.whatsapp.net" -> "5511989404212"
-      phone = chat.wa_chatid.split('@')[0];
-    } else if (chat?.phone) {
-      // Format: "+55 11 98940-4212" -> "5511989404212"
-      phone = chat.phone.replace(/\D/g, '');
-    } else if (event?.Chat) {
-      // For messages_update events: "214220218081350@lid" 
-      // Need to get from chat object instead
-      phone = event.Chat.split('@')[0];
+    const chatWaId = chat?.wa_chatid;
+    const chatPhone = chat?.phone;
+    const eventChat = event?.Chat;
+    
+    if (typeof chatWaId === 'string') {
+      phone = chatWaId.split('@')[0].replace(/\D/g, '').slice(0, 20);
+    } else if (typeof chatPhone === 'string') {
+      phone = chatPhone.replace(/\D/g, '').slice(0, 20);
+    } else if (typeof eventChat === 'string') {
+      phone = eventChat.split('@')[0].replace(/\D/g, '').slice(0, 20);
     }
 
-    // Extract message ID for correlation
+    // Extract message ID for correlation (sanitize)
     let messageId: string | null = null;
-    if (message?.messageid) {
-      messageId = message.messageid;
-    } else if (message?.id) {
-      // Format: "5511913185456:3EB0A7F1340EA7803FC9BE" -> "3EB0A7F1340EA7803FC9BE"
-      const parts = message.id.split(':');
-      messageId = parts.length > 1 ? parts[1] : parts[0];
-    } else if (event?.MessageIDs && event.MessageIDs.length > 0) {
-      messageId = event.MessageIDs[0];
+    const msgId = message?.messageid;
+    const msgIdAlt = message?.id;
+    const eventMsgIds = event?.MessageIDs;
+    
+    if (typeof msgId === 'string') {
+      messageId = msgId.slice(0, 100);
+    } else if (typeof msgIdAlt === 'string') {
+      const parts = msgIdAlt.split(':');
+      messageId = (parts.length > 1 ? parts[1] : parts[0]).slice(0, 100);
+    } else if (Array.isArray(eventMsgIds) && eventMsgIds.length > 0) {
+      messageId = String(eventMsgIds[0]).slice(0, 100);
     }
 
     console.log('Extracted phone:', phone);
@@ -68,8 +136,9 @@ serve(async (req) => {
 
     // Determine status from Base360 state
     let status: string | null = null;
-    const stateUpper = state?.toUpperCase() || '';
-    const eventTypeUpper = event?.Type?.toUpperCase() || '';
+    const stateUpper = typeof state === 'string' ? state.toUpperCase() : '';
+    const eventTypeVal = event?.Type;
+    const eventTypeUpper = typeof eventTypeVal === 'string' ? eventTypeVal.toUpperCase() : '';
     
     if (stateUpper === 'DELIVERED' || eventTypeUpper === 'DELIVERED') {
       status = 'delivered';
@@ -87,7 +156,7 @@ serve(async (req) => {
       .insert({
         event_type: eventType,
         phone: phone,
-        status: status || state,
+        status: status || (typeof state === 'string' ? state.slice(0, 50) : 'unknown'),
         payload: webhookData,
         processed: false
       });
