@@ -7,6 +7,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// CONFIGURATION: Limit messages per execution to stay under 150s timeout
+const MAX_MESSAGES_PER_CALL = 100; // ~80 seconds at 800ms delay
+const DELAY_BETWEEN_MESSAGES = 800;
+const DELAY_BETWEEN_BATCHES = 2000;
+const BATCH_SIZE = 50;
+
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Get user's UAZAPI credentials from database
@@ -325,7 +331,18 @@ async function checkCancelled(supabase: any, campaignId: string): Promise<boolea
   return data?.status === 'cancelled';
 }
 
-// BACKGROUND TASK: Send messages in batches
+// Count remaining pending messages
+async function countPendingMessages(supabase: any, campaignId: string): Promise<number> {
+  const { count } = await supabase
+    .from('messages')
+    .select('*', { count: 'exact', head: true })
+    .eq('campaign_id', campaignId)
+    .eq('status', 'pending');
+  
+  return count || 0;
+}
+
+// BACKGROUND TASK: Send messages in batches (limited to MAX_MESSAGES_PER_CALL)
 async function sendMessagesInBackground(
   supabase: any,
   campaignId: string,
@@ -333,11 +350,7 @@ async function sendMessagesInBackground(
   campaign: any,
   credentials: { baseUrl: string; token: string }
 ) {
-  console.log(`🚀 BACKGROUND TASK STARTED: ${messages.length} messages to send`);
-  
-  const BATCH_SIZE = 50;
-  const DELAY_BETWEEN_MESSAGES = 800; // 800ms between messages (faster but safe)
-  const DELAY_BETWEEN_BATCHES = 2000; // 2s pause between batches
+  console.log(`🚀 BACKGROUND TASK STARTED: ${messages.length} messages to process this call`);
   
   let successCount = 0;
   let failCount = 0;
@@ -434,7 +447,7 @@ async function sendMessagesInBackground(
         
         successCount++;
 
-        // Delay between messages (800ms)
+        // Delay between messages
         await sleep(DELAY_BETWEEN_MESSAGES);
 
       } catch (error) {
@@ -462,25 +475,35 @@ async function sendMessagesInBackground(
     }
   }
 
-  // Update campaign status
+  // Check if there are more pending messages
+  const remainingPending = await countPendingMessages(supabase, campaignId);
+  
+  // Determine final status
   let finalStatus: string;
   if (cancelled) {
     finalStatus = 'cancelled';
+  } else if (remainingPending > 0) {
+    // Still has pending messages - keep as "sending" so frontend can continue
+    finalStatus = 'sending';
+    console.log(`⏳ ${remainingPending} messages still pending - keeping status as "sending"`);
   } else if (failCount === messages.length) {
     finalStatus = 'failed';
   } else {
     finalStatus = 'completed';
   }
+
+  // Only update completed_at if actually done
+  const updateData: Record<string, any> = { status: finalStatus };
+  if (finalStatus === 'completed' || finalStatus === 'cancelled' || finalStatus === 'failed') {
+    updateData.completed_at = new Date().toISOString();
+  }
   
   await supabase
     .from('campaigns')
-    .update({ 
-      status: finalStatus, 
-      completed_at: new Date().toISOString() 
-    })
+    .update(updateData)
     .eq('id', campaignId);
 
-  console.log(`\n🏁 CAMPAIGN FINISHED: ${successCount} sent, ${failCount} failed, status: ${finalStatus}`);
+  console.log(`\n🏁 BATCH FINISHED: ${successCount} sent, ${failCount} failed, remaining: ${remainingPending}, status: ${finalStatus}`);
 }
 
 serve(async (req) => {
@@ -560,29 +583,47 @@ serve(async (req) => {
       .update({ status: 'sending' })
       .eq('id', campaignId);
 
+    // IMPORTANT: Limit to MAX_MESSAGES_PER_CALL to avoid timeout
     const { data: messages, error: messagesError } = await supabase
       .from('messages')
       .select('*, contacts(*)')
       .eq('campaign_id', campaignId)
-      .eq('status', 'pending');
+      .eq('status', 'pending')
+      .limit(MAX_MESSAGES_PER_CALL);
 
     if (messagesError) {
       throw new Error('Failed to fetch messages');
     }
 
+    // Get total pending count for response
+    const totalPending = await countPendingMessages(supabase, campaignId);
+
     if (!messages || messages.length === 0) {
+      // No pending messages - mark as completed
+      await supabase
+        .from('campaigns')
+        .update({ status: 'completed', completed_at: new Date().toISOString() })
+        .eq('id', campaignId);
+
       return new Response(
         JSON.stringify({ 
           success: true, 
           message: 'Nenhuma mensagem pendente para enviar',
           sent: 0, 
-          failed: 0 
+          failed: 0,
+          remaining: 0,
+          needsContinuation: false
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    console.log(`📬 ${messages.length} messages to send, ${campaign.media_urls?.length || 0} media files`);
+    const needsContinuation = totalPending > MAX_MESSAGES_PER_CALL;
+
+    console.log(`📬 Processing ${messages.length} of ${totalPending} pending messages, ${campaign.media_urls?.length || 0} media files`);
+    if (needsContinuation) {
+      console.log(`⚠️ Will need continuation - ${totalPending - messages.length} messages remaining after this batch`);
+    }
 
     // START BACKGROUND TASK - This continues after response is sent!
     // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
@@ -594,8 +635,13 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: true, 
-        message: `Enviando ${messages.length} mensagens em segundo plano...`,
-        total: messages.length,
+        message: needsContinuation 
+          ? `Enviando ${messages.length} de ${totalPending} mensagens. Continuação automática necessária.`
+          : `Enviando ${messages.length} mensagens em segundo plano...`,
+        total: totalPending,
+        processing: messages.length,
+        remaining: totalPending - messages.length,
+        needsContinuation,
         status: 'processing'
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
