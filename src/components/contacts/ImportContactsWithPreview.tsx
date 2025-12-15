@@ -387,20 +387,32 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
       }
 
       // Insert em batches de 500 para evitar timeout
+      // Using upsert to handle duplicates - if phone already exists for user, update name
       const BATCH_SIZE = 500;
       let inserted = 0;
+      let updated = 0;
       
       for (let i = 0; i < contactsToInsert.length; i += BATCH_SIZE) {
         const batch = contactsToInsert.slice(i, i + BATCH_SIZE);
-        const { error } = await supabase.from("contacts").insert(batch);
+        
+        // Use upsert with onConflict to handle duplicates
+        const { data, error } = await supabase
+          .from("contacts")
+          .upsert(batch, { 
+            onConflict: 'user_id,phone',
+            ignoreDuplicates: false // Update name if phone exists
+          })
+          .select();
+          
         if (error) throw error;
+        
         inserted += batch.length;
         
         // Atualiza progresso
         if (contactsToInsert.length > BATCH_SIZE) {
           toast({
             title: "Importando...",
-            description: `${inserted} de ${contactsToInsert.length} contatos inseridos`,
+            description: `${inserted} de ${contactsToInsert.length} contatos processados`,
           });
         }
       }
@@ -409,7 +421,7 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
 
       toast({
         title: "Importação concluída com sucesso!",
-        description: `${contactsToInsert.length} contatos importados! ${
+        description: `${contactsToInsert.length} contatos processados! Duplicatas foram atualizadas automaticamente. ${
           invalidCount > 0 ? `${invalidCount} contatos inválidos foram ignorados.` : ""
         }`,
       });
