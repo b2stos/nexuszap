@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { NavLink } from "@/components/NavLink";
-import { LayoutDashboard, Users, Send, PlusCircle, MessageSquare, QrCode, MessageCircle, Menu, Settings } from "lucide-react";
+import { LayoutDashboard, Users, Send, PlusCircle, MessageSquare, QrCode, MessageCircle, Menu, Settings, Crown } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { useUserRole } from "@/hooks/useUserRole";
 
-function SidebarContent() {
+function SidebarContent({ isAdmin }: { isAdmin: boolean }) {
   return (
     <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-card px-6 pb-4">
       <div className="flex h-16 shrink-0 items-center gap-2">
@@ -86,6 +87,18 @@ function SidebarContent() {
                   Configurações
                 </NavLink>
               </li>
+              {isAdmin && (
+                <li>
+                  <NavLink
+                    to="/dashboard/admin"
+                    className="group flex gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold hover:bg-muted text-primary"
+                    activeClassName="bg-muted text-primary"
+                  >
+                    <Crown className="h-6 w-6 shrink-0" />
+                    Administração
+                  </NavLink>
+                </li>
+              )}
             </ul>
           </li>
         </ul>
@@ -96,6 +109,7 @@ function SidebarContent() {
 
 export function DashboardSidebar() {
   const [open, setOpen] = useState(false);
+  const { isAdmin } = useUserRole();
 
   return (
     <>
@@ -108,7 +122,7 @@ export function DashboardSidebar() {
             </Button>
           </SheetTrigger>
           <SheetContent side="left" className="p-0 w-64">
-            <SidebarContent />
+            <SidebarContent isAdmin={isAdmin} />
           </SheetContent>
         </Sheet>
       </div>
@@ -116,7 +130,7 @@ export function DashboardSidebar() {
       {/* Desktop sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
         <div className="border-r border-border">
-          <SidebarContent />
+          <SidebarContent isAdmin={isAdmin} />
         </div>
       </div>
     </>
