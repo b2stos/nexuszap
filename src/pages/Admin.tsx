@@ -7,8 +7,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Users, Send, MessageSquare, UserCheck, Crown, Shield, Loader2 } from "lucide-react";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Users, Send, MessageSquare, UserCheck, Crown, Shield, Loader2, Trash2, Megaphone } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
 interface UserWithStats {
   id: string;
@@ -17,6 +20,16 @@ interface UserWithStats {
   role: "admin" | "user";
   campaigns_count: number;
   contacts_count: number;
+  messages_count: number;
+}
+
+interface CampaignWithOwner {
+  id: string;
+  name: string;
+  status: string;
+  created_at: string;
+  user_id: string;
+  owner_email: string;
   messages_count: number;
 }
 
@@ -32,6 +45,7 @@ export default function Admin() {
   const user = useProtectedUser();
   const { toast } = useToast();
   const [users, setUsers] = useState<UserWithStats[]>([]);
+  const [campaigns, setCampaigns] = useState<CampaignWithOwner[]>([]);
   const [stats, setStats] = useState<GlobalStats>({ 
     total_users: 0, 
     total_campaigns: 0, 
@@ -40,6 +54,7 @@ export default function Admin() {
   });
   const [loading, setLoading] = useState(true);
   const [updatingRole, setUpdatingRole] = useState<string | null>(null);
+  const [deletingCampaign, setDeletingCampaign] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -64,25 +79,37 @@ export default function Admin() {
       .from("user_roles")
       .select("user_id, role");
 
-    // Fetch campaigns count per user
-    const { data: campaigns } = await supabase
+    // Fetch campaigns with details
+    const { data: campaignsData } = await supabase
       .from("campaigns")
-      .select("user_id");
+      .select("id, name, status, created_at, user_id")
+      .order("created_at", { ascending: false });
 
     // Fetch contacts count per user
     const { data: contacts } = await supabase
       .from("contacts")
       .select("user_id");
 
-    // Fetch messages count
+    // Fetch messages count per campaign
     const { data: messages } = await supabase
       .from("messages")
       .select("id, campaign_id");
 
+    // Build campaigns with owner info
+    const campaignsWithOwner: CampaignWithOwner[] = campaignsData?.map(campaign => {
+      const owner = profiles?.find(p => p.id === campaign.user_id);
+      const campaignMessages = messages?.filter(m => m.campaign_id === campaign.id) || [];
+      return {
+        ...campaign,
+        owner_email: owner?.email || "Desconhecido",
+        messages_count: campaignMessages.length,
+      };
+    }) || [];
+
     // Build user stats
     const usersWithStats: UserWithStats[] = profiles?.map(profile => {
       const userRole = roles?.find(r => r.user_id === profile.id);
-      const userCampaigns = campaigns?.filter(c => c.user_id === profile.id) || [];
+      const userCampaigns = campaignsData?.filter(c => c.user_id === profile.id) || [];
       const userContacts = contacts?.filter(c => c.user_id === profile.id) || [];
       
       return {
@@ -92,19 +119,20 @@ export default function Admin() {
         role: (userRole?.role as "admin" | "user") || "user",
         campaigns_count: userCampaigns.length,
         contacts_count: userContacts.length,
-        messages_count: 0, // Will calculate below
+        messages_count: 0,
       };
     }) || [];
 
     // Calculate global stats
     setStats({
       total_users: profiles?.length || 0,
-      total_campaigns: campaigns?.length || 0,
+      total_campaigns: campaignsData?.length || 0,
       total_contacts: contacts?.length || 0,
       total_messages: messages?.length || 0,
     });
 
     setUsers(usersWithStats);
+    setCampaigns(campaignsWithOwner);
     setLoading(false);
   }
 
@@ -145,6 +173,65 @@ export default function Admin() {
     setUpdatingRole(null);
   }
 
+  async function deleteCampaign(campaignId: string) {
+    setDeletingCampaign(campaignId);
+
+    // First delete all messages associated with this campaign
+    const { error: messagesError } = await supabase
+      .from("messages")
+      .delete()
+      .eq("campaign_id", campaignId);
+
+    if (messagesError) {
+      toast({
+        title: "Erro",
+        description: "Não foi possível excluir as mensagens da campanha.",
+        variant: "destructive",
+      });
+      setDeletingCampaign(null);
+      return;
+    }
+
+    // Then delete the campaign
+    const { error: campaignError } = await supabase
+      .from("campaigns")
+      .delete()
+      .eq("id", campaignId);
+
+    if (campaignError) {
+      toast({
+        title: "Erro",
+        description: "Não foi possível excluir a campanha.",
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Sucesso",
+        description: "Campanha excluída com sucesso.",
+      });
+      setCampaigns(prev => prev.filter(c => c.id !== campaignId));
+      // Update stats
+      setStats(prev => ({
+        ...prev,
+        total_campaigns: prev.total_campaigns - 1,
+      }));
+    }
+
+    setDeletingCampaign(null);
+  }
+
+  const getStatusBadge = (status: string) => {
+    const statusMap: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+      draft: { label: "Rascunho", variant: "secondary" },
+      sending: { label: "Enviando", variant: "default" },
+      completed: { label: "Concluída", variant: "outline" },
+      failed: { label: "Falhou", variant: "destructive" },
+      cancelled: { label: "Cancelada", variant: "destructive" },
+    };
+    const config = statusMap[status] || { label: status, variant: "secondary" as const };
+    return <Badge variant={config.variant}>{config.label}</Badge>;
+  };
+
   return (
     <DashboardLayout user={user}>
       <div className="space-y-6">
@@ -152,7 +239,7 @@ export default function Admin() {
           <Crown className="h-8 w-8 text-primary" />
           <div>
             <h1 className="text-3xl font-bold">Painel Administrativo</h1>
-            <p className="text-muted-foreground">Gerencie usuários e visualize métricas globais</p>
+            <p className="text-muted-foreground">Gerencie usuários, campanhas e visualize métricas globais</p>
           </div>
         </div>
 
@@ -195,6 +282,93 @@ export default function Admin() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Campaigns Management */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Megaphone className="h-5 w-5 text-primary" />
+              <div>
+                <CardTitle>Gerenciamento de Campanhas</CardTitle>
+                <CardDescription>
+                  Visualize e exclua campanhas de todos os usuários
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : campaigns.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                Nenhuma campanha encontrada
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Campanha</TableHead>
+                    <TableHead>Proprietário</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Data</TableHead>
+                    <TableHead className="text-center">Mensagens</TableHead>
+                    <TableHead className="text-right">Ações</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {campaigns.map((campaign) => (
+                    <TableRow key={campaign.id}>
+                      <TableCell className="font-medium">{campaign.name}</TableCell>
+                      <TableCell className="text-muted-foreground">{campaign.owner_email}</TableCell>
+                      <TableCell>{getStatusBadge(campaign.status)}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {format(new Date(campaign.created_at), "dd/MM/yyyy", { locale: ptBR })}
+                      </TableCell>
+                      <TableCell className="text-center">{campaign.messages_count}</TableCell>
+                      <TableCell className="text-right">
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              disabled={deletingCampaign === campaign.id}
+                            >
+                              {deletingCampaign === campaign.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Excluir campanha?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Esta ação não pode ser desfeita. Isso excluirá permanentemente a campanha 
+                                <strong> "{campaign.name}"</strong> e todas as {campaign.messages_count} mensagens associadas.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => deleteCampaign(campaign.id)}
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              >
+                                Excluir
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Users Table */}
         <Card>
