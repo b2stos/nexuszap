@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Progress } from "@/components/ui/progress";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { z } from "zod";
@@ -29,6 +30,14 @@ interface ParsedContact {
   formatted?: string;
 }
 
+interface BatchProgress {
+  currentBatch: number;
+  totalBatches: number;
+  processedContacts: number;
+  totalContacts: number;
+  phase: "parsing" | "validating" | "importing";
+}
+
 const contactSchema = z.object({
   name: z.string()
     .trim()
@@ -41,14 +50,19 @@ const contactSchema = z.object({
     .regex(/^[0-9]+$/, { message: "Telefone deve conter apenas números" }),
 });
 
+const CONTACTS_PER_BATCH = 5000;
+
 export function ImportContactsWithPreview({ open, onOpenChange }: ImportContactsWithPreviewProps) {
   const [file, setFile] = useState<File | null>(null);
   const [contacts, setContacts] = useState<ParsedContact[]>([]);
+  const [totalContactsInFile, setTotalContactsInFile] = useState(0);
   const [loading, setLoading] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [validating, setValidating] = useState(false);
   const [useAI, setUseAI] = useState(true);
   const [columnMapping, setColumnMapping] = useState<{ nameColumn: string; phoneColumn: string } | null>(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  const [rawContactsData, setRawContactsData] = useState<any[]>([]);
   const queryClient = useQueryClient();
 
   const validateContact = (contact: { name: string; phone: string }): { isValid: boolean; error?: string } => {
@@ -63,36 +77,19 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
     }
   };
 
-  const parseCSV = (file: File): Promise<ParsedContact[]> => {
+  const parseCSV = (file: File): Promise<any[]> => {
     return new Promise((resolve, reject) => {
       Papa.parse(file, {
         header: true,
         skipEmptyLines: true,
         transformHeader: (header: string) => {
-          // Normalize headers
           const normalized = header.toLowerCase().trim();
           if (normalized.includes("nome") || normalized === "name") return "name";
           if (normalized.includes("telefone") || normalized === "phone" || normalized.includes("tel")) return "phone";
           return normalized;
         },
         complete: (results) => {
-          const parsedContacts: ParsedContact[] = results.data
-            .map((row: any) => {
-              const name = (row.name || row.nome || "").trim();
-              const phone = String(row.phone || row.telefone || row.tel || "").replace(/\D/g, "");
-
-              const validation = validateContact({ name, phone });
-
-              return {
-                name,
-                phone,
-                status: validation.isValid ? "pending" : "invalid",
-                error: validation.error,
-              } as ParsedContact;
-            })
-            .filter((contact) => contact.name || contact.phone); // Remove completely empty rows
-
-          resolve(parsedContacts);
+          resolve(results.data);
         },
         error: (error) => {
           reject(error);
@@ -101,7 +98,7 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
     });
   };
 
-  const parseExcel = async (file: File): Promise<ParsedContact[]> => {
+  const parseExcel = async (file: File): Promise<any[]> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
 
@@ -111,40 +108,8 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
           const workbook = XLSX.read(data, { type: "binary", cellText: false, cellDates: true });
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
-          
-          // Convert with raw values to handle scientific notation
           const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: "" });
-
-          const parsedContacts: ParsedContact[] = jsonData
-            .map((row: any) => {
-              const name = (row.nome || row.name || row.Nome || row.Name || "").trim();
-              
-              // Handle scientific notation and various formats
-              let phoneRaw = String(row.telefone || row.phone || row.Telefone || row.Phone || row.tel || "");
-              
-              // Convert scientific notation (e.g., 5.51199E+10) to full number
-              if (phoneRaw.includes('E') || phoneRaw.includes('e')) {
-                try {
-                  phoneRaw = Number(phoneRaw).toFixed(0);
-                } catch {
-                  // Keep as is if conversion fails
-                }
-              }
-              
-              const phone = phoneRaw.replace(/\D/g, "");
-
-              const validation = validateContact({ name, phone });
-
-              return {
-                name,
-                phone,
-                status: validation.isValid ? "pending" : "invalid",
-                error: validation.error,
-              } as ParsedContact;
-            })
-            .filter((contact) => contact.name || contact.phone);
-
-          resolve(parsedContacts);
+          resolve(jsonData);
         } catch (error) {
           reject(error);
         }
@@ -155,77 +120,66 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
     });
   };
 
-  const parseWithAI = async (file: File): Promise<ParsedContact[]> => {
-    return new Promise(async (resolve, reject) => {
-      const reader = new FileReader();
-
-      reader.onload = async (e) => {
-        try {
-          const data = e.target?.result;
-          let rawData: any[];
-
-          if (file.name.endsWith(".csv")) {
-            // Parse CSV to raw data
-            const result = Papa.parse(data as string, { header: true, skipEmptyLines: true });
-            rawData = result.data;
-          } else {
-            // Parse Excel to raw data
-            const workbook = XLSX.read(data, { type: "binary", cellText: false, cellDates: true });
-            const sheetName = workbook.SheetNames[0];
-            const worksheet = workbook.Sheets[sheetName];
-            rawData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: "" });
+  const processRawDataToContacts = (rawData: any[]): ParsedContact[] => {
+    return rawData
+      .map((row: any) => {
+        const name = (row.nome || row.name || row.Nome || row.Name || "").trim();
+        let phoneRaw = String(row.telefone || row.phone || row.Telefone || row.Phone || row.tel || "");
+        
+        if (phoneRaw.includes('E') || phoneRaw.includes('e')) {
+          try {
+            phoneRaw = Number(phoneRaw).toFixed(0);
+          } catch {
+            // Keep as is
           }
-
-          if (rawData.length === 0) {
-            reject(new Error("Arquivo vazio"));
-            return;
-          }
-
-          // Call AI edge function
-          const { data: aiResult, error: aiError } = await supabase.functions.invoke(
-            "smart-contact-import",
-            { body: { rawData } }
-          );
-
-          if (aiError) {
-            console.error("AI parsing error:", aiError);
-            reject(new Error(aiError.message || "Erro ao processar com IA"));
-            return;
-          }
-
-          if (!aiResult?.processedContacts) {
-            reject(new Error("Resposta inválida da IA"));
-            return;
-          }
-
-          // Set column mapping for display
-          if (aiResult.columnMapping) {
-            setColumnMapping(aiResult.columnMapping);
-          }
-
-          // Convert AI results to ParsedContact format
-          const parsedContacts: ParsedContact[] = aiResult.processedContacts.map((contact: any) => ({
-            name: contact.name,
-            phone: contact.phone,
-            formatted: contact.phone,
-            status: contact.isValid ? "valid" : "invalid",
-            error: contact.error,
-          }));
-
-          resolve(parsedContacts);
-        } catch (error: any) {
-          reject(error);
         }
-      };
+        
+        const phone = phoneRaw.replace(/\D/g, "");
+        const validation = validateContact({ name, phone });
 
-      reader.onerror = () => reject(new Error("Erro ao ler arquivo"));
-      
-      if (file.name.endsWith(".csv")) {
-        reader.readAsText(file);
-      } else {
-        reader.readAsBinaryString(file);
-      }
+        return {
+          name,
+          phone,
+          status: validation.isValid ? "pending" : "invalid",
+          error: validation.error,
+        } as ParsedContact;
+      })
+      .filter((contact) => contact.name || contact.phone);
+  };
+
+  const parseWithAI = async (rawData: any[], batchIndex: number, totalBatches: number): Promise<ParsedContact[]> => {
+    setBatchProgress({
+      currentBatch: batchIndex + 1,
+      totalBatches,
+      processedContacts: batchIndex * CONTACTS_PER_BATCH,
+      totalContacts: totalBatches * CONTACTS_PER_BATCH,
+      phase: "parsing",
     });
+
+    const { data: aiResult, error: aiError } = await supabase.functions.invoke(
+      "smart-contact-import",
+      { body: { rawData } }
+    );
+
+    if (aiError) {
+      throw new Error(aiError.message || "Erro ao processar com IA");
+    }
+
+    if (!aiResult?.processedContacts) {
+      throw new Error("Resposta inválida da IA");
+    }
+
+    if (batchIndex === 0 && aiResult.columnMapping) {
+      setColumnMapping(aiResult.columnMapping);
+    }
+
+    return aiResult.processedContacts.map((contact: any) => ({
+      name: contact.name,
+      phone: contact.phone,
+      formatted: contact.phone,
+      status: contact.isValid ? "valid" : "invalid",
+      error: contact.error,
+    }));
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -235,49 +189,54 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
     setFile(selectedFile);
     setContacts([]);
     setColumnMapping(null);
+    setBatchProgress(null);
     setParsing(true);
 
     try {
-      let parsedContacts: ParsedContact[];
+      let rawData: any[];
 
-      if (useAI) {
-        // Use AI-powered parsing
-        parsedContacts = await parseWithAI(selectedFile);
+      // First, read the entire file
+      if (selectedFile.name.endsWith(".csv")) {
+        rawData = await parseCSV(selectedFile);
+      } else if (selectedFile.name.endsWith(".xlsx") || selectedFile.name.endsWith(".xls")) {
+        rawData = await parseExcel(selectedFile);
       } else {
-        // Use traditional parsing
-        if (selectedFile.name.endsWith(".csv")) {
-          parsedContacts = await parseCSV(selectedFile);
-        } else if (selectedFile.name.endsWith(".xlsx") || selectedFile.name.endsWith(".xls")) {
-          parsedContacts = await parseExcel(selectedFile);
-        } else {
-          throw new Error("Formato de arquivo não suportado");
-        }
+        throw new Error("Formato de arquivo não suportado");
       }
 
-      if (parsedContacts.length === 0) {
+      if (rawData.length === 0) {
         toast({
           title: "Arquivo vazio",
-          description: "O arquivo não contém contatos válidos",
+          description: "O arquivo não contém dados",
           variant: "destructive",
         });
         setFile(null);
         return;
       }
 
-      if (parsedContacts.length > 5000) {
-        toast({
-          title: "Muitos contatos",
-          description: `Limite de 5000 contatos por importação. Encontrados: ${parsedContacts.length}. Usando os primeiros 5000.`,
-          variant: "destructive",
-        });
-        parsedContacts = parsedContacts.slice(0, 5000);
+      setTotalContactsInFile(rawData.length);
+      setRawContactsData(rawData);
+
+      // For preview, only show first 5000 (will process all in batches on import)
+      const previewData = rawData.slice(0, CONTACTS_PER_BATCH);
+      let parsedContacts: ParsedContact[];
+
+      if (useAI) {
+        parsedContacts = await parseWithAI(previewData, 0, Math.ceil(rawData.length / CONTACTS_PER_BATCH));
+      } else {
+        parsedContacts = processRawDataToContacts(previewData);
       }
 
       setContacts(parsedContacts);
 
+      const totalBatches = Math.ceil(rawData.length / CONTACTS_PER_BATCH);
+      const message = rawData.length > CONTACTS_PER_BATCH
+        ? `${rawData.length.toLocaleString()} contatos detectados. Serão processados em ${totalBatches} lotes de ${CONTACTS_PER_BATCH.toLocaleString()}.`
+        : `${parsedContacts.length} contatos encontrados.`;
+
       toast({
         title: useAI ? "IA processou o arquivo!" : "Arquivo processado!",
-        description: `${parsedContacts.length} contatos encontrados. ${useAI ? "Telefones já normalizados pela IA." : "Revise antes de importar."}`,
+        description: message,
       });
     } catch (error: any) {
       toast({
@@ -288,141 +247,147 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
       setFile(null);
     } finally {
       setParsing(false);
+      setBatchProgress(null);
     }
   };
 
   const handleImport = async () => {
-    if (contacts.length === 0) return;
-
-    const validContacts = contacts.filter((c) => c.status === "pending" || c.status === "valid");
-
-    if (validContacts.length === 0) {
-      toast({
-        title: "Nenhum contato válido",
-        description: "Não há contatos válidos para importar",
-        variant: "destructive",
-      });
-      return;
-    }
+    if (rawContactsData.length === 0) return;
 
     setLoading(true);
+    setBatchProgress(null);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado");
 
-      let contactsToInsert;
+      const totalBatches = Math.ceil(rawContactsData.length / CONTACTS_PER_BATCH);
+      let totalInserted = 0;
+      let totalInvalid = 0;
+      let allProcessedContacts: ParsedContact[] = [];
 
-      if (useAI) {
-        // AI already validated, use directly
-        contactsToInsert = validContacts.map((c) => ({
-          user_id: user.id,
-          name: c.name,
-          phone: c.formatted || c.phone,
-          import_batch_id: crypto.randomUUID(),
-        }));
-      } else {
-        // Traditional validation
-        setValidating(true);
+      for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+        const batchStart = batchIndex * CONTACTS_PER_BATCH;
+        const batchEnd = Math.min(batchStart + CONTACTS_PER_BATCH, rawContactsData.length);
+        const batchRawData = rawContactsData.slice(batchStart, batchEnd);
+
+        // Skip first batch if we already have it processed (from preview)
+        let batchContacts: ParsedContact[];
         
-        const BATCH_SIZE = 100;
-        const batches: ParsedContact[][] = [];
-        for (let i = 0; i < validContacts.length; i += BATCH_SIZE) {
-          batches.push(validContacts.slice(i, i + BATCH_SIZE));
-        }
+        if (batchIndex === 0 && contacts.length > 0) {
+          batchContacts = contacts;
+        } else if (useAI) {
+          setBatchProgress({
+            currentBatch: batchIndex + 1,
+            totalBatches,
+            processedContacts: batchStart,
+            totalContacts: rawContactsData.length,
+            phase: "parsing",
+          });
+          batchContacts = await parseWithAI(batchRawData, batchIndex, totalBatches);
+        } else {
+          batchContacts = processRawDataToContacts(batchRawData);
+          
+          // Validate with edge function
+          setValidating(true);
+          setBatchProgress({
+            currentBatch: batchIndex + 1,
+            totalBatches,
+            processedContacts: batchStart,
+            totalContacts: rawContactsData.length,
+            phase: "validating",
+          });
 
-        let updatedContacts = [...contacts];
+          const validContacts = batchContacts.filter(c => c.status === "pending");
+          const VALIDATION_BATCH_SIZE = 100;
+          
+          for (let i = 0; i < validContacts.length; i += VALIDATION_BATCH_SIZE) {
+            const validationBatch = validContacts.slice(i, i + VALIDATION_BATCH_SIZE);
+            const phoneNumbers = validationBatch.map(c => c.phone);
 
-        for (let i = 0; i < batches.length; i++) {
-          const batch = batches[i];
-          const phoneNumbers = batch.map((c) => c.phone);
-
-          const { data: validationData, error: validationError } = await supabase.functions.invoke(
-            "validate-phone-numbers",
-            { body: { phoneNumbers } }
-          );
-
-          if (validationError || !validationData?.results) {
-            throw new Error("Erro na validação de telefones");
-          }
-
-          batch.forEach((contact, index) => {
-            const result = validationData.results[index];
-            const contactIndex = updatedContacts.findIndex(
-              (c) => c.phone === contact.phone && c.name === contact.name
+            const { data: validationData, error: validationError } = await supabase.functions.invoke(
+              "validate-phone-numbers",
+              { body: { phoneNumbers } }
             );
 
-            if (contactIndex !== -1) {
-              updatedContacts[contactIndex] = {
-                ...updatedContacts[contactIndex],
-                status: result.isValid ? "valid" : "invalid",
-                error: result.isValid ? undefined : result.reason,
-                formatted: result.isValid ? result.formatted : undefined,
-              };
+            if (validationError || !validationData?.results) {
+              throw new Error("Erro na validação de telefones");
             }
-          });
+
+            validationBatch.forEach((contact, index) => {
+              const result = validationData.results[index];
+              const contactIndex = batchContacts.findIndex(
+                c => c.phone === contact.phone && c.name === contact.name
+              );
+
+              if (contactIndex !== -1) {
+                batchContacts[contactIndex] = {
+                  ...batchContacts[contactIndex],
+                  status: result.isValid ? "valid" : "invalid",
+                  error: result.isValid ? undefined : result.reason,
+                  formatted: result.isValid ? result.formatted : undefined,
+                };
+              }
+            });
+          }
+          setValidating(false);
         }
 
-        setContacts(updatedContacts);
-        setValidating(false);
+        allProcessedContacts = [...allProcessedContacts, ...batchContacts];
 
-        contactsToInsert = updatedContacts
-          .filter((c) => c.status === "valid" && c.formatted)
-          .map((c) => ({
+        // Prepare contacts for insertion
+        const validContactsForInsert = batchContacts
+          .filter(c => c.status === "valid" || (c.status === "pending" && useAI))
+          .filter(c => (c.formatted || c.phone))
+          .map(c => ({
             user_id: user.id,
             name: c.name,
-            phone: c.formatted!,
+            phone: c.formatted || c.phone,
             import_batch_id: crypto.randomUUID(),
           }));
-      }
 
-      if (contactsToInsert.length === 0) {
-        toast({
-          title: "Nenhum contato válido",
-          description: "Nenhum contato passou na validação",
-          variant: "destructive",
+        totalInvalid += batchContacts.filter(c => c.status === "invalid").length;
+
+        // Insert in sub-batches
+        setBatchProgress({
+          currentBatch: batchIndex + 1,
+          totalBatches,
+          processedContacts: batchStart,
+          totalContacts: rawContactsData.length,
+          phase: "importing",
         });
-        setLoading(false);
-        return;
-      }
 
-      // Insert em batches de 500 para evitar timeout
-      // Using upsert to handle duplicates - if phone already exists for user, update name
-      const BATCH_SIZE = 500;
-      let inserted = 0;
-      let updated = 0;
-      
-      for (let i = 0; i < contactsToInsert.length; i += BATCH_SIZE) {
-        const batch = contactsToInsert.slice(i, i + BATCH_SIZE);
-        
-        // Use upsert with onConflict to handle duplicates
-        const { data, error } = await supabase
-          .from("contacts")
-          .upsert(batch, { 
-            onConflict: 'user_id,phone',
-            ignoreDuplicates: false // Update name if phone exists
-          })
-          .select();
+        const INSERT_BATCH_SIZE = 500;
+        for (let i = 0; i < validContactsForInsert.length; i += INSERT_BATCH_SIZE) {
+          const insertBatch = validContactsForInsert.slice(i, i + INSERT_BATCH_SIZE);
           
-        if (error) throw error;
-        
-        inserted += batch.length;
-        
-        // Atualiza progresso
-        if (contactsToInsert.length > BATCH_SIZE) {
+          const { error } = await supabase
+            .from("contacts")
+            .upsert(insertBatch, { 
+              onConflict: 'user_id,phone',
+              ignoreDuplicates: false
+            });
+            
+          if (error) throw error;
+          totalInserted += insertBatch.length;
+        }
+
+        // Update UI with progress for this batch
+        if (totalBatches > 1) {
           toast({
-            title: "Importando...",
-            description: `${inserted} de ${contactsToInsert.length} contatos processados`,
+            title: `Lote ${batchIndex + 1}/${totalBatches} concluído`,
+            description: `${validContactsForInsert.length.toLocaleString()} contatos processados.`,
           });
         }
       }
 
-      const invalidCount = contacts.filter((c) => c.status === "invalid").length;
+      // Update contacts state with all processed
+      setContacts(allProcessedContacts);
 
       toast({
         title: "Importação concluída com sucesso!",
-        description: `${contactsToInsert.length} contatos processados! Duplicatas foram atualizadas automaticamente. ${
-          invalidCount > 0 ? `${invalidCount} contatos inválidos foram ignorados.` : ""
+        description: `${totalInserted.toLocaleString()} contatos importados! ${
+          totalInvalid > 0 ? `${totalInvalid.toLocaleString()} inválidos ignorados.` : ""
         }`,
       });
 
@@ -432,6 +397,9 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
         setFile(null);
         setContacts([]);
         setColumnMapping(null);
+        setRawContactsData([]);
+        setTotalContactsInFile(0);
+        setBatchProgress(null);
         onOpenChange?.(false);
       }, 2000);
     } catch (error: any) {
@@ -443,6 +411,7 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
     } finally {
       setLoading(false);
       setValidating(false);
+      setBatchProgress(null);
     }
   };
 
@@ -450,12 +419,19 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
     setFile(null);
     setContacts([]);
     setColumnMapping(null);
+    setRawContactsData([]);
+    setTotalContactsInFile(0);
+    setBatchProgress(null);
     onOpenChange?.(false);
   };
 
   const validCount = contacts.filter((c) => c.status === "valid").length;
   const pendingCount = contacts.filter((c) => c.status === "pending").length;
   const invalidCount = contacts.filter((c) => c.status === "invalid").length;
+  const totalBatches = Math.ceil(totalContactsInFile / CONTACTS_PER_BATCH);
+  const progressPercent = batchProgress 
+    ? Math.round((batchProgress.processedContacts / batchProgress.totalContacts) * 100)
+    : 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -467,6 +443,10 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
           </DialogTitle>
           <DialogDescription>
             Envie um arquivo CSV ou XLSX em qualquer formato. {useAI ? "A IA detectará automaticamente as colunas." : "Use o formato padrão com colunas 'nome' e 'telefone'."}
+            <br />
+            <span className="text-primary font-medium">
+              Sem limite de contatos - processamento automático em lotes de 5.000.
+            </span>
           </DialogDescription>
         </DialogHeader>
 
@@ -521,22 +501,62 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
             </p>
           </div>
 
-          {/* Parsing Status */}
-          {parsing && (
-            <Alert>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <AlertDescription>Processando arquivo...</AlertDescription>
+          {/* Batch Info for large files */}
+          {totalContactsInFile > CONTACTS_PER_BATCH && (
+            <Alert className="bg-blue-500/10 border-blue-500/20">
+              <AlertTriangle className="h-4 w-4 text-blue-500" />
+              <AlertDescription>
+                <strong>Arquivo grande detectado:</strong> {totalContactsInFile.toLocaleString()} contatos serão processados em {totalBatches} lotes automáticos.
+                <br />
+                <span className="text-xs text-muted-foreground">
+                  Preview mostrando primeiros {Math.min(contacts.length, CONTACTS_PER_BATCH).toLocaleString()} contatos.
+                </span>
+              </AlertDescription>
             </Alert>
           )}
 
+          {/* Parsing/Batch Progress */}
+          {(parsing || batchProgress) && (
+            <div className="space-y-3 p-4 border rounded-lg bg-muted/30">
+              <div className="flex justify-between text-sm">
+                <span className="font-medium">
+                  {parsing ? "Analisando arquivo..." : 
+                   batchProgress?.phase === "parsing" ? "Processando com IA..." :
+                   batchProgress?.phase === "validating" ? "Validando telefones..." : 
+                   "Importando contatos..."}
+                </span>
+                {batchProgress && (
+                  <span className="text-muted-foreground">
+                    Lote {batchProgress.currentBatch} de {batchProgress.totalBatches}
+                  </span>
+                )}
+              </div>
+              {batchProgress && (
+                <>
+                  <Progress value={progressPercent} className="h-2" />
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>{batchProgress.processedContacts.toLocaleString()} processados</span>
+                    <span>{batchProgress.totalContacts.toLocaleString()} total</span>
+                  </div>
+                </>
+              )}
+              {parsing && !batchProgress && (
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span className="text-sm text-muted-foreground">Lendo arquivo...</span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Statistics */}
-          {contacts.length > 0 && (
+          {contacts.length > 0 && !parsing && (
             <div className="grid grid-cols-3 gap-4">
               <Alert>
                 <AlertDescription className="flex items-center gap-2">
                   <FileText className="h-4 w-4" />
                   <div>
-                    <div className="font-semibold">{contacts.length}</div>
+                    <div className="font-semibold">{totalContactsInFile > CONTACTS_PER_BATCH ? totalContactsInFile.toLocaleString() : contacts.length}</div>
                     <div className="text-xs text-muted-foreground">Total</div>
                   </div>
                 </AlertDescription>
@@ -551,7 +571,7 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
                   )}
                   <div>
                     <div className="font-semibold">{validCount + pendingCount}</div>
-                    <div className="text-xs text-muted-foreground">Válidos</div>
+                    <div className="text-xs text-muted-foreground">Válidos (preview)</div>
                   </div>
                 </AlertDescription>
               </Alert>
@@ -561,7 +581,7 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
                   <XCircle className="h-4 w-4 text-red-500" />
                   <div>
                     <div className="font-semibold">{invalidCount}</div>
-                    <div className="text-xs text-muted-foreground">Inválidos</div>
+                    <div className="text-xs text-muted-foreground">Inválidos (preview)</div>
                   </div>
                 </AlertDescription>
               </Alert>
@@ -577,7 +597,7 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
           )}
 
           {/* Preview Table */}
-          {contacts.length > 0 && (
+          {contacts.length > 0 && !parsing && (
             <div className="flex-1 overflow-hidden border rounded-lg">
               <ScrollArea className="h-[300px]">
                 <Table>
@@ -590,7 +610,7 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {contacts.map((contact, index) => (
+                    {contacts.slice(0, 100).map((contact, index) => (
                       <TableRow key={index}>
                         <TableCell className="font-mono text-xs">{index + 1}</TableCell>
                         <TableCell className="font-medium">{contact.name}</TableCell>
@@ -619,6 +639,18 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
                         </TableCell>
                       </TableRow>
                     ))}
+                    {contacts.length > 100 && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center text-muted-foreground text-sm py-4">
+                          ... e mais {(contacts.length - 100).toLocaleString()} contatos no preview
+                          {totalContactsInFile > CONTACTS_PER_BATCH && (
+                            <span className="block text-xs">
+                              ({(totalContactsInFile - CONTACTS_PER_BATCH).toLocaleString()} adicionais serão processados durante a importação)
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )}
                   </TableBody>
                 </Table>
               </ScrollArea>
@@ -638,12 +670,12 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
               {loading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Importando...
+                  {batchProgress?.phase === "importing" ? "Importando..." : "Processando..."}
                 </>
               ) : (
                 <>
                   <Upload className="mr-2 h-4 w-4" />
-                  Importar {validCount + pendingCount > 0 && `(${validCount + pendingCount})`}
+                  Importar {totalContactsInFile > 0 && `(${totalContactsInFile.toLocaleString()})`}
                 </>
               )}
             </Button>
