@@ -28,6 +28,7 @@ interface MessageStats {
   read: number;
   failed: number;
   pending: number;
+  processing: number;
 }
 
 export function CampaignProgress({ campaignId, onComplete }: CampaignProgressProps) {
@@ -38,6 +39,7 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
     read: 0,
     failed: 0,
     pending: 0,
+    processing: 0,
   });
   const [campaignStatus, setCampaignStatus] = useState<string>("sending");
   const [loading, setLoading] = useState(true);
@@ -66,6 +68,7 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
         read: 0,
         failed: 0,
         pending: 0,
+        processing: 0,
       };
 
       messages?.forEach((msg) => {
@@ -84,6 +87,9 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
             break;
           case "pending":
             counts.pending++;
+            break;
+          case "processing":
+            counts.processing++;
             break;
         }
       });
@@ -107,8 +113,10 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
       }
 
       // Check for stall: if status is "sending" but no progress in last few checks
+      // Consider both pending AND processing as "in progress"
       const currentProcessed = counts.sent + counts.delivered + counts.read + counts.failed;
-      if (campaign?.status === "sending" && counts.pending > 0) {
+      const currentInQueue = counts.pending + counts.processing;
+      if (campaign?.status === "sending" && currentInQueue > 0) {
         if (currentProcessed === lastProcessedRef.current) {
           stallCheckCountRef.current++;
           // Consider stalled after 4 checks (12 seconds) with no progress
@@ -189,6 +197,7 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
 
   const processedCount = stats.sent + stats.delivered + stats.read + stats.failed;
   const successCount = stats.sent + stats.delivered + stats.read;
+  const inQueueCount = stats.pending + stats.processing;
   const progressPercent = stats.total > 0 ? (processedCount / stats.total) * 100 : 0;
 
   const handleCancel = async () => {
@@ -315,13 +324,21 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
         </div>
 
         {/* Stats grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           <div className="p-3 rounded-lg bg-muted text-center">
             <div className="flex items-center justify-center gap-1 mb-1">
               <Clock className="h-4 w-4 text-muted-foreground" />
             </div>
             <p className="text-xl font-bold">{stats.pending}</p>
             <p className="text-xs text-muted-foreground">Pendentes</p>
+          </div>
+
+          <div className="p-3 rounded-lg bg-yellow-500/10 text-center">
+            <div className="flex items-center justify-center gap-1 mb-1">
+              <Loader2 className="h-4 w-4 text-yellow-500 animate-spin" />
+            </div>
+            <p className="text-xl font-bold text-yellow-500">{stats.processing}</p>
+            <p className="text-xs text-muted-foreground">Processando</p>
           </div>
           
           <div className="p-3 rounded-lg bg-blue-500/10 text-center">
@@ -350,10 +367,10 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
         </div>
 
         {/* Stalled warning + continue button */}
-        {isStalled && stats.pending > 0 && campaignStatus === "sending" && (
+        {isStalled && inQueueCount > 0 && campaignStatus === "sending" && (
           <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 space-y-2">
             <p className="text-sm text-yellow-600 dark:text-yellow-400 text-center">
-              ⚠️ O envio parece ter parado. {stats.pending} mensagens ainda pendentes.
+              ⚠️ O envio parece ter parado. {inQueueCount} mensagens ainda na fila.
             </p>
             <Button
               variant="outline"
@@ -370,7 +387,7 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
               ) : (
                 <>
                   <PlayCircle className="mr-2 h-4 w-4" />
-                  Continuar Envio ({stats.pending} restantes)
+                  Continuar Envio ({inQueueCount} restantes)
                 </>
               )}
             </Button>
