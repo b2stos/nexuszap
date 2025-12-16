@@ -346,6 +346,15 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
             import_batch_id: crypto.randomUUID(),
           }));
 
+        // Deduplicate contacts by phone to avoid "cannot affect row a second time" error
+        const deduplicatedContacts = Array.from(
+          validContactsForInsert.reduce((map, contact) => {
+            map.set(contact.phone, contact); // Keep last occurrence
+            return map;
+          }, new Map<string, typeof validContactsForInsert[0]>()).values()
+        );
+
+        const duplicatesRemoved = validContactsForInsert.length - deduplicatedContacts.length;
         totalInvalid += batchContacts.filter(c => c.status === "invalid").length;
 
         // Insert in sub-batches
@@ -358,8 +367,8 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
         });
 
         const INSERT_BATCH_SIZE = 500;
-        for (let i = 0; i < validContactsForInsert.length; i += INSERT_BATCH_SIZE) {
-          const insertBatch = validContactsForInsert.slice(i, i + INSERT_BATCH_SIZE);
+        for (let i = 0; i < deduplicatedContacts.length; i += INSERT_BATCH_SIZE) {
+          const insertBatch = deduplicatedContacts.slice(i, i + INSERT_BATCH_SIZE);
           
           const { error } = await supabase
             .from("contacts")
