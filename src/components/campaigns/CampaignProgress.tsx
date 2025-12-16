@@ -119,8 +119,9 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
       if (campaign?.status === "sending" && currentInQueue > 0) {
         if (currentProcessed === lastProcessedRef.current) {
           stallCheckCountRef.current++;
-          // Consider stalled after 4 checks (12 seconds) with no progress
-          if (stallCheckCountRef.current >= 4) {
+          // Consider stalled after 15 checks (45 seconds) with no progress
+          // Increased to account for WhatsApp rate limits
+          if (stallCheckCountRef.current >= 15) {
             setIsStalled(true);
           }
         } else {
@@ -394,11 +395,18 @@ export function CampaignProgress({ campaignId, onComplete }: CampaignProgressPro
           </div>
         )}
 
+        {/* Processing indicator */}
+        {campaignStatus === "sending" && stats.processing > 0 && !isStalled && (
+          <p className="text-sm text-yellow-600 dark:text-yellow-400 text-center">
+            ⏳ Processando {stats.processing} mensagem(ns)... O envio pode demorar devido a limites do WhatsApp.
+          </p>
+        )}
+
         {/* Cancel button */}
         {campaignStatus === "sending" && !isStalled && (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground text-center">
-              ⏳ Enviando mensagens em segundo plano... Você pode sair desta página.
+              Enviando mensagens em segundo plano... Você pode sair desta página.
             </p>
             <Button
               variant="outline"
