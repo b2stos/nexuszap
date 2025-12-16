@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Send, Zap, Gauge, Snail } from "lucide-react";
 import { MediaUpload } from "./MediaUpload";
 import { z } from "zod";
 import DOMPurify from "dompurify";
@@ -24,12 +25,15 @@ const campaignSchema = z.object({
     }),
 });
 
+type SendSpeed = 'slow' | 'normal' | 'fast';
+
 export function CampaignForm() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState("");
   const [message, setMessage] = useState("");
   const [mediaUrls, setMediaUrls] = useState<string[]>([]);
+  const [sendSpeed, setSendSpeed] = useState<SendSpeed>("normal");
 
   // Count unique phone numbers (not duplicate contacts)
   const { data: uniqueContactCount } = useQuery({
@@ -92,6 +96,7 @@ export function CampaignForm() {
           message_content: sanitizedMessage,
           media_urls: mediaUrls,
           status: "draft",
+          send_speed: sendSpeed,
         })
         .select()
         .single();
@@ -178,6 +183,70 @@ export function CampaignForm() {
             />
             <p className="text-xs text-muted-foreground">
               Caracteres: {message.length}
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <Label>Velocidade de Envio</Label>
+            <RadioGroup
+              value={sendSpeed}
+              onValueChange={(value) => setSendSpeed(value as SendSpeed)}
+              className="grid grid-cols-3 gap-4"
+            >
+              <div>
+                <RadioGroupItem
+                  value="slow"
+                  id="speed-slow"
+                  className="peer sr-only"
+                />
+                <Label
+                  htmlFor="speed-slow"
+                  className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                >
+                  <Snail className="mb-2 h-6 w-6 text-green-500" />
+                  <span className="text-sm font-medium">Lento</span>
+                  <span className="text-xs text-muted-foreground text-center mt-1">
+                    ~3s entre msgs
+                  </span>
+                </Label>
+              </div>
+              <div>
+                <RadioGroupItem
+                  value="normal"
+                  id="speed-normal"
+                  className="peer sr-only"
+                />
+                <Label
+                  htmlFor="speed-normal"
+                  className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                >
+                  <Gauge className="mb-2 h-6 w-6 text-blue-500" />
+                  <span className="text-sm font-medium">Normal</span>
+                  <span className="text-xs text-muted-foreground text-center mt-1">
+                    ~1.5s entre msgs
+                  </span>
+                </Label>
+              </div>
+              <div>
+                <RadioGroupItem
+                  value="fast"
+                  id="speed-fast"
+                  className="peer sr-only"
+                />
+                <Label
+                  htmlFor="speed-fast"
+                  className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                >
+                  <Zap className="mb-2 h-6 w-6 text-yellow-500" />
+                  <span className="text-sm font-medium">Rápido</span>
+                  <span className="text-xs text-muted-foreground text-center mt-1">
+                    ~0.8s entre msgs
+                  </span>
+                </Label>
+              </div>
+            </RadioGroup>
+            <p className="text-xs text-muted-foreground">
+              Velocidade mais lenta reduz o risco de bloqueio pelo WhatsApp
             </p>
           </div>
 

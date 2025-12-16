@@ -22,6 +22,7 @@ export type Database = {
           media_urls: string[] | null
           message_content: string
           name: string
+          send_speed: Database["public"]["Enums"]["send_speed"]
           status: Database["public"]["Enums"]["campaign_status"]
           user_id: string
         }
@@ -32,6 +33,7 @@ export type Database = {
           media_urls?: string[] | null
           message_content: string
           name: string
+          send_speed?: Database["public"]["Enums"]["send_speed"]
           status?: Database["public"]["Enums"]["campaign_status"]
           user_id: string
         }
@@ -42,6 +44,7 @@ export type Database = {
           media_urls?: string[] | null
           message_content?: string
           name?: string
+          send_speed?: Database["public"]["Enums"]["send_speed"]
           status?: Database["public"]["Enums"]["campaign_status"]
           user_id?: string
         }
@@ -405,6 +408,7 @@ export type Database = {
         | "read"
         | "failed"
         | "processing"
+      send_speed: "slow" | "normal" | "fast"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -542,6 +546,7 @@ export const Constants = {
         "failed",
         "processing",
       ],
+      send_speed: ["slow", "normal", "fast"],
     },
   },
 } as const
