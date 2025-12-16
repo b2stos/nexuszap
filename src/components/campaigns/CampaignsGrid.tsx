@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Send, CheckCircle2, Eye, AlertCircle, Trash2 } from "lucide-react";
 import { SendCampaignButton } from "./SendCampaignButton";
+import { CampaignSpeedSelect } from "./CampaignSpeedSelect";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -140,12 +141,20 @@ export function CampaignsGrid() {
                   </AlertDialog>
                 </div>
               </div>
-              <SendCampaignButton 
-                campaignId={campaign.id}
-                campaignName={campaign.name}
-                status={campaign.status}
-                onStatusChange={() => refetch()}
-              />
+              <div className="flex items-center gap-2 mt-2">
+                <CampaignSpeedSelect
+                  campaignId={campaign.id}
+                  currentSpeed={campaign.send_speed || 'normal'}
+                  onSpeedChange={() => refetch()}
+                  disabled={campaign.status === 'sending'}
+                />
+                <SendCampaignButton 
+                  campaignId={campaign.id}
+                  campaignName={campaign.name}
+                  status={campaign.status}
+                  onStatusChange={() => refetch()}
+                />
+              </div>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
