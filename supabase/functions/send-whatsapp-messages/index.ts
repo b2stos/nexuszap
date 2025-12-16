@@ -8,11 +8,15 @@ const corsHeaders = {
 };
 
 // CONFIGURATION: Limit messages per execution to stay under 150s timeout
-const MAX_MESSAGES_PER_CALL = 50; // Reduced to handle rate limits better
-const DELAY_BETWEEN_MESSAGES = 1500; // 1.5s between messages to avoid rate limits
-const DELAY_BETWEEN_BATCHES = 5000; // 5s between batches
-const BATCH_SIZE = 25; // Smaller batches for better rate limit handling
+const MAX_MESSAGES_PER_CALL = 50;
 const RATE_LIMIT_WAIT = 15000; // 15s wait when rate limited
+
+// Speed configurations (delay in ms)
+const SPEED_CONFIG = {
+  slow: { messageDelay: 3000, batchDelay: 8000, batchSize: 15 },
+  normal: { messageDelay: 1500, batchDelay: 5000, batchSize: 25 },
+  fast: { messageDelay: 800, batchDelay: 2000, batchSize: 50 },
+};
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -420,14 +424,19 @@ async function sendMessagesInBackground(
   campaign: any,
   credentials: { baseUrl: string; token: string }
 ) {
-  console.log(`🚀 BACKGROUND TASK STARTED: ${messages.length} messages to process this call`);
+  // Get speed configuration from campaign (default to 'normal')
+  const speedKey = (campaign.send_speed || 'normal') as keyof typeof SPEED_CONFIG;
+  const speedConfig = SPEED_CONFIG[speedKey] || SPEED_CONFIG.normal;
+  
+  console.log(`🚀 BACKGROUND TASK STARTED: ${messages.length} messages to process`);
+  console.log(`📊 Speed: ${speedKey} (${speedConfig.messageDelay}ms between msgs, batch size: ${speedConfig.batchSize})`);
   
   let successCount = 0;
   let failCount = 0;
   let cancelled = false;
   
-  // Process in batches
-  for (let batchStart = 0; batchStart < messages.length; batchStart += BATCH_SIZE) {
+  // Process in batches using configured batch size
+  for (let batchStart = 0; batchStart < messages.length; batchStart += speedConfig.batchSize) {
     // Check for cancellation at the start of each batch
     if (await checkCancelled(supabase, campaignId)) {
       console.log(`🛑 CAMPAIGN CANCELLED by user`);
@@ -435,9 +444,9 @@ async function sendMessagesInBackground(
       break;
     }
     
-    const batch = messages.slice(batchStart, batchStart + BATCH_SIZE);
-    const batchNumber = Math.floor(batchStart / BATCH_SIZE) + 1;
-    const totalBatches = Math.ceil(messages.length / BATCH_SIZE);
+    const batch = messages.slice(batchStart, batchStart + speedConfig.batchSize);
+    const batchNumber = Math.floor(batchStart / speedConfig.batchSize) + 1;
+    const totalBatches = Math.ceil(messages.length / speedConfig.batchSize);
     
     console.log(`\n📦 Processing batch ${batchNumber}/${totalBatches} (${batch.length} messages)`);
     
@@ -517,8 +526,8 @@ async function sendMessagesInBackground(
         
         successCount++;
 
-        // Delay between messages
-        await sleep(DELAY_BETWEEN_MESSAGES);
+        // Delay between messages (using speed config)
+        await sleep(speedConfig.messageDelay);
 
       } catch (error) {
         console.error(`Error sending message ${message.id}:`, error);
@@ -539,9 +548,9 @@ async function sendMessagesInBackground(
     console.log(`✅ Batch ${batchNumber} complete: ${successCount} sent, ${failCount} failed`);
     
     // Pause between batches (except for last batch)
-    if (batchStart + BATCH_SIZE < messages.length) {
-      console.log(`⏸️ Pausing ${DELAY_BETWEEN_BATCHES}ms before next batch...`);
-      await sleep(DELAY_BETWEEN_BATCHES);
+    if (batchStart + speedConfig.batchSize < messages.length) {
+      console.log(`⏸️ Pausing ${speedConfig.batchDelay}ms before next batch...`);
+      await sleep(speedConfig.batchDelay);
     }
   }
 
