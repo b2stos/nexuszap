@@ -8,10 +8,11 @@ const corsHeaders = {
 };
 
 // CONFIGURATION: Limit messages per execution to stay under 150s timeout
-const MAX_MESSAGES_PER_CALL = 100; // ~80 seconds at 800ms delay
-const DELAY_BETWEEN_MESSAGES = 800;
-const DELAY_BETWEEN_BATCHES = 2000;
-const BATCH_SIZE = 50;
+const MAX_MESSAGES_PER_CALL = 50; // Reduced to handle rate limits better
+const DELAY_BETWEEN_MESSAGES = 1500; // 1.5s between messages to avoid rate limits
+const DELAY_BETWEEN_BATCHES = 5000; // 5s between batches
+const BATCH_SIZE = 25; // Smaller batches for better rate limit handling
+const RATE_LIMIT_WAIT = 15000; // 15s wait when rate limited
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -124,8 +125,10 @@ async function tryUAZAPISendMedia(
   token: string,
   phone: string,
   mediaUrl: string,
-  caption?: string
-): Promise<{ success: boolean; response?: any; messageId?: string; error?: string }> {
+  caption?: string,
+  retryCount: number = 0
+): Promise<{ success: boolean; response?: any; messageId?: string; error?: string; rateLimited?: boolean }> {
+  const MAX_RETRIES = 2;
   const mediaType = getMediaType(mediaUrl);
   const fileName = getCleanFileName(mediaUrl);
   
@@ -135,6 +138,11 @@ async function tryUAZAPISendMedia(
   const headers = {
     'token': token,
     'Content-Type': 'application/json'
+  };
+
+  // Helper to check for rate limit errors
+  const isRateLimited = (responseText: string): boolean => {
+    return responseText.includes('rate-overlimit') || responseText.includes('429');
   };
 
   // STRATEGY 1: /send/media with URL (preferred per UAZAPI docs)
@@ -164,6 +172,17 @@ async function tryUAZAPISendMedia(
     
     const responseText = await response.text();
     console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
+    
+    // Check for rate limit
+    if (isRateLimited(responseText)) {
+      console.log(`⚠️ Rate limited detected, waiting ${RATE_LIMIT_WAIT}ms...`);
+      await sleep(RATE_LIMIT_WAIT);
+      if (retryCount < MAX_RETRIES) {
+        console.log(`🔄 Retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+        return tryUAZAPISendMedia(baseUrl, token, phone, mediaUrl, caption, retryCount + 1);
+      }
+      return { success: false, error: 'Rate limited by WhatsApp', rateLimited: true };
+    }
     
     if (response.ok) {
       try {
@@ -217,6 +236,17 @@ async function tryUAZAPISendMedia(
     const responseText = await response.text();
     console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
     
+    // Check for rate limit
+    if (isRateLimited(responseText)) {
+      console.log(`⚠️ Rate limited on base64 attempt, waiting ${RATE_LIMIT_WAIT}ms...`);
+      await sleep(RATE_LIMIT_WAIT);
+      if (retryCount < MAX_RETRIES) {
+        console.log(`🔄 Retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+        return tryUAZAPISendMedia(baseUrl, token, phone, mediaUrl, caption, retryCount + 1);
+      }
+      return { success: false, error: 'Rate limited by WhatsApp', rateLimited: true };
+    }
+    
     if (response.ok) {
       try {
         const data = JSON.parse(responseText);
@@ -245,12 +275,19 @@ async function tryUAZAPISend(
   baseUrl: string, 
   token: string, 
   phone: string, 
-  message: string
-): Promise<{ success: boolean; response?: any; messageId?: string; error?: string }> {
+  message: string,
+  retryCount: number = 0
+): Promise<{ success: boolean; response?: any; messageId?: string; error?: string; rateLimited?: boolean }> {
+  const MAX_RETRIES = 2;
   
   const headers = {
     'token': token,
     'Content-Type': 'application/json'
+  };
+
+  // Helper to check for rate limit errors
+  const isRateLimited = (responseText: string): boolean => {
+    return responseText.includes('rate-overlimit') || responseText.includes('429');
   };
 
   console.log(`Sending text to ${phone} via /send/text...`);
@@ -267,6 +304,17 @@ async function tryUAZAPISend(
     
     const responseText = await response.text();
     console.log(`Status: ${response.status}, Response: ${responseText.substring(0, 200)}`);
+    
+    // Check for rate limit
+    if (isRateLimited(responseText)) {
+      console.log(`⚠️ Rate limited detected, waiting ${RATE_LIMIT_WAIT}ms...`);
+      await sleep(RATE_LIMIT_WAIT);
+      if (retryCount < MAX_RETRIES) {
+        console.log(`🔄 Retrying text (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+        return tryUAZAPISend(baseUrl, token, phone, message, retryCount + 1);
+      }
+      return { success: false, error: 'Rate limited by WhatsApp', rateLimited: true };
+    }
     
     if (response.ok) {
       try {
@@ -302,6 +350,17 @@ async function tryUAZAPISend(
     
     const responseText = await response.text();
     console.log(`Status: ${response.status}`);
+    
+    // Check for rate limit on fallback too
+    if (isRateLimited(responseText)) {
+      console.log(`⚠️ Rate limited on fallback, waiting ${RATE_LIMIT_WAIT}ms...`);
+      await sleep(RATE_LIMIT_WAIT);
+      if (retryCount < MAX_RETRIES) {
+        console.log(`🔄 Retrying text fallback (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+        return tryUAZAPISend(baseUrl, token, phone, message, retryCount + 1);
+      }
+      return { success: false, error: 'Rate limited by WhatsApp', rateLimited: true };
+    }
     
     if (response.ok && !responseText.toLowerCase().includes('error')) {
       try {
