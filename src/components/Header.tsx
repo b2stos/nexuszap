@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Zap } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 
 export const Header = () => {
   const navigate = useNavigate();
@@ -9,23 +9,23 @@ export const Header = () => {
     <header className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-lg border-b border-border">
       <nav className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
-          <div className="flex items-center gap-2">
+          <Link to="/" className="flex items-center gap-2">
             <div className="w-10 h-10 rounded-lg bg-gradient-primary flex items-center justify-center shadow-glow">
               <Zap className="w-6 h-6 text-primary-foreground" />
             </div>
             <span className="text-xl font-bold">Nexus Zap</span>
-          </div>
+          </Link>
 
           <div className="hidden md:flex items-center gap-8">
-            <a href="#solucao" className="text-sm font-medium hover:text-primary transition-colors">
+            <a href="/#solucao" className="text-sm font-medium hover:text-primary transition-colors">
               Solução
             </a>
-            <a href="#funcionalidades" className="text-sm font-medium hover:text-primary transition-colors">
+            <a href="/#funcionalidades" className="text-sm font-medium hover:text-primary transition-colors">
               Funcionalidades
             </a>
-            <a href="#precos" className="text-sm font-medium hover:text-primary transition-colors">
-              Preços
-            </a>
+            <Link to="/sobre" className="text-sm font-medium hover:text-primary transition-colors">
+              Empresa
+            </Link>
           </div>
 
           <div className="flex items-center gap-4">
