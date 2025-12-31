@@ -1,6 +1,6 @@
 import { Phone, Mail, MapPin } from "lucide-react";
 import { Link } from "react-router-dom";
-import logoNexuszap from "@/assets/logo-nexuszap.png";
+import logoIcon from "@/assets/logo-icon.png";
 
 export const Footer = () => {
   const scrollToSection = (sectionId: string) => {
@@ -17,9 +17,9 @@ export const Footer = () => {
           <div>
             <div className="flex items-center gap-2 mb-4">
               <img 
-                src={logoNexuszap} 
+                src={logoIcon} 
                 alt="Nexus Zap Logo" 
-                className="h-12 w-12 object-contain"
+                className="h-12 w-12 object-contain rounded-lg"
               />
               <span className="text-xl font-bold">
                 <span className="text-primary">Nexus</span>

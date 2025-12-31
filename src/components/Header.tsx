@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { useNavigate, Link } from "react-router-dom";
-import logoNexuszap from "@/assets/logo-nexuszap.png";
+import logoIcon from "@/assets/logo-icon.png";
 
 export const Header = () => {
   const navigate = useNavigate();
@@ -11,12 +11,13 @@ export const Header = () => {
         <div className="flex items-center justify-between h-16">
           <Link to="/" className="flex items-center gap-2">
             <img 
-              src={logoNexuszap} 
+              src={logoIcon} 
               alt="Nexus Zap Logo" 
-              className="h-10 w-10 object-contain"
+              className="h-10 w-10 object-contain rounded-lg"
             />
-            <span className="text-xl font-bold bg-gradient-brand bg-clip-text text-transparent">
-              Nexus<span className="text-accent">Zap</span>
+            <span className="text-xl font-bold">
+              <span className="text-primary">Nexus</span>
+              <span className="text-accent">Zap</span>
             </span>
           </Link>
 
