@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
-import { Zap } from "lucide-react";
 import { useNavigate, Link } from "react-router-dom";
+import logoNexuszap from "@/assets/logo-nexuszap.png";
 
 export const Header = () => {
   const navigate = useNavigate();
@@ -10,10 +10,14 @@ export const Header = () => {
       <nav className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <Link to="/" className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-lg bg-gradient-primary flex items-center justify-center shadow-glow">
-              <Zap className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <span className="text-xl font-bold">Nexus Zap</span>
+            <img 
+              src={logoNexuszap} 
+              alt="Nexus Zap Logo" 
+              className="h-10 w-10 object-contain"
+            />
+            <span className="text-xl font-bold bg-gradient-brand bg-clip-text text-transparent">
+              Nexus<span className="text-accent">Zap</span>
+            </span>
           </Link>
 
           <div className="hidden md:flex items-center gap-8">

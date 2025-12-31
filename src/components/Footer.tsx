@@ -1,5 +1,6 @@
-import { Zap, Phone, Mail, MapPin } from "lucide-react";
+import { Phone, Mail, MapPin } from "lucide-react";
 import { Link } from "react-router-dom";
+import logoNexuszap from "@/assets/logo-nexuszap.png";
 
 export const Footer = () => {
   const scrollToSection = (sectionId: string) => {
@@ -15,10 +16,15 @@ export const Footer = () => {
         <div className="grid md:grid-cols-4 gap-8 mb-8">
           <div>
             <div className="flex items-center gap-2 mb-4">
-              <div className="w-10 h-10 rounded-lg bg-gradient-primary flex items-center justify-center">
-                <Zap className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <span className="text-xl font-bold">Nexus Zap</span>
+              <img 
+                src={logoNexuszap} 
+                alt="Nexus Zap Logo" 
+                className="h-12 w-12 object-contain"
+              />
+              <span className="text-xl font-bold">
+                <span className="text-primary">Nexus</span>
+                <span className="text-accent">Zap</span>
+              </span>
             </div>
             <p className="text-secondary-foreground/70 text-sm mb-4">
               Nexus Zap é um produto desenvolvido e operado pela <strong>B2 DIGITAL LTDA</strong>.
