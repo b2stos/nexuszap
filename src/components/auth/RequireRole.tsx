@@ -32,7 +32,7 @@ export function RequireRole({
   inline = false,
 }: RequireRoleProps) {
   const location = useLocation();
-  const { role, loading, isAdmin, tenantId } = useTenantRole();
+  const { role, loading, isAdmin, tenantId, isSuperAdmin } = useTenantRole();
 
   // Loading state
   if (loading) {
@@ -50,7 +50,12 @@ export function RequireRole({
     );
   }
 
-  // No tenant context
+  // Super admin bypasses ALL checks
+  if (isSuperAdmin) {
+    return <>{children}</>;
+  }
+
+  // No tenant context (and not super admin)
   if (!tenantId) {
     return <Navigate to="/dashboard" state={{ from: location }} replace />;
   }
