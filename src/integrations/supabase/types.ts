@@ -1023,6 +1023,56 @@ export type Database = {
           },
         ]
       }
+      tenant_onboarding: {
+        Row: {
+          channel_connected_at: string | null
+          created_at: string
+          first_message_sent_at: string | null
+          id: string
+          inbox_opened_at: string | null
+          onboarding_completed: boolean
+          onboarding_completed_at: string | null
+          template_created_at: string | null
+          tenant_id: string
+          updated_at: string
+          welcome_completed_at: string | null
+        }
+        Insert: {
+          channel_connected_at?: string | null
+          created_at?: string
+          first_message_sent_at?: string | null
+          id?: string
+          inbox_opened_at?: string | null
+          onboarding_completed?: boolean
+          onboarding_completed_at?: string | null
+          template_created_at?: string | null
+          tenant_id: string
+          updated_at?: string
+          welcome_completed_at?: string | null
+        }
+        Update: {
+          channel_connected_at?: string | null
+          created_at?: string
+          first_message_sent_at?: string | null
+          id?: string
+          inbox_opened_at?: string | null
+          onboarding_completed?: boolean
+          onboarding_completed_at?: string | null
+          template_created_at?: string | null
+          tenant_id?: string
+          updated_at?: string
+          welcome_completed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_onboarding_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tenant_users: {
         Row: {
           created_at: string

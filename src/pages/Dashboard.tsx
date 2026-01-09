@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { MetricsCards } from "@/components/dashboard/MetricsCards";
@@ -9,13 +10,41 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useProtectedUser } from "@/components/auth/ProtectedRoute";
+import { WelcomeModal } from "@/components/onboarding/WelcomeModal";
+import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
+import { OnboardingCompletionModal } from "@/components/onboarding/OnboardingCompletionModal";
+import { useOnboarding } from "@/hooks/useOnboarding";
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const user = useProtectedUser();
+  const { showWelcome, isComplete, progress, completeStep } = useOnboarding();
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [dismissedChecklist, setDismissedChecklist] = useState(false);
+
+  // Handle welcome completion
+  const handleWelcomeComplete = () => {
+    completeStep('welcome');
+  };
+
+  // Show completion modal when all steps are done
+  useEffect(() => {
+    if (progress === 100 && !isComplete) {
+      setShowCompletionModal(true);
+    }
+  }, [progress, isComplete]);
 
   return (
     <DashboardLayout user={user}>
+      {/* Welcome Modal for first login */}
+      <WelcomeModal open={!!showWelcome} onComplete={handleWelcomeComplete} />
+      
+      {/* Completion Modal */}
+      <OnboardingCompletionModal 
+        open={showCompletionModal} 
+        onClose={() => setShowCompletionModal(false)} 
+      />
+
       <div className="space-y-8 animate-fade-in">
         <div className="flex items-center justify-between">
           <div>
@@ -27,6 +56,11 @@ export default function Dashboard() {
             </p>
           </div>
         </div>
+
+        {/* Onboarding Checklist - show if not complete and not dismissed */}
+        {!isComplete && !dismissedChecklist && (
+          <OnboardingChecklist onDismiss={() => setDismissedChecklist(true)} />
+        )}
         
         <Tabs defaultValue="overview" className="space-y-6">
           <TabsList>
