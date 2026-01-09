@@ -1,6 +1,6 @@
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { CampaignsHeader } from "@/components/campaigns/CampaignsHeader";
-import { CampaignsGrid } from "@/components/campaigns/CampaignsGrid";
+import { MTCampaignsGrid } from "@/components/campaigns/MTCampaignsGrid";
 import { WhatsAppStatusBanner } from "@/components/dashboard/WhatsAppStatusBanner";
 import { useProtectedUser } from "@/components/auth/ProtectedRoute";
 
@@ -12,7 +12,7 @@ export default function Campaigns() {
       <div className="space-y-8">
         <WhatsAppStatusBanner />
         <CampaignsHeader />
-        <CampaignsGrid />
+        <MTCampaignsGrid />
       </div>
     </DashboardLayout>
   );
