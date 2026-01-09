@@ -22,6 +22,7 @@ import Terms from "./pages/Terms";
 import Privacy from "./pages/Privacy";
 import Inbox from "./pages/Inbox";
 import Templates from "./pages/Templates";
+import Channels from "./pages/Channels";
 import NotFound from "./pages/NotFound";
 
 // Error Boundary to prevent white screen on errors
@@ -85,6 +86,7 @@ const App = () => (
               <Route path="/dashboard/campaigns" element={<ProtectedRoute><Campaigns /></ProtectedRoute>} />
               <Route path="/dashboard/campaigns/new" element={<ProtectedRoute><NewCampaign /></ProtectedRoute>} />
               <Route path="/dashboard/whatsapp" element={<ProtectedRoute><WhatsApp /></ProtectedRoute>} />
+              <Route path="/dashboard/channels" element={<ProtectedRoute><Channels /></ProtectedRoute>} />
               <Route path="/dashboard/send-message" element={<ProtectedRoute><SendMessage /></ProtectedRoute>} />
               <Route path="/dashboard/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
               <Route path="/dashboard/validation-test" element={<ProtectedRoute><ValidationTest /></ProtectedRoute>} />
