@@ -14,6 +14,72 @@ export type Database = {
   }
   public: {
     Tables: {
+      campaign_recipients: {
+        Row: {
+          attempts: number
+          campaign_id: string
+          contact_id: string
+          created_at: string
+          delivered_at: string | null
+          id: string
+          last_error: string | null
+          next_retry_at: string | null
+          provider_message_id: string | null
+          read_at: string | null
+          sent_at: string | null
+          status: Database["public"]["Enums"]["campaign_recipient_status"]
+          updated_at: string
+          variables: Json | null
+        }
+        Insert: {
+          attempts?: number
+          campaign_id: string
+          contact_id: string
+          created_at?: string
+          delivered_at?: string | null
+          id?: string
+          last_error?: string | null
+          next_retry_at?: string | null
+          provider_message_id?: string | null
+          read_at?: string | null
+          sent_at?: string | null
+          status?: Database["public"]["Enums"]["campaign_recipient_status"]
+          updated_at?: string
+          variables?: Json | null
+        }
+        Update: {
+          attempts?: number
+          campaign_id?: string
+          contact_id?: string
+          created_at?: string
+          delivered_at?: string | null
+          id?: string
+          last_error?: string | null
+          next_retry_at?: string | null
+          provider_message_id?: string | null
+          read_at?: string | null
+          sent_at?: string | null
+          status?: Database["public"]["Enums"]["campaign_recipient_status"]
+          updated_at?: string
+          variables?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_recipients_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "mt_campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_recipients_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "mt_contacts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaigns: {
         Row: {
           completed_at: string | null
@@ -58,6 +124,69 @@ export type Database = {
           },
         ]
       }
+      channels: {
+        Row: {
+          created_at: string
+          id: string
+          last_connected_at: string | null
+          name: string
+          phone_number: string | null
+          provider_config: Json | null
+          provider_id: string
+          provider_phone_id: string | null
+          quality_rating: string | null
+          status: Database["public"]["Enums"]["channel_status"]
+          tenant_id: string
+          updated_at: string
+          verified_name: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          last_connected_at?: string | null
+          name: string
+          phone_number?: string | null
+          provider_config?: Json | null
+          provider_id: string
+          provider_phone_id?: string | null
+          quality_rating?: string | null
+          status?: Database["public"]["Enums"]["channel_status"]
+          tenant_id: string
+          updated_at?: string
+          verified_name?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          last_connected_at?: string | null
+          name?: string
+          phone_number?: string | null
+          provider_config?: Json | null
+          provider_id?: string
+          provider_phone_id?: string | null
+          quality_rating?: string | null
+          status?: Database["public"]["Enums"]["channel_status"]
+          tenant_id?: string
+          updated_at?: string
+          verified_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "channels_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "providers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "channels_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contacts: {
         Row: {
           created_at: string
@@ -89,6 +218,121 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      conversation_notes: {
+        Row: {
+          content: string
+          conversation_id: string
+          created_at: string
+          id: string
+          tenant_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          conversation_id: string
+          created_at?: string
+          id?: string
+          tenant_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          tenant_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_notes_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_notes_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      conversations: {
+        Row: {
+          assigned_user_id: string | null
+          channel_id: string
+          contact_id: string
+          created_at: string
+          id: string
+          is_pinned: boolean
+          last_inbound_at: string | null
+          last_message_at: string | null
+          last_message_preview: string | null
+          status: Database["public"]["Enums"]["conversation_status"]
+          tenant_id: string
+          unread_count: number
+          updated_at: string
+        }
+        Insert: {
+          assigned_user_id?: string | null
+          channel_id: string
+          contact_id: string
+          created_at?: string
+          id?: string
+          is_pinned?: boolean
+          last_inbound_at?: string | null
+          last_message_at?: string | null
+          last_message_preview?: string | null
+          status?: Database["public"]["Enums"]["conversation_status"]
+          tenant_id: string
+          unread_count?: number
+          updated_at?: string
+        }
+        Update: {
+          assigned_user_id?: string | null
+          channel_id?: string
+          contact_id?: string
+          created_at?: string
+          id?: string
+          is_pinned?: boolean
+          last_inbound_at?: string | null
+          last_message_at?: string | null
+          last_message_preview?: string | null
+          status?: Database["public"]["Enums"]["conversation_status"]
+          tenant_id?: string
+          unread_count?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversations_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversations_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "mt_contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversations_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
         ]
@@ -150,6 +394,417 @@ export type Database = {
           },
         ]
       }
+      mt_campaigns: {
+        Row: {
+          channel_id: string
+          completed_at: string | null
+          created_at: string
+          created_by_user_id: string | null
+          delivered_count: number | null
+          failed_count: number | null
+          id: string
+          name: string
+          read_count: number | null
+          scheduled_at: string | null
+          sent_count: number | null
+          started_at: string | null
+          status: Database["public"]["Enums"]["campaign_status_v2"]
+          template_id: string
+          template_variables: Json | null
+          tenant_id: string
+          total_recipients: number | null
+          updated_at: string
+        }
+        Insert: {
+          channel_id: string
+          completed_at?: string | null
+          created_at?: string
+          created_by_user_id?: string | null
+          delivered_count?: number | null
+          failed_count?: number | null
+          id?: string
+          name: string
+          read_count?: number | null
+          scheduled_at?: string | null
+          sent_count?: number | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["campaign_status_v2"]
+          template_id: string
+          template_variables?: Json | null
+          tenant_id: string
+          total_recipients?: number | null
+          updated_at?: string
+        }
+        Update: {
+          channel_id?: string
+          completed_at?: string | null
+          created_at?: string
+          created_by_user_id?: string | null
+          delivered_count?: number | null
+          failed_count?: number | null
+          id?: string
+          name?: string
+          read_count?: number | null
+          scheduled_at?: string | null
+          sent_count?: number | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["campaign_status_v2"]
+          template_id?: string
+          template_variables?: Json | null
+          tenant_id?: string
+          total_recipients?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mt_campaigns_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt_campaigns_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "mt_templates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt_campaigns_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mt_contacts: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          email: string | null
+          id: string
+          is_blocked: boolean
+          last_interaction_at: string | null
+          metadata: Json | null
+          name: string | null
+          phone: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          email?: string | null
+          id?: string
+          is_blocked?: boolean
+          last_interaction_at?: string | null
+          metadata?: Json | null
+          name?: string | null
+          phone: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          email?: string | null
+          id?: string
+          is_blocked?: boolean
+          last_interaction_at?: string | null
+          metadata?: Json | null
+          name?: string | null
+          phone?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mt_contacts_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mt_messages: {
+        Row: {
+          channel_id: string
+          contact_id: string
+          content: string | null
+          conversation_id: string
+          created_at: string
+          delivered_at: string | null
+          direction: Database["public"]["Enums"]["message_direction"]
+          error_code: string | null
+          error_detail: string | null
+          failed_at: string | null
+          id: string
+          media_filename: string | null
+          media_mime_type: string | null
+          media_url: string | null
+          provider_message_id: string | null
+          read_at: string | null
+          reply_to_message_id: string | null
+          sent_at: string | null
+          sent_by_user_id: string | null
+          status: Database["public"]["Enums"]["message_delivery_status"]
+          template_name: string | null
+          template_variables: Json | null
+          tenant_id: string
+          type: Database["public"]["Enums"]["message_type"]
+        }
+        Insert: {
+          channel_id: string
+          contact_id: string
+          content?: string | null
+          conversation_id: string
+          created_at?: string
+          delivered_at?: string | null
+          direction: Database["public"]["Enums"]["message_direction"]
+          error_code?: string | null
+          error_detail?: string | null
+          failed_at?: string | null
+          id?: string
+          media_filename?: string | null
+          media_mime_type?: string | null
+          media_url?: string | null
+          provider_message_id?: string | null
+          read_at?: string | null
+          reply_to_message_id?: string | null
+          sent_at?: string | null
+          sent_by_user_id?: string | null
+          status?: Database["public"]["Enums"]["message_delivery_status"]
+          template_name?: string | null
+          template_variables?: Json | null
+          tenant_id: string
+          type?: Database["public"]["Enums"]["message_type"]
+        }
+        Update: {
+          channel_id?: string
+          contact_id?: string
+          content?: string | null
+          conversation_id?: string
+          created_at?: string
+          delivered_at?: string | null
+          direction?: Database["public"]["Enums"]["message_direction"]
+          error_code?: string | null
+          error_detail?: string | null
+          failed_at?: string | null
+          id?: string
+          media_filename?: string | null
+          media_mime_type?: string | null
+          media_url?: string | null
+          provider_message_id?: string | null
+          read_at?: string | null
+          reply_to_message_id?: string | null
+          sent_at?: string | null
+          sent_by_user_id?: string | null
+          status?: Database["public"]["Enums"]["message_delivery_status"]
+          template_name?: string | null
+          template_variables?: Json | null
+          tenant_id?: string
+          type?: Database["public"]["Enums"]["message_type"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mt_messages_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt_messages_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "mt_contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt_messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt_messages_reply_to_message_id_fkey"
+            columns: ["reply_to_message_id"]
+            isOneToOne: false
+            referencedRelation: "mt_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt_messages_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mt_templates: {
+        Row: {
+          category: string
+          components: Json
+          created_at: string
+          id: string
+          language: string
+          name: string
+          provider_id: string
+          provider_template_id: string | null
+          rejection_reason: string | null
+          status: Database["public"]["Enums"]["template_status"]
+          tenant_id: string
+          updated_at: string
+          variables_schema: Json | null
+        }
+        Insert: {
+          category?: string
+          components?: Json
+          created_at?: string
+          id?: string
+          language?: string
+          name: string
+          provider_id: string
+          provider_template_id?: string | null
+          rejection_reason?: string | null
+          status?: Database["public"]["Enums"]["template_status"]
+          tenant_id: string
+          updated_at?: string
+          variables_schema?: Json | null
+        }
+        Update: {
+          category?: string
+          components?: Json
+          created_at?: string
+          id?: string
+          language?: string
+          name?: string
+          provider_id?: string
+          provider_template_id?: string | null
+          rejection_reason?: string | null
+          status?: Database["public"]["Enums"]["template_status"]
+          tenant_id?: string
+          updated_at?: string
+          variables_schema?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mt_templates_provider_id_fkey"
+            columns: ["provider_id"]
+            isOneToOne: false
+            referencedRelation: "providers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt_templates_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mt_webhook_events: {
+        Row: {
+          channel_id: string | null
+          event_type: string
+          id: string
+          message_id: string | null
+          payload_raw: Json
+          processed: boolean
+          processing_error: string | null
+          provider: string
+          received_at: string
+          tenant_id: string | null
+        }
+        Insert: {
+          channel_id?: string | null
+          event_type: string
+          id?: string
+          message_id?: string | null
+          payload_raw: Json
+          processed?: boolean
+          processing_error?: string | null
+          provider: string
+          received_at?: string
+          tenant_id?: string | null
+        }
+        Update: {
+          channel_id?: string | null
+          event_type?: string
+          id?: string
+          message_id?: string | null
+          payload_raw?: Json
+          processed?: boolean
+          processing_error?: string | null
+          provider?: string
+          received_at?: string
+          tenant_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mt_webhook_events_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt_webhook_events_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "mt_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt_webhook_events_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      opt_outs: {
+        Row: {
+          created_at: string
+          id: string
+          opted_out_at: string
+          phone: string
+          reason: string | null
+          tenant_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          opted_out_at?: string
+          phone: string
+          reason?: string | null
+          tenant_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          opted_out_at?: string
+          phone?: string
+          reason?: string | null
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "opt_outs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
@@ -170,6 +825,104 @@ export type Database = {
           email?: string
           full_name?: string | null
           id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      providers: {
+        Row: {
+          base_url: string | null
+          created_at: string
+          display_name: string
+          id: string
+          is_active: boolean
+          name: string
+          type: Database["public"]["Enums"]["provider_type"]
+        }
+        Insert: {
+          base_url?: string | null
+          created_at?: string
+          display_name: string
+          id?: string
+          is_active?: boolean
+          name: string
+          type: Database["public"]["Enums"]["provider_type"]
+        }
+        Update: {
+          base_url?: string | null
+          created_at?: string
+          display_name?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          type?: Database["public"]["Enums"]["provider_type"]
+        }
+        Relationships: []
+      }
+      tenant_users: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          role: Database["public"]["Enums"]["tenant_user_role"]
+          tenant_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          role?: Database["public"]["Enums"]["tenant_user_role"]
+          tenant_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          role?: Database["public"]["Enums"]["tenant_user_role"]
+          tenant_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_users_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tenants: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          settings: Json | null
+          slug: string
+          status: Database["public"]["Enums"]["tenant_status"]
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          settings?: Json | null
+          slug: string
+          status?: Database["public"]["Enums"]["tenant_status"]
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          settings?: Json | null
+          slug?: string
+          status?: Database["public"]["Enums"]["tenant_status"]
           updated_at?: string
         }
         Relationships: []
@@ -385,6 +1138,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      get_user_tenant_ids: { Args: { _user_id: string }; Returns: string[] }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -392,15 +1146,50 @@ export type Database = {
         }
         Returns: boolean
       }
+      user_belongs_to_tenant: {
+        Args: { _tenant_id: string; _user_id: string }
+        Returns: boolean
+      }
+      user_has_tenant_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["tenant_user_role"]
+          _tenant_id: string
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
       app_role: "admin" | "user"
+      campaign_recipient_status:
+        | "queued"
+        | "sent"
+        | "delivered"
+        | "read"
+        | "failed"
+        | "skipped"
       campaign_status:
         | "draft"
         | "sending"
         | "completed"
         | "failed"
         | "cancelled"
+      campaign_status_v2:
+        | "draft"
+        | "scheduled"
+        | "running"
+        | "paused"
+        | "done"
+        | "cancelled"
+      channel_status: "connected" | "disconnected" | "error" | "pending"
+      conversation_status: "open" | "resolved" | "archived"
+      message_delivery_status:
+        | "queued"
+        | "sent"
+        | "delivered"
+        | "read"
+        | "failed"
+      message_direction: "inbound" | "outbound"
       message_status:
         | "pending"
         | "sent"
@@ -408,7 +1197,22 @@ export type Database = {
         | "read"
         | "failed"
         | "processing"
+      message_type:
+        | "text"
+        | "template"
+        | "image"
+        | "document"
+        | "audio"
+        | "video"
+        | "sticker"
+        | "location"
+        | "contact"
+        | "system"
+      provider_type: "official_bsp" | "unofficial"
       send_speed: "slow" | "normal" | "fast"
+      template_status: "approved" | "pending" | "rejected"
+      tenant_status: "active" | "inactive" | "suspended"
+      tenant_user_role: "owner" | "admin" | "agent"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -537,7 +1341,33 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "user"],
+      campaign_recipient_status: [
+        "queued",
+        "sent",
+        "delivered",
+        "read",
+        "failed",
+        "skipped",
+      ],
       campaign_status: ["draft", "sending", "completed", "failed", "cancelled"],
+      campaign_status_v2: [
+        "draft",
+        "scheduled",
+        "running",
+        "paused",
+        "done",
+        "cancelled",
+      ],
+      channel_status: ["connected", "disconnected", "error", "pending"],
+      conversation_status: ["open", "resolved", "archived"],
+      message_delivery_status: [
+        "queued",
+        "sent",
+        "delivered",
+        "read",
+        "failed",
+      ],
+      message_direction: ["inbound", "outbound"],
       message_status: [
         "pending",
         "sent",
@@ -546,7 +1376,23 @@ export const Constants = {
         "failed",
         "processing",
       ],
+      message_type: [
+        "text",
+        "template",
+        "image",
+        "document",
+        "audio",
+        "video",
+        "sticker",
+        "location",
+        "contact",
+        "system",
+      ],
+      provider_type: ["official_bsp", "unofficial"],
       send_speed: ["slow", "normal", "fast"],
+      template_status: ["approved", "pending", "rejected"],
+      tenant_status: ["active", "inactive", "suspended"],
+      tenant_user_role: ["owner", "admin", "agent"],
     },
   },
 } as const
