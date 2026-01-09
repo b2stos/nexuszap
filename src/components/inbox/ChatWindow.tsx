@@ -1,23 +1,26 @@
 /**
  * ChatWindow Component
  * 
- * Área central do chat com mensagens
+ * Área central do chat com mensagens e composer
  */
 
-import { useRef, useEffect, useMemo } from 'react';
+import { useRef, useEffect, useMemo, useCallback } from 'react';
 import { Phone, MoreVertical, MessageCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
-import { InboxConversation, InboxMessage } from '@/types/inbox';
+import { InboxConversation, InboxMessage, WindowStatus } from '@/types/inbox';
 import { MessageBubble, DateSeparator } from './MessageBubble';
+import { MessageComposer } from './MessageComposer';
+import { useSendMessage, useRetryMessage } from '@/hooks/useSendMessage';
 import { format, isSameDay } from 'date-fns';
 
 interface ChatWindowProps {
   conversation: InboxConversation | null;
   messages: InboxMessage[];
   isLoading: boolean;
+  windowStatus: WindowStatus;
 }
 
 function formatPhone(phone: string): string {
@@ -101,8 +104,10 @@ function EmptyState() {
   );
 }
 
-export function ChatWindow({ conversation, messages, isLoading }: ChatWindowProps) {
+export function ChatWindow({ conversation, messages, isLoading, windowStatus }: ChatWindowProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const sendMessage = useSendMessage();
+  const retryMessage = useRetryMessage();
   
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -133,6 +138,26 @@ export function ChatWindow({ conversation, messages, isLoading }: ChatWindowProp
     return result;
   }, [messages]);
   
+  // Handle send
+  const handleSend = useCallback(async (text: string) => {
+    if (!conversation) return;
+    
+    await sendMessage.mutateAsync({
+      conversationId: conversation.id,
+      text,
+    });
+  }, [conversation, sendMessage]);
+  
+  // Handle retry
+  const handleRetry = useCallback((message: InboxMessage) => {
+    if (!conversation || !message.content) return;
+    
+    retryMessage.mutate({
+      conversationId: conversation.id,
+      originalText: message.content,
+    });
+  }, [conversation, retryMessage]);
+  
   if (!conversation) {
     return <EmptyState />;
   }
@@ -158,7 +183,13 @@ export function ChatWindow({ conversation, messages, isLoading }: ChatWindowProp
                 return <DateSeparator key={`date-${index}`} date={item.date} />;
               }
               if (item.type === 'message' && item.message) {
-                return <MessageBubble key={item.message.id} message={item.message} />;
+                return (
+                  <MessageBubble 
+                    key={item.message.id} 
+                    message={item.message} 
+                    onRetry={handleRetry}
+                  />
+                );
               }
               return null;
             })
@@ -166,13 +197,13 @@ export function ChatWindow({ conversation, messages, isLoading }: ChatWindowProp
         </div>
       </ScrollArea>
       
-      {/* Input area placeholder */}
-      <div className="p-4 border-t border-border bg-card">
-        <div className="flex items-center gap-2 p-3 bg-muted rounded-lg text-muted-foreground">
-          <MessageCircle className="w-5 h-5" />
-          <span className="text-sm">Campo de resposta será implementado no próximo passo</span>
-        </div>
-      </div>
+      {/* Composer */}
+      <MessageComposer
+        conversationId={conversation.id}
+        windowStatus={windowStatus}
+        onSend={handleSend}
+        isSending={sendMessage.isPending}
+      />
     </div>
   );
 }

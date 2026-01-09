@@ -14,7 +14,8 @@ import {
   Film,
   Mic,
   MapPin,
-  User
+  User,
+  RotateCcw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { InboxMessage } from '@/types/inbox';
@@ -26,10 +27,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 
 interface MessageBubbleProps {
   message: InboxMessage;
   showDate?: boolean;
+  onRetry?: (message: InboxMessage) => void;
 }
 
 function StatusIcon({ status, errorDetail }: { status: string; errorDetail?: string | null }) {
@@ -158,8 +161,9 @@ function MediaContent({ message }: { message: InboxMessage }) {
   return null;
 }
 
-export function MessageBubble({ message, showDate }: MessageBubbleProps) {
+export function MessageBubble({ message, showDate, onRetry }: MessageBubbleProps) {
   const isInbound = message.direction === 'inbound';
+  const isFailed = message.status === 'failed';
   const time = format(new Date(message.created_at), 'HH:mm', { locale: ptBR });
   
   return (
@@ -167,40 +171,77 @@ export function MessageBubble({ message, showDate }: MessageBubbleProps) {
       "flex mb-1",
       isInbound ? "justify-start" : "justify-end"
     )}>
-      <div
-        className={cn(
-          "max-w-[70%] rounded-lg px-3 py-2 shadow-sm",
-          isInbound 
-            ? "bg-card border border-border rounded-tl-none" 
-            : "bg-primary text-primary-foreground rounded-tr-none"
-        )}
-      >
-        {/* Media content */}
-        {message.type !== 'text' && <MediaContent message={message} />}
-        
-        {/* Text content */}
-        {message.content && (
-          <p className="text-sm whitespace-pre-wrap break-words">
-            {message.content}
-          </p>
-        )}
-        
-        {/* Template indicator */}
-        {message.type === 'template' && message.template_name && (
-          <p className="text-xs opacity-70 mt-1">
-            📋 Template: {message.template_name}
-          </p>
+      <div className="flex items-end gap-2">
+        {/* Retry button for failed outbound messages */}
+        {!isInbound && isFailed && onRetry && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={() => onRetry(message)}
+                >
+                  <RotateCcw className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Reenviar mensagem</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
         
-        {/* Footer with time and status */}
-        <div className={cn(
-          "flex items-center justify-end gap-1 mt-1",
-          isInbound ? "text-muted-foreground" : "text-primary-foreground/70"
-        )}>
-          <span className="text-[10px]">{time}</span>
-          {!isInbound && (
-            <StatusIcon status={message.status} errorDetail={message.error_detail} />
+        <div
+          className={cn(
+            "max-w-[70%] rounded-lg px-3 py-2 shadow-sm",
+            isInbound 
+              ? "bg-card border border-border rounded-tl-none" 
+              : isFailed
+                ? "bg-destructive/10 border border-destructive/30 text-foreground rounded-tr-none"
+                : "bg-primary text-primary-foreground rounded-tr-none"
           )}
+        >
+          {/* Media content */}
+          {message.type !== 'text' && <MediaContent message={message} />}
+          
+          {/* Text content */}
+          {message.content && (
+            <p className="text-sm whitespace-pre-wrap break-words">
+              {message.content}
+            </p>
+          )}
+          
+          {/* Template indicator */}
+          {message.type === 'template' && message.template_name && (
+            <p className="text-xs opacity-70 mt-1">
+              📋 Template: {message.template_name}
+            </p>
+          )}
+          
+          {/* Error message for failed */}
+          {isFailed && message.error_detail && (
+            <p className="text-xs text-destructive mt-1 flex items-center gap-1">
+              <AlertCircle className="h-3 w-3" />
+              {message.error_detail}
+            </p>
+          )}
+          
+          {/* Footer with time and status */}
+          <div className={cn(
+            "flex items-center justify-end gap-1 mt-1",
+            isInbound 
+              ? "text-muted-foreground" 
+              : isFailed 
+                ? "text-destructive" 
+                : "text-primary-foreground/70"
+          )}>
+            <span className="text-[10px]">{time}</span>
+            {!isInbound && (
+              <StatusIcon status={message.status} errorDetail={message.error_detail} />
+            )}
+          </div>
         </div>
       </div>
     </div>
