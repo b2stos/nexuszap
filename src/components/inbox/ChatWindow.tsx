@@ -1,11 +1,18 @@
 /**
  * ChatWindow Component
  * 
- * Área central do chat estilo WhatsApp Web com mensagens, composer e suporte a mídia
+ * Área central do chat premium estilo WhatsApp Web com:
+ * - Scroll inteligente (auto + botão nova mensagem)
+ * - Scroll infinito para histórico
+ * - Typing indicator
+ * - Draft automático
+ * - Quick replies
+ * - Reactions
+ * - Ações de conversa
  */
 
 import { useRef, useEffect, useMemo, useCallback, useState } from 'react';
-import { Phone, MoreVertical, MessageCircle, ArrowDown, Clock, CheckCircle2 } from 'lucide-react';
+import { Phone, MoreVertical, MessageCircle, ArrowDown, Clock, CheckCircle2, User2, Pin, PinOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -21,17 +28,26 @@ import { InboxConversation, InboxMessage, WindowStatus } from '@/types/inbox';
 import { MessageBubble, DateSeparator } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
 import { TemplateComposer } from './TemplateComposer';
+import { TypingIndicator } from './TypingIndicator';
 import { useSendMessage, useRetryMessage } from '@/hooks/useSendMessage';
 import { useSendTemplate } from '@/hooks/useSendTemplate';
 import { useApprovedTemplates, useCurrentTenantForTemplates } from '@/hooks/useTemplates';
+import { useInboxDrafts } from '@/hooks/useInboxDrafts';
+import { useQuickReplies } from '@/hooks/useQuickReplies';
+import { useTypingIndicator } from '@/hooks/useTypingIndicator';
+import { useToggleReaction, groupReactionsByEmoji, useMessageReactions } from '@/hooks/useMessageReactions';
+import { useResolveConversation, useReopenConversation, useAssumeConversation, useTogglePinConversation } from '@/hooks/useConversationActions';
 import { format, isSameDay, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { supabase } from '@/integrations/supabase/client';
+import { User } from '@supabase/supabase-js';
 
 interface ChatWindowProps {
   conversation: InboxConversation | null;
   messages: InboxMessage[];
   isLoading: boolean;
   windowStatus: WindowStatus;
+  tenantId?: string;
 }
 
 function formatPhone(phone: string): string {
@@ -52,11 +68,15 @@ function ChatHeader({
   windowStatus,
   onResolve,
   onReopen,
+  onAssume,
+  onTogglePin,
 }: { 
   conversation: InboxConversation;
   windowStatus: WindowStatus;
   onResolve?: () => void;
   onReopen?: () => void;
+  onAssume?: () => void;
+  onTogglePin?: () => void;
 }) {
   const contact = conversation.contact;
   const displayName = contact?.name || 'Sem nome';
@@ -86,6 +106,9 @@ function ChatHeader({
         <div>
           <div className="flex items-center gap-2">
             <h3 className="font-semibold">{displayName}</h3>
+            {conversation.is_pinned && (
+              <Pin className="w-3 h-3 text-primary" />
+            )}
             <Badge 
               variant={conversation.status === 'open' ? 'default' : 'secondary'}
               className="text-[10px] h-5"
@@ -107,30 +130,58 @@ function ChatHeader({
       </div>
       
       {/* Actions */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon">
-            <MoreVertical className="w-5 h-5" />
+      <div className="flex items-center gap-1">
+        {/* Assume button if not assigned */}
+        {!conversation.assigned_user_id && (
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={onAssume}
+            className="h-8"
+          >
+            <User2 className="w-4 h-4 mr-1" />
+            Assumir
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {conversation.status === 'open' ? (
-            <DropdownMenuItem onClick={onResolve}>
-              <CheckCircle2 className="w-4 h-4 mr-2" />
-              Marcar como resolvida
+        )}
+        
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon">
+              <MoreVertical className="w-5 h-5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {conversation.status === 'open' ? (
+              <DropdownMenuItem onClick={onResolve}>
+                <CheckCircle2 className="w-4 h-4 mr-2" />
+                Marcar como resolvida
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem onClick={onReopen}>
+                <MessageCircle className="w-4 h-4 mr-2" />
+                Reabrir conversa
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={onTogglePin}>
+              {conversation.is_pinned ? (
+                <>
+                  <PinOff className="w-4 h-4 mr-2" />
+                  Desafixar
+                </>
+              ) : (
+                <>
+                  <Pin className="w-4 h-4 mr-2" />
+                  Fixar conversa
+                </>
+              )}
             </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem onClick={onReopen}>
-              <MessageCircle className="w-4 h-4 mr-2" />
-              Reabrir conversa
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive">
+              Bloquear contato
             </DropdownMenuItem>
-          )}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="text-destructive">
-            Bloquear contato
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   );
 }
@@ -171,22 +222,27 @@ function EmptyState() {
 function ScrollToBottomButton({ 
   visible, 
   onClick,
-  unreadCount = 0
+  unreadCount = 0,
+  hasNewMessage = false,
 }: { 
   visible: boolean; 
   onClick: () => void;
   unreadCount?: number;
+  hasNewMessage?: boolean;
 }) {
   if (!visible) return null;
   
   return (
     <Button
       onClick={onClick}
-      size="icon"
-      className="absolute bottom-24 right-6 rounded-full shadow-lg z-10 h-10 w-10"
-      variant="secondary"
+      size="sm"
+      className="absolute bottom-24 right-6 rounded-full shadow-lg z-10 h-10 px-4 gap-2"
+      variant={hasNewMessage ? "default" : "secondary"}
     >
-      <ArrowDown className="h-5 w-5" />
+      {hasNewMessage ? (
+        <span className="text-sm">Nova mensagem</span>
+      ) : null}
+      <ArrowDown className="h-4 w-4" />
       {unreadCount > 0 && (
         <Badge 
           variant="default" 
@@ -199,39 +255,95 @@ function ScrollToBottomButton({
   );
 }
 
-export function ChatWindow({ conversation, messages, isLoading, windowStatus }: ChatWindowProps) {
+export function ChatWindow({ 
+  conversation, 
+  messages, 
+  isLoading, 
+  windowStatus,
+  tenantId,
+}: ChatWindowProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [hasNewMessage, setHasNewMessage] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const prevMessagesLength = useRef(messages.length);
+  
+  // Get user
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+  }, []);
+  
+  // Hooks
   const sendMessage = useSendMessage();
   const retryMessage = useRetryMessage();
   const sendTemplate = useSendTemplate();
+  const resolveConversation = useResolveConversation();
+  const reopenConversation = useReopenConversation();
+  const assumeConversation = useAssumeConversation();
+  const togglePinConversation = useTogglePinConversation();
+  const toggleReaction = useToggleReaction();
   
   // Templates for TemplateComposer
   const { data: tenantData } = useCurrentTenantForTemplates();
   const { data: templates = [], isLoading: templatesLoading } = useApprovedTemplates(tenantData?.tenantId);
   
+  // Drafts
+  const { getDraft, setDraft, clearDraft } = useInboxDrafts();
+  const currentDraft = conversation ? getDraft(conversation.id) : '';
+  
+  // Quick replies
+  const { data: quickReplies = [] } = useQuickReplies(tenantId);
+  
+  // Typing indicator
+  const { 
+    typingText, 
+    broadcastTyping, 
+    stopTyping 
+  } = useTypingIndicator(
+    tenantId,
+    conversation?.id,
+    user ? { id: user.id, email: user.email || '' } : null
+  );
+  
+  // Reactions
+  const messageIds = useMemo(() => messages.map(m => m.id), [messages]);
+  const { data: allReactions = [] } = useMessageReactions(messageIds);
+  
   // Scroll to bottom
-  const scrollToBottom = useCallback(() => {
+  const scrollToBottom = useCallback((smooth = true) => {
     if (scrollRef.current) {
       const scrollContainer = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
       if (scrollContainer) {
         scrollContainer.scrollTo({
           top: scrollContainer.scrollHeight,
-          behavior: 'smooth'
+          behavior: smooth ? 'smooth' : 'auto'
         });
+        setShowScrollButton(false);
+        setHasNewMessage(false);
       }
     }
   }, []);
   
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll when new messages arrive (only if at bottom)
   useEffect(() => {
-    if (scrollRef.current) {
-      const scrollContainer = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    if (messages.length > prevMessagesLength.current) {
+      if (isAtBottom) {
+        scrollToBottom();
+      } else {
+        setHasNewMessage(true);
+        setShowScrollButton(true);
       }
     }
-  }, [messages]);
+    prevMessagesLength.current = messages.length;
+  }, [messages.length, isAtBottom, scrollToBottom]);
+  
+  // Initial scroll to bottom
+  useEffect(() => {
+    if (conversation?.id) {
+      setTimeout(() => scrollToBottom(false), 100);
+    }
+  }, [conversation?.id]);
   
   // Handle scroll to detect if user scrolled up
   useEffect(() => {
@@ -240,8 +352,13 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
     
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
-      const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
-      setShowScrollButton(!isAtBottom);
+      const atBottom = scrollHeight - scrollTop - clientHeight < 100;
+      setIsAtBottom(atBottom);
+      setShowScrollButton(!atBottom);
+      
+      if (atBottom) {
+        setHasNewMessage(false);
+      }
     };
     
     scrollContainer.addEventListener('scroll', handleScroll);
@@ -267,6 +384,11 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
     return result;
   }, [messages]);
   
+  // Get reactions for a message
+  const getMessageReactions = useCallback((messageId: string) => {
+    return groupReactionsByEmoji(allReactions, messageId);
+  }, [allReactions]);
+  
   // Handle send
   const handleSend = useCallback(async (text: string) => {
     if (!conversation) return;
@@ -276,9 +398,18 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
       text,
     });
     
+    // Clear draft
+    clearDraft(conversation.id);
+    
     // Scroll to bottom after sending
-    setTimeout(scrollToBottom, 100);
-  }, [conversation, sendMessage, scrollToBottom]);
+    setTimeout(() => scrollToBottom(), 100);
+  }, [conversation, sendMessage, clearDraft, scrollToBottom]);
+  
+  // Handle draft change
+  const handleDraftChange = useCallback((text: string) => {
+    if (!conversation) return;
+    setDraft(conversation.id, text);
+  }, [conversation, setDraft]);
   
   // Handle retry
   const handleRetry = useCallback((message: InboxMessage) => {
@@ -301,8 +432,41 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
     });
     
     // Scroll to bottom after sending
-    setTimeout(scrollToBottom, 100);
+    setTimeout(() => scrollToBottom(), 100);
   }, [conversation, sendTemplate, scrollToBottom]);
+  
+  // Handle reactions
+  const handleReact = useCallback((messageId: string, emoji: string) => {
+    toggleReaction.mutate({ messageId, emoji });
+  }, [toggleReaction]);
+  
+  // Handle conversation actions
+  const handleResolve = useCallback(() => {
+    if (conversation) {
+      resolveConversation.mutate(conversation.id);
+    }
+  }, [conversation, resolveConversation]);
+  
+  const handleReopen = useCallback(() => {
+    if (conversation) {
+      reopenConversation.mutate(conversation.id);
+    }
+  }, [conversation, reopenConversation]);
+  
+  const handleAssume = useCallback(() => {
+    if (conversation) {
+      assumeConversation.mutate(conversation.id);
+    }
+  }, [conversation, assumeConversation]);
+  
+  const handleTogglePin = useCallback(() => {
+    if (conversation) {
+      togglePinConversation.mutate({ 
+        conversationId: conversation.id, 
+        isPinned: !conversation.is_pinned 
+      });
+    }
+  }, [conversation, togglePinConversation]);
   
   if (!conversation) {
     return <EmptyState />;
@@ -314,6 +478,10 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
       <ChatHeader 
         conversation={conversation} 
         windowStatus={windowStatus}
+        onResolve={handleResolve}
+        onReopen={handleReopen}
+        onAssume={handleAssume}
+        onTogglePin={handleTogglePin}
       />
       
       {/* Messages */}
@@ -342,11 +510,23 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
                     key={item.message.id} 
                     message={item.message} 
                     onRetry={handleRetry}
+                    reactions={getMessageReactions(item.message.id)}
+                    onReact={handleReact}
+                    currentUserId={user?.id}
                   />
                 );
               }
               return null;
             })
+          )}
+          
+          {/* Typing indicator at bottom of messages */}
+          {typingText && (
+            <div className="flex justify-start mb-2">
+              <div className="bg-card border border-border rounded-lg px-3 py-2 rounded-bl-none">
+                <TypingIndicator typingText={typingText} />
+              </div>
+            </div>
           )}
         </div>
       </ScrollArea>
@@ -354,8 +534,9 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
       {/* Scroll to bottom button */}
       <ScrollToBottomButton 
         visible={showScrollButton} 
-        onClick={scrollToBottom}
+        onClick={() => scrollToBottom()}
         unreadCount={conversation.unread_count}
+        hasNewMessage={hasNewMessage}
       />
       
       {/* Composer - Text or Template based on window status */}
@@ -365,6 +546,12 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
           windowStatus={windowStatus}
           onSend={handleSend}
           isSending={sendMessage.isPending}
+          draft={currentDraft}
+          onDraftChange={handleDraftChange}
+          quickReplies={quickReplies}
+          onTyping={broadcastTyping}
+          onStopTyping={stopTyping}
+          typingText={typingText}
         />
       ) : (
         <TemplateComposer
