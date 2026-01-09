@@ -151,6 +151,7 @@ export default function Inbox() {
             conversation={activeConversation}
             messages={messages}
             isLoading={messagesLoading}
+            windowStatus={windowStatus}
           />
         </div>
         
