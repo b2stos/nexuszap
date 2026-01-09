@@ -2,9 +2,10 @@
  * Templates Page
  * 
  * Página para gerenciamento de templates de WhatsApp
+ * Suporta Demo Mode para visualização de dados fictícios (Super Admin only)
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   Plus, 
   FileText, 
@@ -16,7 +17,7 @@ import {
   XCircle,
   RefreshCw,
   Building2,
-  Lightbulb,
+  TestTube,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -59,6 +60,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
+import { DemoModeToggle, DemoModeBanner } from '@/components/inbox/DemoModeToggle';
 import { supabase } from '@/integrations/supabase/client';
 import { User } from '@supabase/supabase-js';
 import { format } from 'date-fns';
@@ -74,6 +76,8 @@ import {
   TemplateVariablesSchema,
 } from '@/hooks/useTemplates';
 import { useOnboarding } from '@/hooks/useOnboarding';
+import { useDemoMode } from '@/hooks/useDemoMode';
+import { demoTemplates, demoTemplateStats } from '@/data/demoTemplatesData';
 
 // Track onboarding when a template is created
 function useTrackTemplateCreation(templatesCount: number) {
@@ -328,31 +332,47 @@ export default function Templates() {
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [deleteTemplate, setDeleteTemplate] = useState<Template | null>(null);
   
+  // Demo Mode
+  const { isDemoMode, canUseDemoMode } = useDemoMode();
+  
   // Get user
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
   }, []);
   
-  // Queries
+  // Queries (disabled when in demo mode)
   const { data: tenantData, isLoading: tenantLoading, error: tenantError } = useCurrentTenantForTemplates();
-  const { data: templates = [], isLoading: templatesLoading, refetch } = useTemplates(tenantData?.tenantId);
+  const { data: realTemplates = [], isLoading: templatesLoading, refetch } = useTemplates(
+    isDemoMode ? undefined : tenantData?.tenantId
+  );
   const deleteTemplateMutation = useDeleteTemplate();
   
-  // Track onboarding step
-  useTrackTemplateCreation(templates.length);
+  // Use demo or real data
+  const templates = useMemo(() => {
+    if (isDemoMode) {
+      return demoTemplates;
+    }
+    return realTemplates;
+  }, [isDemoMode, realTemplates]);
+  
+  // Track onboarding step (only with real data)
+  useTrackTemplateCreation(isDemoMode ? 0 : templates.length);
   
   // Handlers
   const handleCreate = () => {
+    if (isDemoMode) return; // Disabled in demo mode
     setEditingTemplate(null);
     setFormOpen(true);
   };
   
   const handleEdit = (template: Template) => {
+    if (isDemoMode) return; // Disabled in demo mode
     setEditingTemplate(template);
     setFormOpen(true);
   };
   
   const handleDelete = async () => {
+    if (isDemoMode) return; // Disabled in demo mode
     if (!deleteTemplate || !tenantData?.tenantId) return;
     
     await deleteTemplateMutation.mutateAsync({
@@ -362,8 +382,8 @@ export default function Templates() {
     setDeleteTemplate(null);
   };
   
-  // Loading state
-  if (tenantLoading) {
+  // Loading state (not applicable in demo mode)
+  if (!isDemoMode && tenantLoading) {
     return (
       <DashboardLayout user={user}>
         <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
@@ -373,8 +393,8 @@ export default function Templates() {
     );
   }
   
-  // No tenant state
-  if (tenantError || !tenantData?.tenantId) {
+  // No tenant state (not applicable in demo mode)
+  if (!isDemoMode && (tenantError || !tenantData?.tenantId)) {
     return (
       <DashboardLayout user={user}>
         <div className="flex flex-col items-center justify-center h-[calc(100vh-4rem)] p-4">
@@ -383,7 +403,13 @@ export default function Templates() {
           <p className="text-muted-foreground text-center mb-4 max-w-md">
             Você precisa estar vinculado a uma organização para gerenciar templates.
           </p>
-          <Button onClick={() => navigate('/dashboard')}>
+          {canUseDemoMode && (
+            <div className="flex flex-col items-center gap-3 mt-4">
+              <p className="text-sm text-muted-foreground">Ou ative o Demo Mode para visualizar:</p>
+              <DemoModeToggle />
+            </div>
+          )}
+          <Button onClick={() => navigate('/dashboard')} className="mt-4">
             Voltar ao Dashboard
           </Button>
         </div>
@@ -394,6 +420,32 @@ export default function Templates() {
   return (
     <DashboardLayout user={user}>
       <div className="container py-6 space-y-6">
+        {/* Demo Mode Banner */}
+        {canUseDemoMode && (
+          <div className="flex items-center gap-3">
+            <DemoModeToggle />
+            {isDemoMode && (
+              <div className="flex-1 bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-2 flex items-center gap-2">
+                <TestTube className="w-4 h-4 text-amber-500" />
+                <span className="text-sm text-amber-700 dark:text-amber-400 font-medium">
+                  Demo Mode ativo - Exibindo templates fictícios
+                </span>
+                <div className="ml-auto flex gap-2">
+                  <Badge variant="outline" className="border-green-500/50 text-green-600">
+                    {demoTemplateStats.approved} aprovados
+                  </Badge>
+                  <Badge variant="outline" className="border-yellow-500/50 text-yellow-600">
+                    {demoTemplateStats.pending} pendentes
+                  </Badge>
+                  <Badge variant="outline" className="border-red-500/50 text-red-600">
+                    {demoTemplateStats.rejected} rejeitados
+                  </Badge>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -403,11 +455,15 @@ export default function Templates() {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => refetch()} disabled={templatesLoading}>
+            <Button 
+              variant="outline" 
+              onClick={() => refetch()} 
+              disabled={templatesLoading || isDemoMode}
+            >
               <RefreshCw className={`h-4 w-4 mr-2 ${templatesLoading ? 'animate-spin' : ''}`} />
               Atualizar
             </Button>
-            <Button onClick={handleCreate}>
+            <Button onClick={handleCreate} disabled={isDemoMode}>
               <Plus className="h-4 w-4 mr-2" />
               Novo Template
             </Button>
@@ -426,7 +482,7 @@ export default function Templates() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {templatesLoading ? (
+            {!isDemoMode && templatesLoading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
@@ -437,7 +493,7 @@ export default function Templates() {
                 <p className="text-sm text-muted-foreground mb-4">
                   Cadastre seus templates aprovados pelo WhatsApp para usar no Inbox e campanhas.
                 </p>
-                <Button onClick={handleCreate}>
+                <Button onClick={handleCreate} disabled={isDemoMode}>
                   <Plus className="h-4 w-4 mr-2" />
                   Criar primeiro template
                 </Button>
@@ -452,7 +508,7 @@ export default function Templates() {
                     <TableHead>Status</TableHead>
                     <TableHead>Variáveis</TableHead>
                     <TableHead>Criado em</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
+                    {!isDemoMode && <TableHead className="text-right">Ações</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -469,7 +525,14 @@ export default function Templates() {
                         </TableCell>
                         <TableCell>{template.category}</TableCell>
                         <TableCell>
-                          <StatusBadge status={template.status} />
+                          <div className="flex flex-col gap-1">
+                            <StatusBadge status={template.status} />
+                            {template.rejection_reason && template.status === 'rejected' && (
+                              <span className="text-xs text-muted-foreground truncate max-w-[200px]" title={template.rejection_reason}>
+                                {template.rejection_reason.substring(0, 50)}...
+                              </span>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell>
                           {varsCount > 0 ? (
@@ -481,25 +544,27 @@ export default function Templates() {
                         <TableCell className="text-muted-foreground">
                           {format(new Date(template.created_at), "dd/MM/yyyy", { locale: ptBR })}
                         </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleEdit(template)}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="text-destructive hover:text-destructive"
-                              onClick={() => setDeleteTemplate(template)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
+                        {!isDemoMode && (
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleEdit(template)}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="text-destructive hover:text-destructive"
+                                onClick={() => setDeleteTemplate(template)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        )}
                       </TableRow>
                     );
                   })}
