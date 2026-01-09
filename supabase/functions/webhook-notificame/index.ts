@@ -77,7 +77,13 @@ async function saveWebhookEvent(
   channelId: string,
   eventType: string,
   payload: unknown,
-  messageId?: string
+  messageId?: string,
+  options?: {
+    isInvalid?: boolean;
+    invalidReason?: string;
+    ipAddress?: string;
+    rateLimited?: boolean;
+  }
 ): Promise<string | null> {
   const { data, error } = await supabase
     .from('mt_webhook_events')
@@ -90,6 +96,10 @@ async function saveWebhookEvent(
       message_id: messageId,
       processed: false,
       received_at: new Date().toISOString(),
+      is_invalid: options?.isInvalid || false,
+      invalid_reason: options?.invalidReason || null,
+      ip_address: options?.ipAddress || null,
+      rate_limited: options?.rateLimited || false,
     })
     .select('id')
     .single();
@@ -437,15 +447,51 @@ async function processStatusUpdate(
 }
 
 // ============================================
+// RATE LIMITING
+// ============================================
+
+// Simple in-memory rate limiting (per channel per minute)
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT_MAX = 100; // Max 100 requests per minute per channel
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+
+function checkRateLimit(channelId: string): boolean {
+  const now = Date.now();
+  const key = channelId;
+  
+  const entry = rateLimitMap.get(key);
+  
+  if (!entry || now > entry.resetTime) {
+    rateLimitMap.set(key, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
+    return true;
+  }
+  
+  if (entry.count >= RATE_LIMIT_MAX) {
+    return false;
+  }
+  
+  entry.count++;
+  return true;
+}
+
+function getClientIP(req: Request): string {
+  return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    req.headers.get('x-real-ip') ||
+    req.headers.get('cf-connecting-ip') ||
+    'unknown';
+}
+
+// ============================================
 // MAIN HANDLER
 // ============================================
 
 async function handleWebhook(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const channelId = url.searchParams.get('channel_id');
+  const clientIP = getClientIP(req);
   
   // Log request info
-  console.log(`[Webhook] ${req.method} ${url.pathname}?${url.searchParams}`);
+  console.log(`[Webhook] ${req.method} ${url.pathname}?${url.searchParams} from ${clientIP}`);
   
   // Validate channel_id
   if (!channelId) {
@@ -489,6 +535,27 @@ async function handleWebhook(req: Request): Promise<Response> {
   
   console.log(`[Webhook] Channel: ${typedChannel.name}, Tenant: ${tenantId}, Provider: ${providerName}`);
   
+  // Rate limiting check
+  if (!checkRateLimit(channelId)) {
+    console.warn(`[Webhook] Rate limit exceeded for channel: ${channelId}`);
+    
+    // Log the rate limited attempt
+    await saveWebhookEvent(
+      supabase,
+      tenantId,
+      channelId,
+      'rate_limited',
+      { message: 'Rate limit exceeded' },
+      undefined,
+      { isInvalid: true, invalidReason: 'Rate limit exceeded', ipAddress: clientIP, rateLimited: true }
+    );
+    
+    return new Response(
+      JSON.stringify({ error: 'Rate limit exceeded' }),
+      { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+  
   // GET - Health check / Meta verification
   if (req.method === 'GET') {
     // Meta webhook verification (hub.challenge)
@@ -502,6 +569,18 @@ async function handleWebhook(req: Request): Promise<Response> {
       
       if (expectedToken && token !== expectedToken) {
         console.warn('[Webhook] Invalid verify token');
+        
+        // Log invalid attempt
+        await saveWebhookEvent(
+          supabase,
+          tenantId,
+          channelId,
+          'invalid_verify_token',
+          { provided_token: token ? '***' : 'missing' },
+          undefined,
+          { isInvalid: true, invalidReason: 'Invalid verify token', ipAddress: clientIP }
+        );
+        
         return new Response('Forbidden', { status: 403, headers: corsHeaders });
       }
       

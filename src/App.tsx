@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { HelmetProvider } from "react-helmet-async";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { AdminRoute } from "@/components/auth/AdminRoute";
+import { RequireRole } from "@/components/auth/RequireRole";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
@@ -23,6 +24,7 @@ import Privacy from "./pages/Privacy";
 import Inbox from "./pages/Inbox";
 import Templates from "./pages/Templates";
 import Channels from "./pages/Channels";
+import AuditLogs from "./pages/AuditLogs";
 import NotFound from "./pages/NotFound";
 
 // Error Boundary to prevent white screen on errors
@@ -81,14 +83,15 @@ const App = () => (
               <Route path="/privacidade" element={<Privacy />} />
               <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
               <Route path="/dashboard/inbox" element={<ProtectedRoute><Inbox /></ProtectedRoute>} />
-              <Route path="/dashboard/templates" element={<ProtectedRoute><Templates /></ProtectedRoute>} />
+              <Route path="/dashboard/templates" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Templates /></RequireRole></ProtectedRoute>} />
               <Route path="/dashboard/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
-              <Route path="/dashboard/campaigns" element={<ProtectedRoute><Campaigns /></ProtectedRoute>} />
-              <Route path="/dashboard/campaigns/new" element={<ProtectedRoute><NewCampaign /></ProtectedRoute>} />
+              <Route path="/dashboard/campaigns" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Campaigns /></RequireRole></ProtectedRoute>} />
+              <Route path="/dashboard/campaigns/new" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><NewCampaign /></RequireRole></ProtectedRoute>} />
               <Route path="/dashboard/whatsapp" element={<ProtectedRoute><WhatsApp /></ProtectedRoute>} />
-              <Route path="/dashboard/channels" element={<ProtectedRoute><Channels /></ProtectedRoute>} />
+              <Route path="/dashboard/channels" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Channels /></RequireRole></ProtectedRoute>} />
               <Route path="/dashboard/send-message" element={<ProtectedRoute><SendMessage /></ProtectedRoute>} />
-              <Route path="/dashboard/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+              <Route path="/dashboard/settings" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Settings /></RequireRole></ProtectedRoute>} />
+              <Route path="/dashboard/audit-logs" element={<ProtectedRoute><AuditLogs /></ProtectedRoute>} />
               <Route path="/dashboard/validation-test" element={<ProtectedRoute><ValidationTest /></ProtectedRoute>} />
               <Route path="/dashboard/admin" element={<ProtectedRoute><AdminRoute><Admin /></AdminRoute></ProtectedRoute>} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
