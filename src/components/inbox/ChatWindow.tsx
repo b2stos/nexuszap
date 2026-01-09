@@ -116,6 +116,9 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
   // Templates for TemplateComposer
   const { data: tenantData } = useCurrentTenantForTemplates();
   const { data: templates = [], isLoading: templatesLoading } = useApprovedTemplates(tenantData?.tenantId);
+  
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
     if (scrollRef.current) {
       const scrollContainer = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
       if (scrollContainer) {
