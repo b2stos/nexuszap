@@ -17,3 +17,6 @@ verify_jwt = true
 
 [functions.send-single-message]
 verify_jwt = true
+
+[functions.webhook-notificame]
+verify_jwt = false
