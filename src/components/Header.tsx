@@ -22,9 +22,12 @@ export const Header = () => {
           </Link>
 
           <div className="hidden md:flex items-center gap-8">
-            <a href="/#solucao" className="text-sm font-medium hover:text-primary transition-colors">
-              Solução
-            </a>
+            <Link to="/como-funciona" className="text-sm font-medium hover:text-primary transition-colors">
+              Como funciona
+            </Link>
+            <Link to="/precos" className="text-sm font-medium hover:text-primary transition-colors">
+              Preços
+            </Link>
             <a href="/#funcionalidades" className="text-sm font-medium hover:text-primary transition-colors">
               Funcionalidades
             </a>
@@ -38,7 +41,7 @@ export const Header = () => {
               Entrar
             </Button>
             <Button size="sm" className="bg-gradient-primary hover:shadow-glow transition-all" onClick={() => navigate("/auth")}>
-              Começar grátis
+              Começar agora
             </Button>
           </div>
         </div>

@@ -1,22 +1,22 @@
-import { AlertCircle, Users, Eye, XCircle } from "lucide-react";
+import { AlertTriangle, Ban, Users, ShieldAlert } from "lucide-react";
 import { Card } from "@/components/ui/card";
 
 export const Problem = () => {
   const problems = [
     {
-      icon: Eye,
-      title: "Baixa Visualização",
-      description: "Grupos e listas de transmissão resultam em poucas visualizações das suas mensagens importantes."
+      icon: Ban,
+      title: "Medo de Perder o Número",
+      description: "Ferramentas não oficiais colocam seu número em risco. Um bloqueio pode acabar com anos de relacionamento com clientes."
+    },
+    {
+      icon: ShieldAlert,
+      title: "Bloqueios Repentinos",
+      description: "Sem aviso, seu WhatsApp pode ser banido. E com ele, toda sua comunicação com clientes vai embora."
     },
     {
       icon: Users,
-      title: "Dependência de Contatos Salvos",
-      description: "Listas de transmissão exigem que todos tenham seu número salvo, limitando drasticamente o alcance."
-    },
-    {
-      icon: XCircle,
-      title: "Perda de Oportunidades",
-      description: "Comunicação ineficiente significa oportunidades perdidas de engajar sua audiência."
+      title: "Atendimento Bagunçado",
+      description: "Vários atendentes no mesmo número, sem controle. Conversas perdidas e clientes insatisfeitos."
     }
   ];
 
@@ -25,14 +25,14 @@ export const Problem = () => {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-destructive/10 border border-destructive/20 mb-6">
-            <AlertCircle className="w-4 h-4 text-destructive" />
-            <span className="text-sm font-medium text-destructive">O Problema</span>
+            <AlertTriangle className="w-4 h-4 text-destructive" />
+            <span className="text-sm font-medium text-destructive">Os riscos</span>
           </div>
           <h2 className="text-4xl md:text-5xl font-bold mb-4">
-            Por que métodos tradicionais <span className="text-destructive">falham</span>?
+            Por que ferramentas não oficiais são <span className="text-destructive">perigosas</span>?
           </h2>
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto">
-            No cenário atual, a atenção é o bem mais valioso. Métodos tradicionais não garantem que sua mensagem seja vista.
+            Usar gambiarras pode parecer mais barato, mas o custo de um bloqueio é muito maior.
           </p>
         </div>
 

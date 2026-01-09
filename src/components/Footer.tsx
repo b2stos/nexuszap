@@ -1,18 +1,31 @@
-import { Phone, Mail, MapPin } from "lucide-react";
+import { Phone, Mail, MapPin, Shield, CheckCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import logoIcon from "@/assets/logo-icon.png";
 
 export const Footer = () => {
-  const scrollToSection = (sectionId: string) => {
-    const element = document.getElementById(sectionId);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth' });
-    }
-  };
-
   return (
     <footer className="bg-secondary text-secondary-foreground py-12 border-t border-border">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Trust badges */}
+        <div className="flex flex-wrap justify-center gap-6 mb-10 pb-8 border-b border-secondary-foreground/10">
+          <div className="flex items-center gap-2 text-sm">
+            <Shield className="w-4 h-4 text-green-500" />
+            <span>API Oficial</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <CheckCircle className="w-4 h-4 text-green-500" />
+            <span>BSP Homologado</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <CheckCircle className="w-4 h-4 text-green-500" />
+            <span>Sem risco de bloqueio</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <CheckCircle className="w-4 h-4 text-green-500" />
+            <span>Conforme regras Meta</span>
+          </div>
+        </div>
+
         <div className="grid md:grid-cols-4 gap-8 mb-8">
           <div>
             <div className="flex items-center gap-2 mb-4">
@@ -27,10 +40,10 @@ export const Footer = () => {
               </span>
             </div>
             <p className="text-secondary-foreground/70 text-sm mb-4">
-              Nexus Zap é um produto desenvolvido e operado pela <strong>B2 DIGITAL LTDA</strong>.
+              Plataforma de WhatsApp Oficial para empresas que querem vender e atender sem risco de bloqueio.
             </p>
-            <p className="text-secondary-foreground/70 text-sm">
-              O centro onde a mensagem ganha destino, impacto e visualização.
+            <p className="text-secondary-foreground/60 text-xs">
+              Produto desenvolvido por <strong>B2 DIGITAL LTDA</strong>
             </p>
           </div>
 
@@ -38,28 +51,28 @@ export const Footer = () => {
             <h3 className="font-semibold mb-4">Produto</h3>
             <ul className="space-y-2">
               <li>
-                <button 
-                  onClick={() => scrollToSection('funcionalidades')} 
-                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-left text-sm"
+                <Link 
+                  to="/como-funciona"
+                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-sm"
+                >
+                  Como funciona
+                </Link>
+              </li>
+              <li>
+                <Link 
+                  to="/precos"
+                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-sm"
+                >
+                  Preços
+                </Link>
+              </li>
+              <li>
+                <a 
+                  href="/#funcionalidades"
+                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-sm"
                 >
                   Funcionalidades
-                </button>
-              </li>
-              <li>
-                <button 
-                  onClick={() => scrollToSection('solucao')} 
-                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-left text-sm"
-                >
-                  Solução
-                </button>
-              </li>
-              <li>
-                <button 
-                  onClick={() => scrollToSection('funcionalidades')} 
-                  className="text-secondary-foreground/70 hover:text-accent transition-colors text-left text-sm"
-                >
-                  Casos de uso
-                </button>
+                </a>
               </li>
             </ul>
           </div>
