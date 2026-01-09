@@ -1,10 +1,15 @@
 /**
  * MessageComposer Component
  * 
- * Campo de digitação de mensagens estilo WhatsApp Web com suporte a emoji e mídia
+ * Campo de digitação premium estilo WhatsApp Web com:
+ * - Suporte a emoji
+ * - Quick replies (/comando)
+ * - Draft automático por conversa
+ * - Typing indicator interno
+ * - Enter/Shift+Enter
  */
 
-import { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, KeyboardEvent, useCallback } from 'react';
 import { 
   Send, 
   Clock, 
@@ -15,7 +20,6 @@ import {
   Image as ImageIcon,
   FileText,
   Camera,
-  X
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -32,6 +36,9 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { WindowStatus } from '@/types/inbox';
+import { QuickReplySuggestions } from './QuickReplySuggestions';
+import { TypingIndicator } from './TypingIndicator';
+import { QuickReply } from '@/hooks/useQuickReplies';
 import { cn } from '@/lib/utils';
 
 interface MessageComposerProps {
@@ -40,6 +47,15 @@ interface MessageComposerProps {
   onSend: (text: string) => Promise<void>;
   isSending: boolean;
   disabled?: boolean;
+  // Draft support
+  draft?: string;
+  onDraftChange?: (text: string) => void;
+  // Quick replies support
+  quickReplies?: QuickReply[];
+  // Typing indicator
+  onTyping?: () => void;
+  onStopTyping?: () => void;
+  typingText?: string | null;
 }
 
 // Simple emoji picker (commonly used emojis)
@@ -60,7 +76,7 @@ function EmojiPicker({ onSelect }: { onSelect: (emoji: string) => void }) {
         <button
           key={emoji}
           onClick={() => onSelect(emoji)}
-          className="w-8 h-8 flex items-center justify-center hover:bg-muted rounded text-lg"
+          className="w-8 h-8 flex items-center justify-center hover:bg-muted rounded text-lg transition-colors"
         >
           {emoji}
         </button>
@@ -75,10 +91,30 @@ export function MessageComposer({
   onSend,
   isSending,
   disabled = false,
+  draft = '',
+  onDraftChange,
+  quickReplies = [],
+  onTyping,
+  onStopTyping,
+  typingText,
 }: MessageComposerProps) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(draft);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Sync draft when conversation changes
+  useEffect(() => {
+    setText(draft);
+    // Reset textarea height
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      if (draft) {
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+      }
+    }
+  }, [conversationId, draft]);
   
   // Focus textarea when conversation changes
   useEffect(() => {
@@ -87,14 +123,45 @@ export function MessageComposer({
     }
   }, [conversationId, windowStatus.isOpen]);
   
+  // Handle typing indicator
+  const handleTypingStart = useCallback(() => {
+    onTyping?.();
+    
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    // Set timeout to stop typing after 3 seconds of inactivity
+    typingTimeoutRef.current = setTimeout(() => {
+      onStopTyping?.();
+    }, 3000);
+  }, [onTyping, onStopTyping]);
+  
+  // Cleanup typing timeout
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, []);
+  
   // Handle send
   const handleSend = async () => {
     const trimmed = text.trim();
     if (!trimmed || isSending || !windowStatus.isOpen) return;
     
+    // Stop typing indicator
+    onStopTyping?.();
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
     try {
       await onSend(trimmed);
       setText('');
+      onDraftChange?.(''); // Clear draft on send
       
       // Reset textarea height
       if (textareaRef.current) {
@@ -102,13 +169,31 @@ export function MessageComposer({
         textareaRef.current.focus();
       }
     } catch (error) {
-      // Error handled by parent
       console.error('Send error:', error);
     }
   };
   
   // Handle keyboard
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Tab to select first quick reply
+    if (e.key === 'Tab' && showQuickReplies && quickReplies.length > 0) {
+      e.preventDefault();
+      const match = quickReplies.find(qr => 
+        qr.shortcut.toLowerCase().startsWith(text.toLowerCase()) ||
+        text.toLowerCase().startsWith(qr.shortcut.toLowerCase())
+      );
+      if (match) {
+        handleQuickReplySelect(match);
+      }
+      return;
+    }
+    
+    // Escape to close quick replies
+    if (e.key === 'Escape' && showQuickReplies) {
+      setShowQuickReplies(false);
+      return;
+    }
+    
     // Enter to send, Shift+Enter for new line
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -119,6 +204,15 @@ export function MessageComposer({
   // Auto-resize textarea
   const handleChange = (value: string) => {
     setText(value);
+    onDraftChange?.(value);
+    
+    // Show quick replies if starts with /
+    setShowQuickReplies(value.startsWith('/') && !value.includes(' '));
+    
+    // Trigger typing indicator
+    if (value.trim()) {
+      handleTypingStart();
+    }
     
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -128,9 +222,27 @@ export function MessageComposer({
   
   // Add emoji to text
   const handleEmojiSelect = (emoji: string) => {
-    setText(prev => prev + emoji);
+    const newText = text + emoji;
+    setText(newText);
+    onDraftChange?.(newText);
     setEmojiOpen(false);
     textareaRef.current?.focus();
+  };
+  
+  // Handle quick reply selection
+  const handleQuickReplySelect = (reply: QuickReply) => {
+    setText(reply.message);
+    onDraftChange?.(reply.message);
+    setShowQuickReplies(false);
+    
+    // Auto-resize
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+        textareaRef.current.focus();
+      }
+    }, 0);
   };
   
   // Window closed state
@@ -150,12 +262,25 @@ export function MessageComposer({
   }
   
   return (
-    <div className="p-3 border-t border-border bg-card">
+    <div className="p-3 border-t border-border bg-card relative">
+      {/* Typing indicator */}
+      {typingText && (
+        <TypingIndicator typingText={typingText} className="mb-2 px-1" />
+      )}
+      
       {/* Window status indicator */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2 px-1">
         <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
         <span>Janela aberta • {windowStatus.remainingFormatted}</span>
       </div>
+      
+      {/* Quick replies suggestions */}
+      <QuickReplySuggestions
+        quickReplies={quickReplies}
+        searchText={text}
+        onSelect={handleQuickReplySelect}
+        visible={showQuickReplies}
+      />
       
       {/* Composer */}
       <div className="flex items-end gap-2">
@@ -253,8 +378,9 @@ export function MessageComposer({
       
       {/* Tip */}
       <p className="text-[10px] text-muted-foreground mt-2 px-1">
-        <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">Enter</kbd> para enviar • 
-        <kbd className="px-1 py-0.5 bg-muted rounded text-[9px] ml-1">Shift+Enter</kbd> para nova linha
+        <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">Enter</kbd> enviar • 
+        <kbd className="px-1 py-0.5 bg-muted rounded text-[9px] ml-1">Shift+Enter</kbd> quebra linha •
+        <kbd className="px-1 py-0.5 bg-muted rounded text-[9px] ml-1">/</kbd> respostas rápidas
       </p>
     </div>
   );

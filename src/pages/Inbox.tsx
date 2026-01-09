@@ -183,6 +183,7 @@ export default function Inbox() {
               messages={messages}
               isLoading={messagesLoading}
               windowStatus={windowStatus}
+              tenantId={tenantId}
             />
           </div>
         </div>
