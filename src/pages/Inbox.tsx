@@ -6,16 +6,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, AlertCircle, Building2 } from 'lucide-react';
+import { Loader2, Building2, ArrowLeft, MessageCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
 import { ConversationList } from '@/components/inbox/ConversationList';
 import { ChatWindow } from '@/components/inbox/ChatWindow';
 import { ContactPanel } from '@/components/inbox/ContactPanel';
 import { supabase } from '@/integrations/supabase/client';
 import { User } from '@supabase/supabase-js';
-import { useQuery } from '@tanstack/react-query';
 import {
   useCurrentTenant,
   useConversations,
@@ -38,6 +36,7 @@ export default function Inbox() {
     unreadOnly: false,
     status: 'all',
   });
+  const [showMobileChat, setShowMobileChat] = useState(false);
   
   // Get user
   useEffect(() => {
@@ -69,7 +68,7 @@ export default function Inbox() {
     tenantId,
     activeConversation?.id,
     useCallback(() => {
-      // Play notification sound?
+      // Could play notification sound here
     }, []),
     useCallback(() => {
       // Refresh conversations
@@ -98,6 +97,12 @@ export default function Inbox() {
   // Handle conversation selection
   const handleSelectConversation = (conv: InboxConversation) => {
     setActiveConversation(conv);
+    setShowMobileChat(true);
+  };
+  
+  // Handle back on mobile
+  const handleMobileBack = () => {
+    setShowMobileChat(false);
   };
   
   // Loading state
@@ -105,7 +110,10 @@ export default function Inbox() {
     return (
       <DashboardLayout user={user}>
         <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
-          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+            <p className="text-sm text-muted-foreground">Carregando inbox...</p>
+          </div>
         </div>
       </DashboardLayout>
     );
@@ -132,9 +140,12 @@ export default function Inbox() {
   
   return (
     <DashboardLayout user={user}>
-      <div className="h-[calc(100vh-4rem)] flex overflow-hidden">
-        {/* Left Column - Conversation List */}
-        <div className="w-80 flex-shrink-0 border-r border-border hidden md:block">
+      <div className="h-[calc(100vh-4rem)] flex overflow-hidden bg-muted/30">
+        {/* Left Column - Conversation List (hidden on mobile when chat is open) */}
+        <div className={`
+          w-full md:w-80 lg:w-96 flex-shrink-0 border-r border-border
+          ${showMobileChat ? 'hidden md:block' : 'block'}
+        `}>
           <ConversationList
             conversations={conversations}
             isLoading={conversationsLoading}
@@ -146,39 +157,44 @@ export default function Inbox() {
         </div>
         
         {/* Center Column - Chat */}
-        <div className="flex-1 min-w-0">
-          <ChatWindow
-            conversation={activeConversation}
-            messages={messages}
-            isLoading={messagesLoading}
-            windowStatus={windowStatus}
-          />
+        <div className={`
+          flex-1 min-w-0 flex flex-col
+          ${!showMobileChat ? 'hidden md:flex' : 'flex'}
+        `}>
+          {/* Mobile back button */}
+          <div className="md:hidden flex items-center gap-2 p-2 border-b border-border bg-card">
+            <Button 
+              variant="ghost" 
+              size="icon"
+              onClick={handleMobileBack}
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            {activeConversation && (
+              <span className="font-medium truncate">
+                {activeConversation.contact?.name || 'Conversa'}
+              </span>
+            )}
+          </div>
+          
+          <div className="flex-1">
+            <ChatWindow
+              conversation={activeConversation}
+              messages={messages}
+              isLoading={messagesLoading}
+              windowStatus={windowStatus}
+            />
+          </div>
         </div>
         
-        {/* Right Column - Contact Panel */}
-        <div className="w-80 flex-shrink-0 hidden lg:block">
+        {/* Right Column - Contact Panel (hidden on mobile and tablet) */}
+        <div className="w-80 flex-shrink-0 hidden xl:block">
           <ContactPanel
             conversation={activeConversation}
             contact={contact || activeConversation?.contact || null}
             windowStatus={windowStatus}
           />
         </div>
-      </div>
-      
-      {/* Mobile: Conversation List as overlay when no conversation selected */}
-      <div className="md:hidden">
-        {!activeConversation && (
-          <div className="fixed inset-0 z-50 bg-background pt-16">
-            <ConversationList
-              conversations={conversations}
-              isLoading={conversationsLoading}
-              activeId={activeConversation?.id}
-              filter={filter}
-              onFilterChange={setFilter}
-              onSelect={handleSelectConversation}
-            />
-          </div>
-        )}
       </div>
     </DashboardLayout>
   );

@@ -1,11 +1,11 @@
 /**
  * ConversationList Component
  * 
- * Lista de conversas com busca e filtros
+ * Lista de conversas estilo WhatsApp Web com busca, filtros e indicadores de status
  */
 
 import { useState } from 'react';
-import { Search, Filter, Pin, MessageCircle } from 'lucide-react';
+import { Search, Pin, MessageCircle, Clock, CheckCircle2, Circle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,7 +13,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { InboxConversation, ConversationFilter } from '@/types/inbox';
-import { formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow, differenceInHours } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 interface ConversationListProps {
@@ -38,6 +38,51 @@ function formatPhone(phone: string): string {
   return phone;
 }
 
+type ConversationState = 'active' | 'waiting' | 'closed';
+
+function getConversationState(conversation: InboxConversation): ConversationState {
+  // Closed/resolved
+  if (conversation.status !== 'open') {
+    return 'closed';
+  }
+  
+  // Check if within 24h window (active)
+  if (conversation.last_inbound_at) {
+    const hoursSinceInbound = differenceInHours(new Date(), new Date(conversation.last_inbound_at));
+    if (hoursSinceInbound < 24) {
+      return 'active';
+    }
+  }
+  
+  // Waiting for response
+  return 'waiting';
+}
+
+function StateIndicator({ state }: { state: ConversationState }) {
+  switch (state) {
+    case 'active':
+      return (
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+        </div>
+      );
+    case 'waiting':
+      return (
+        <div className="flex items-center gap-1">
+          <Clock className="w-3 h-3 text-orange-500" />
+        </div>
+      );
+    case 'closed':
+      return (
+        <div className="flex items-center gap-1">
+          <CheckCircle2 className="w-3 h-3 text-muted-foreground" />
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
 function ConversationItem({ 
   conversation, 
   isActive, 
@@ -56,19 +101,27 @@ function ConversationItem({
       })
     : '';
   
+  const state = getConversationState(conversation);
+  
   return (
     <button
       onClick={onClick}
       className={cn(
-        "w-full flex items-start gap-3 p-3 hover:bg-muted/50 transition-colors text-left border-b border-border/50",
+        "w-full flex items-start gap-3 p-3 hover:bg-accent/50 transition-colors text-left border-b border-border/50",
         isActive && "bg-primary/10 hover:bg-primary/15 border-l-2 border-l-primary"
       )}
     >
       {/* Avatar */}
-      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center flex-shrink-0">
-        <span className="text-lg font-semibold text-primary">
-          {(contact?.name?.[0] || contact?.phone?.[0] || '?').toUpperCase()}
-        </span>
+      <div className="relative flex-shrink-0">
+        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center">
+          <span className="text-lg font-semibold text-primary">
+            {(contact?.name?.[0] || contact?.phone?.[0] || '?').toUpperCase()}
+          </span>
+        </div>
+        {/* Online indicator */}
+        {state === 'active' && (
+          <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-background" />
+        )}
       </div>
       
       {/* Content */}
@@ -85,6 +138,7 @@ function ConversationItem({
             )}>
               {displayName}
             </span>
+            <StateIndicator state={state} />
           </div>
           <span className="text-xs text-muted-foreground flex-shrink-0">
             {lastMessageTime}
@@ -94,7 +148,7 @@ function ConversationItem({
         <div className="flex items-center justify-between gap-2 mt-0.5">
           <p className={cn(
             "text-sm truncate",
-            conversation.unread_count > 0 ? "text-foreground" : "text-muted-foreground"
+            conversation.unread_count > 0 ? "text-foreground font-medium" : "text-muted-foreground"
           )}>
             {conversation.last_message_preview || 'Sem mensagens'}
           </p>
@@ -102,7 +156,7 @@ function ConversationItem({
           {conversation.unread_count > 0 && (
             <Badge 
               variant="default" 
-              className="h-5 min-w-5 flex items-center justify-center rounded-full text-xs px-1.5"
+              className="h-5 min-w-5 flex items-center justify-center rounded-full text-xs px-1.5 bg-green-500 hover:bg-green-500"
             >
               {conversation.unread_count > 99 ? '99+' : conversation.unread_count}
             </Badge>
@@ -154,27 +208,35 @@ export function ConversationList({
             placeholder="Buscar por nome ou telefone..."
             value={filter.search}
             onChange={(e) => onFilterChange({ ...filter, search: e.target.value })}
-            className="pl-9 h-9"
+            className="pl-9 h-9 bg-muted/50 border-0"
           />
         </div>
         
         {/* Filters */}
-        <div className="flex gap-2">
+        <div className="flex gap-1">
           <Button
-            variant={!filter.unreadOnly ? "default" : "outline"}
+            variant={filter.status === 'all' ? "default" : "ghost"}
             size="sm"
-            onClick={() => onFilterChange({ ...filter, unreadOnly: false })}
-            className="flex-1"
+            onClick={() => onFilterChange({ ...filter, status: 'all', unreadOnly: false })}
+            className="flex-1 h-8"
           >
             Todas
           </Button>
           <Button
-            variant={filter.unreadOnly ? "default" : "outline"}
+            variant={filter.unreadOnly ? "default" : "ghost"}
             size="sm"
-            onClick={() => onFilterChange({ ...filter, unreadOnly: true })}
-            className="flex-1"
+            onClick={() => onFilterChange({ ...filter, unreadOnly: true, status: 'all' })}
+            className="flex-1 h-8"
           >
             Não lidas
+          </Button>
+          <Button
+            variant={filter.status === 'open' ? "default" : "ghost"}
+            size="sm"
+            onClick={() => onFilterChange({ ...filter, status: 'open', unreadOnly: false })}
+            className="flex-1 h-8"
+          >
+            Ativas
           </Button>
         </div>
       </div>
@@ -183,7 +245,7 @@ export function ConversationList({
       <ScrollArea className="flex-1">
         {isLoading ? (
           <div>
-            {[...Array(5)].map((_, i) => (
+            {[...Array(8)].map((_, i) => (
               <ConversationSkeleton key={i} />
             ))}
           </div>
