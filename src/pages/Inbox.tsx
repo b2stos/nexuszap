@@ -24,6 +24,19 @@ import {
   calculate24hWindow,
 } from '@/hooks/useInbox';
 import { InboxConversation, ConversationFilter } from '@/types/inbox';
+import { useOnboarding } from '@/hooks/useOnboarding';
+
+// Track inbox_opened onboarding step
+function useTrackInboxOpened() {
+  const { state, completeStep } = useOnboarding();
+  
+  useEffect(() => {
+    // Mark inbox_opened step when entering the inbox
+    if (state && !state.inbox_opened_at) {
+      completeStep('inbox_opened');
+    }
+  }, [state?.inbox_opened_at]);
+}
 
 export default function Inbox() {
   const navigate = useNavigate();
@@ -37,6 +50,9 @@ export default function Inbox() {
     status: 'all',
   });
   const [showMobileChat, setShowMobileChat] = useState(false);
+  
+  // Track onboarding step
+  useTrackInboxOpened();
   
   // Get user
   useEffect(() => {

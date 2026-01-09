@@ -4,7 +4,7 @@
  * Página de configuração de canais WhatsApp (BSP NotificaMe)
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
 import { useProtectedUser } from '@/components/auth/ProtectedRoute';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -49,6 +49,7 @@ import {
   Globe,
   AlertTriangle,
   ExternalLink,
+  Shield,
 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import {
@@ -62,6 +63,20 @@ import {
   Channel,
   ChannelProviderConfig,
 } from '@/hooks/useChannels';
+import { useOnboarding } from '@/hooks/useOnboarding';
+
+// Track onboarding when a channel is created
+function useTrackChannelCreation(channelsCount: number) {
+  const { state, completeStep } = useOnboarding();
+  
+  useEffect(() => {
+    // Mark channel_connected step when there's at least one channel
+    if (channelsCount > 0 && state && !state.channel_connected_at) {
+      completeStep('channel_connected');
+    }
+  }, [channelsCount, state?.channel_connected_at]);
+}
+
 
 function ChannelStatusBadge({ status }: { status: Channel['status'] }) {
   switch (status) {
@@ -471,6 +486,9 @@ export default function Channels() {
   const { data: channels = [], isLoading: channelsLoading, refetch } = useChannels(tenantData?.tenantId);
 
   const isLoading = tenantLoading || providerLoading || channelsLoading;
+
+  // Track onboarding step
+  useTrackChannelCreation(channels.length);
 
   if (!user) {
     return (

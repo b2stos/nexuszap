@@ -15,7 +15,8 @@ import {
   Clock, 
   XCircle,
   RefreshCw,
-  Building2
+  Building2,
+  Lightbulb,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -72,6 +73,19 @@ import {
   CreateTemplateInput,
   TemplateVariablesSchema,
 } from '@/hooks/useTemplates';
+import { useOnboarding } from '@/hooks/useOnboarding';
+
+// Track onboarding when a template is created
+function useTrackTemplateCreation(templatesCount: number) {
+  const { state, completeStep } = useOnboarding();
+  
+  useEffect(() => {
+    // Mark template_created step when there's at least one template
+    if (templatesCount > 0 && state && !state.template_created_at) {
+      completeStep('template_created');
+    }
+  }, [templatesCount, state?.template_created_at]);
+}
 
 // Status badge component
 function StatusBadge({ status }: { status: string }) {
@@ -323,6 +337,9 @@ export default function Templates() {
   const { data: tenantData, isLoading: tenantLoading, error: tenantError } = useCurrentTenantForTemplates();
   const { data: templates = [], isLoading: templatesLoading, refetch } = useTemplates(tenantData?.tenantId);
   const deleteTemplateMutation = useDeleteTemplate();
+  
+  // Track onboarding step
+  useTrackTemplateCreation(templates.length);
   
   // Handlers
   const handleCreate = () => {
