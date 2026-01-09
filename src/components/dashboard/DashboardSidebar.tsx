@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { NavLink } from "@/components/NavLink";
 import { 
   LayoutDashboard, 
@@ -13,14 +14,17 @@ import {
   Phone,
   History,
   User,
-  Shield
+  Shield,
+  ChevronRight
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useTenantRole, TenantRole } from "@/hooks/useTenantRole";
+import { supabase } from "@/integrations/supabase/client";
 
 interface SidebarContentProps {
   isAppAdmin: boolean;
@@ -28,6 +32,8 @@ interface SidebarContentProps {
   isTenantAdmin: boolean;
   tenantName: string | null;
   isSuperAdmin: boolean;
+  userProfile: { full_name: string | null; email: string; avatar_url: string | null } | null;
+  onProfileClick: () => void;
 }
 
 function RoleBadge({ role, isSuperAdmin }: { role: TenantRole; isSuperAdmin: boolean }) {
@@ -57,10 +63,21 @@ function RoleBadge({ role, isSuperAdmin }: { role: TenantRole; isSuperAdmin: boo
   );
 }
 
-function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName, isSuperAdmin }: SidebarContentProps) {
+function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName, isSuperAdmin, userProfile, onProfileClick }: SidebarContentProps) {
   // Super admin sees everything
   const showAdminItems = isSuperAdmin || isTenantAdmin;
   const showSystemAdmin = isSuperAdmin || isAppAdmin;
+
+  function getInitials(name: string | null) {
+    if (!name) return "U";
+    return name
+      .split(" ")
+      .map(n => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+  }
+
   return (
     <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-card px-6 pb-4">
       {/* Logo */}
@@ -229,14 +246,28 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName, isS
         </ul>
       </nav>
 
-      {/* User info at bottom */}
+      {/* User Profile at bottom */}
       <div className="mt-auto border-t pt-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <User className="h-4 w-4" />
-          <span className="text-xs">
-            {isSuperAdmin ? "Super Admin" : tenantRole ? `Logado como ${tenantRole}` : "Sem organização"}
-          </span>
-        </div>
+        <button
+          onClick={onProfileClick}
+          className="w-full flex items-center gap-3 p-2 rounded-md hover:bg-muted transition-colors text-left group"
+        >
+          <Avatar className="h-9 w-9">
+            <AvatarImage src={userProfile?.avatar_url || undefined} alt={userProfile?.full_name || "User"} />
+            <AvatarFallback className="text-xs bg-primary/10">
+              {getInitials(userProfile?.full_name)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">
+              {userProfile?.full_name || "Sem nome"}
+            </p>
+            <p className="text-xs text-muted-foreground truncate">
+              {userProfile?.email || ""}
+            </p>
+          </div>
+          <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+        </button>
       </div>
     </div>
   );
@@ -244,8 +275,34 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName, isS
 
 export function DashboardSidebar() {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   const { isAdmin: isAppAdmin } = useUserRole();
   const { role: tenantRole, isAdmin: isTenantAdmin, tenantName, isSuperAdmin } = useTenantRole();
+  const [userProfile, setUserProfile] = useState<{ full_name: string | null; email: string; avatar_url: string | null } | null>(null);
+
+  useEffect(() => {
+    async function fetchUserProfile() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data } = await supabase
+        .from("profiles")
+        .select("full_name, email, avatar_url")
+        .eq("id", user.id)
+        .single();
+
+      if (data) {
+        setUserProfile(data);
+      }
+    }
+
+    fetchUserProfile();
+  }, []);
+
+  const handleProfileClick = () => {
+    setOpen(false); // Close mobile menu if open
+    navigate("/dashboard/profile");
+  };
 
   const sidebarProps = {
     isAppAdmin,
@@ -253,6 +310,8 @@ export function DashboardSidebar() {
     isTenantAdmin,
     tenantName: tenantName || "",
     isSuperAdmin,
+    userProfile,
+    onProfileClick: handleProfileClick,
   };
 
   return (

@@ -25,6 +25,7 @@ import Channels from "./pages/Channels";
 import AuditLogs from "./pages/AuditLogs";
 import HowItWorks from "./pages/HowItWorks";
 import Pricing from "./pages/Pricing";
+import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 
 // Error Boundary to prevent white screen on errors
@@ -93,6 +94,7 @@ const App = () => (
               <Route path="/dashboard/settings" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Settings /></RequireRole></ProtectedRoute>} />
               <Route path="/dashboard/audit-logs" element={<ProtectedRoute><AuditLogs /></ProtectedRoute>} />
               <Route path="/dashboard/validation-test" element={<ProtectedRoute><ValidationTest /></ProtectedRoute>} />
+              <Route path="/dashboard/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
               <Route path="/dashboard/admin" element={<ProtectedRoute><AdminRoute><Admin /></AdminRoute></ProtectedRoute>} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
