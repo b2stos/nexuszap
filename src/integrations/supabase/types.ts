@@ -14,6 +14,53 @@ export type Database = {
   }
   public: {
     Tables: {
+      audit_logs: {
+        Row: {
+          action: string
+          created_at: string
+          entity_id: string | null
+          entity_type: string
+          id: string
+          ip_address: string | null
+          metadata: Json | null
+          tenant_id: string
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          entity_id?: string | null
+          entity_type: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          tenant_id: string
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          entity_id?: string | null
+          entity_type?: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          tenant_id?: string
+          user_agent?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaign_recipients: {
         Row: {
           attempts: number
@@ -714,11 +761,15 @@ export type Database = {
           channel_id: string | null
           event_type: string
           id: string
+          invalid_reason: string | null
+          ip_address: string | null
+          is_invalid: boolean | null
           message_id: string | null
           payload_raw: Json
           processed: boolean
           processing_error: string | null
           provider: string
+          rate_limited: boolean | null
           received_at: string
           tenant_id: string | null
         }
@@ -726,11 +777,15 @@ export type Database = {
           channel_id?: string | null
           event_type: string
           id?: string
+          invalid_reason?: string | null
+          ip_address?: string | null
+          is_invalid?: boolean | null
           message_id?: string | null
           payload_raw: Json
           processed?: boolean
           processing_error?: string | null
           provider: string
+          rate_limited?: boolean | null
           received_at?: string
           tenant_id?: string | null
         }
@@ -738,11 +793,15 @@ export type Database = {
           channel_id?: string | null
           event_type?: string
           id?: string
+          invalid_reason?: string | null
+          ip_address?: string | null
+          is_invalid?: boolean | null
           message_id?: string | null
           payload_raw?: Json
           processed?: boolean
           processing_error?: string | null
           provider?: string
+          rate_limited?: boolean | null
           received_at?: string
           tenant_id?: string | null
         }
@@ -1138,12 +1197,20 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      get_tenant_role: {
+        Args: { _tenant_id: string; _user_id: string }
+        Returns: string
+      }
       get_user_tenant_ids: { Args: { _user_id: string }; Returns: string[] }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
+        Returns: boolean
+      }
+      is_tenant_admin: {
+        Args: { _tenant_id: string; _user_id: string }
         Returns: boolean
       }
       user_belongs_to_tenant: {
