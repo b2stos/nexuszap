@@ -12,6 +12,8 @@ import { Users, Send, MessageSquare, UserCheck, Crown, Shield, Loader2, Trash2, 
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { isSuperAdminEmail } from "@/utils/superAdmin";
+import { DeleteUserDialog } from "@/components/admin/DeleteUserDialog";
 
 interface UserWithStats {
   id: string;
@@ -66,6 +68,18 @@ export default function Admin() {
   const [updatingRole, setUpdatingRole] = useState<string | null>(null);
   const [deletingCampaign, setDeletingCampaign] = useState<string | null>(null);
   const [deletingContact, setDeletingContact] = useState<string | null>(null);
+  
+  // Check if current user is Super Admin
+  const currentUserIsSuperAdmin = isSuperAdminEmail(user?.email);
+  
+  // Handler for when a user is deleted
+  const handleUserDeleted = (userId: string) => {
+    setUsers(prev => prev.filter(u => u.id !== userId));
+    setStats(prev => ({
+      ...prev,
+      total_users: prev.total_users - 1,
+    }));
+  };
 
   useEffect(() => {
     fetchData();
@@ -553,22 +567,34 @@ export default function Admin() {
                       <TableCell className="text-center">{u.campaigns_count}</TableCell>
                       <TableCell className="text-center">{u.contacts_count}</TableCell>
                       <TableCell className="text-right">
-                        {u.id !== user?.id && (
-                          <Button
-                            variant={u.role === "admin" ? "destructive" : "default"}
-                            size="sm"
-                            onClick={() => toggleUserRole(u.id, u.role)}
-                            disabled={updatingRole === u.id}
-                          >
-                            {updatingRole === u.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : u.role === "admin" ? (
-                              "Rebaixar"
-                            ) : (
-                              "Promover"
-                            )}
-                          </Button>
-                        )}
+                        <div className="flex items-center justify-end gap-2">
+                          {u.id !== user?.id && (
+                            <Button
+                              variant={u.role === "admin" ? "destructive" : "default"}
+                              size="sm"
+                              onClick={() => toggleUserRole(u.id, u.role)}
+                              disabled={updatingRole === u.id}
+                            >
+                              {updatingRole === u.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : u.role === "admin" ? (
+                                "Rebaixar"
+                              ) : (
+                                "Promover"
+                              )}
+                            </Button>
+                          )}
+                          {/* Botão de exclusão - apenas para Super Admin */}
+                          {currentUserIsSuperAdmin && (
+                            <DeleteUserDialog
+                              userId={u.id}
+                              userEmail={u.email}
+                              userName={u.full_name}
+                              currentUserId={user?.id || ""}
+                              onUserDeleted={handleUserDeleted}
+                            />
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
