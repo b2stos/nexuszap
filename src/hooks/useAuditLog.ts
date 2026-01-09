@@ -31,7 +31,9 @@ export type AuditAction =
   | "opt_out.delete"
   | "conversation.resolve"
   | "conversation.reopen"
-  | "message.send_template";
+  | "message.send_template"
+  | "user.deactivate"
+  | "user.reactivate";
 
 export type EntityType = 
   | "template" 
@@ -40,7 +42,8 @@ export type EntityType =
   | "contact" 
   | "opt_out" 
   | "conversation" 
-  | "message";
+  | "message"
+  | "user";
 
 interface AuditLogEntry {
   action: AuditAction;

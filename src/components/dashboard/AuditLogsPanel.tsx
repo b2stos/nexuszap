@@ -65,6 +65,8 @@ const actionLabels: Record<string, string> = {
   "conversation.resolve": "Conversa resolvida",
   "conversation.reopen": "Conversa reaberta",
   "message.send_template": "Template enviado",
+  "user.deactivate": "Usuário desativado",
+  "user.reactivate": "Usuário reativado",
 };
 
 const entityIcons: Record<EntityType, React.ReactNode> = {
@@ -75,6 +77,7 @@ const entityIcons: Record<EntityType, React.ReactNode> = {
   opt_out: <ShieldAlert className="h-4 w-4" />,
   conversation: <MessageSquare className="h-4 w-4" />,
   message: <MessageSquare className="h-4 w-4" />,
+  user: <Users className="h-4 w-4" />,
 };
 
 const actionColors: Record<string, string> = {
