@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink } from "@/components/NavLink";
-import { LayoutDashboard, Users, Send, PlusCircle, MessageSquare, QrCode, MessageCircle, Menu, Settings, Crown, Inbox } from "lucide-react";
+import { LayoutDashboard, Users, Send, PlusCircle, MessageSquare, QrCode, MessageCircle, Menu, Settings, Crown, Inbox, FileText } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { useUserRole } from "@/hooks/useUserRole";
@@ -35,6 +35,16 @@ function SidebarContent({ isAdmin }: { isAdmin: boolean }) {
                 >
                   <Inbox className="h-6 w-6 shrink-0" />
                   Inbox
+                </NavLink>
+              </li>
+              <li>
+                <NavLink
+                  to="/dashboard/templates"
+                  className="group flex gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold hover:bg-muted"
+                  activeClassName="bg-muted text-primary"
+                >
+                  <FileText className="h-6 w-6 shrink-0" />
+                  Templates
                 </NavLink>
               </li>
               <li>
