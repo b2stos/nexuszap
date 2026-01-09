@@ -1,14 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { MetricsCards } from "@/components/dashboard/MetricsCards";
-import { MetricsChart } from "@/components/dashboard/MetricsChart";
 import { RecentCampaigns } from "@/components/dashboard/RecentCampaigns";
 import { WebhookMonitor } from "@/components/dashboard/WebhookMonitor";
-import { Send, Upload, FileText } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useProtectedUser } from "@/components/auth/ProtectedRoute";
 import { WelcomeModal } from "@/components/onboarding/WelcomeModal";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
@@ -16,7 +11,6 @@ import { OnboardingCompletionModal } from "@/components/onboarding/OnboardingCom
 import { useOnboarding } from "@/hooks/useOnboarding";
 
 export default function Dashboard() {
-  const navigate = useNavigate();
   const user = useProtectedUser();
   const { showWelcome, isComplete, progress, completeStep } = useOnboarding();
   const [showCompletionModal, setShowCompletionModal] = useState(false);
@@ -57,11 +51,12 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Onboarding Checklist - show if not complete and not dismissed */}
+        {/* 1. Onboarding Checklist - Comece por aqui */}
         {!isComplete && !dismissedChecklist && (
           <OnboardingChecklist onDismiss={() => setDismissedChecklist(true)} />
         )}
         
+        {/* 2. Visão Geral + Webhooks em Tempo Real */}
         <Tabs defaultValue="overview" className="space-y-6">
           <TabsList>
             <TabsTrigger value="overview">Visão Geral</TabsTrigger>
@@ -70,53 +65,15 @@ export default function Dashboard() {
           
           <TabsContent value="overview" className="space-y-6">
             <MetricsCards />
-            
-            <MetricsChart />
-            
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-2xl">Ações Rápidas</CardTitle>
-                <CardDescription>Acesso rápido às principais funcionalidades</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 md:grid-cols-3">
-                  <Button
-                    size="lg"
-                    className="h-24 flex-col gap-2"
-                    onClick={() => navigate("/dashboard/campaigns/new")}
-                  >
-                    <Send className="h-6 w-6" />
-                    <span>Enviar Mensagem</span>
-                  </Button>
-                  <Button
-                    size="lg"
-                    variant="secondary"
-                    className="h-24 flex-col gap-2"
-                    onClick={() => navigate("/dashboard/contacts")}
-                  >
-                    <Upload className="h-6 w-6" />
-                    <span>Importar Contatos</span>
-                  </Button>
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    className="h-24 flex-col gap-2"
-                    onClick={() => navigate("/dashboard/campaigns")}
-                  >
-                    <FileText className="h-6 w-6" />
-                    <span>Ver Relatórios</span>
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-            
-            <RecentCampaigns />
           </TabsContent>
           
           <TabsContent value="webhooks">
             <WebhookMonitor />
           </TabsContent>
         </Tabs>
+
+        {/* 3. Campanhas Recentes */}
+        <RecentCampaigns />
       </div>
     </DashboardLayout>
   );
