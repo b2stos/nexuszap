@@ -2,9 +2,10 @@
  * Inbox Page
  * 
  * Página principal do Inbox estilo WhatsApp Web com 3 colunas
+ * Suporta Demo Mode para visualização de dados fictícios (Super Admin only)
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, Building2, ArrowLeft, MessageCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -12,6 +13,7 @@ import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
 import { ConversationList } from '@/components/inbox/ConversationList';
 import { ChatWindow } from '@/components/inbox/ChatWindow';
 import { ContactPanel } from '@/components/inbox/ContactPanel';
+import { DemoModeToggle, DemoModeBanner } from '@/components/inbox/DemoModeToggle';
 import { supabase } from '@/integrations/supabase/client';
 import { User } from '@supabase/supabase-js';
 import {
@@ -25,6 +27,8 @@ import {
 } from '@/hooks/useInbox';
 import { InboxConversation, ConversationFilter } from '@/types/inbox';
 import { useOnboarding } from '@/hooks/useOnboarding';
+import { useDemoMode } from '@/hooks/useDemoMode';
+import { demoConversations, getDemoMessages, getDemoContact } from '@/data/demoInboxData';
 
 // Track inbox_opened onboarding step
 function useTrackInboxOpened() {
@@ -51,6 +55,9 @@ export default function Inbox() {
   });
   const [showMobileChat, setShowMobileChat] = useState(false);
   
+  // Demo Mode
+  const { isDemoMode, canUseDemoMode } = useDemoMode();
+  
   // Track onboarding step
   useTrackInboxOpened();
   
@@ -59,30 +66,66 @@ export default function Inbox() {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
   }, []);
   
-  // Queries
+  // Queries (disabled when in demo mode)
   const { data: tenantData, isLoading: tenantLoading, error: tenantError } = useCurrentTenant();
   const tenantId = tenantData?.tenantId;
   
   const { 
-    data: conversations = [], 
+    data: realConversations = [], 
     isLoading: conversationsLoading 
-  } = useConversations(tenantId, filter);
+  } = useConversations(isDemoMode ? undefined : tenantId, filter);
   
   const { 
-    data: messages = [], 
+    data: realMessages = [], 
     isLoading: messagesLoading 
-  } = useMessages(activeConversation?.id);
+  } = useMessages(isDemoMode ? undefined : activeConversation?.id);
   
   const { 
-    data: contact 
-  } = useContact(activeConversation?.contact_id);
+    data: realContact 
+  } = useContact(isDemoMode ? undefined : activeConversation?.contact_id);
   
   const markAsRead = useMarkAsRead();
   
-  // Realtime
+  // Demo data filtering
+  const filteredDemoConversations = useMemo(() => {
+    if (!isDemoMode) return [];
+    
+    let convs = [...demoConversations];
+    
+    // Apply filters
+    if (filter.unreadOnly) {
+      convs = convs.filter(c => c.unread_count > 0);
+    }
+    
+    if (filter.status && filter.status !== 'all') {
+      convs = convs.filter(c => c.status === filter.status);
+    }
+    
+    if (filter.search) {
+      const searchLower = filter.search.toLowerCase();
+      convs = convs.filter(c => {
+        const contactName = c.contact?.name?.toLowerCase() || '';
+        const contactPhone = c.contact?.phone || '';
+        return contactName.includes(searchLower) || contactPhone.includes(filter.search);
+      });
+    }
+    
+    return convs;
+  }, [isDemoMode, filter]);
+  
+  // Use demo or real data
+  const conversations = isDemoMode ? filteredDemoConversations : realConversations;
+  const messages = isDemoMode && activeConversation 
+    ? getDemoMessages(activeConversation.id) 
+    : realMessages;
+  const contact = isDemoMode && activeConversation 
+    ? getDemoContact(activeConversation.contact_id) 
+    : (realContact || activeConversation?.contact || null);
+  
+  // Realtime (disabled when in demo mode)
   useInboxRealtime(
-    tenantId,
-    activeConversation?.id,
+    isDemoMode ? undefined : tenantId,
+    isDemoMode ? undefined : activeConversation?.id,
     useCallback(() => {
       // Could play notification sound here
     }, []),
@@ -98,14 +141,19 @@ export default function Inbox() {
     }
   }, [conversations, activeConversation]);
   
-  // Mark as read when conversation is selected
+  // Reset active conversation when demo mode changes
   useEffect(() => {
-    if (activeConversation && activeConversation.unread_count > 0) {
+    setActiveConversation(null);
+  }, [isDemoMode]);
+  
+  // Mark as read when conversation is selected (only for real data)
+  useEffect(() => {
+    if (!isDemoMode && activeConversation && activeConversation.unread_count > 0) {
       markAsRead.mutate(activeConversation.id);
       // Update local state
       setActiveConversation(prev => prev ? { ...prev, unread_count: 0 } : null);
     }
-  }, [activeConversation?.id]);
+  }, [activeConversation?.id, isDemoMode]);
   
   // Calculate 24h window
   const windowStatus = calculate24hWindow(activeConversation?.last_inbound_at || null);
@@ -121,8 +169,8 @@ export default function Inbox() {
     setShowMobileChat(false);
   };
   
-  // Loading state
-  if (tenantLoading) {
+  // Loading state (not applicable in demo mode)
+  if (!isDemoMode && tenantLoading) {
     return (
       <DashboardLayout user={user}>
         <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
@@ -135,8 +183,8 @@ export default function Inbox() {
     );
   }
   
-  // No tenant state
-  if (tenantError || !tenantId) {
+  // No tenant state (not applicable in demo mode)
+  if (!isDemoMode && (tenantError || !tenantId)) {
     return (
       <DashboardLayout user={user}>
         <div className="flex flex-col items-center justify-center h-[calc(100vh-4rem)] p-4">
@@ -146,7 +194,13 @@ export default function Inbox() {
             Você precisa estar vinculado a uma organização para acessar o Inbox.
             Entre em contato com o administrador.
           </p>
-          <Button onClick={() => navigate('/dashboard')}>
+          {canUseDemoMode && (
+            <div className="flex flex-col items-center gap-3 mt-4">
+              <p className="text-sm text-muted-foreground">Ou ative o Demo Mode para visualizar:</p>
+              <DemoModeToggle />
+            </div>
+          )}
+          <Button onClick={() => navigate('/dashboard')} className="mt-4">
             Voltar ao Dashboard
           </Button>
         </div>
@@ -156,61 +210,73 @@ export default function Inbox() {
   
   return (
     <DashboardLayout user={user}>
-      <div className="h-[calc(100vh-4rem)] flex overflow-hidden bg-muted/30">
-        {/* Left Column - Conversation List (hidden on mobile when chat is open) */}
-        <div className={`
-          w-full md:w-80 lg:w-96 flex-shrink-0 border-r border-border
-          ${showMobileChat ? 'hidden md:block' : 'block'}
-        `}>
-          <ConversationList
-            conversations={conversations}
-            isLoading={conversationsLoading}
-            activeId={activeConversation?.id}
-            filter={filter}
-            onFilterChange={setFilter}
-            onSelect={handleSelectConversation}
-          />
-        </div>
-        
-        {/* Center Column - Chat */}
-        <div className={`
-          flex-1 min-w-0 flex flex-col
-          ${!showMobileChat ? 'hidden md:flex' : 'flex'}
-        `}>
-          {/* Mobile back button */}
-          <div className="md:hidden flex items-center gap-2 p-2 border-b border-border bg-card">
-            <Button 
-              variant="ghost" 
-              size="icon"
-              onClick={handleMobileBack}
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </Button>
-            {activeConversation && (
-              <span className="font-medium truncate">
-                {activeConversation.contact?.name || 'Conversa'}
-              </span>
-            )}
+      <div className="h-[calc(100vh-4rem)] flex flex-col overflow-hidden bg-muted/30">
+        {/* Demo Mode Banner & Toggle */}
+        {canUseDemoMode && (
+          <div className="p-2 border-b border-border flex items-center gap-2 bg-card">
+            <DemoModeToggle />
+            <div className="flex-1">
+              <DemoModeBanner />
+            </div>
           </div>
-          
-          <div className="flex-1">
-            <ChatWindow
-              conversation={activeConversation}
-              messages={messages}
-              isLoading={messagesLoading}
-              windowStatus={windowStatus}
-              tenantId={tenantId}
+        )}
+        
+        <div className="flex-1 flex overflow-hidden">
+          {/* Left Column - Conversation List (hidden on mobile when chat is open) */}
+          <div className={`
+            w-full md:w-80 lg:w-96 flex-shrink-0 border-r border-border
+            ${showMobileChat ? 'hidden md:block' : 'block'}
+          `}>
+            <ConversationList
+              conversations={conversations}
+              isLoading={!isDemoMode && conversationsLoading}
+              activeId={activeConversation?.id}
+              filter={filter}
+              onFilterChange={setFilter}
+              onSelect={handleSelectConversation}
             />
           </div>
-        </div>
-        
-        {/* Right Column - Contact Panel (hidden on mobile and tablet) */}
-        <div className="w-80 flex-shrink-0 hidden xl:block">
-          <ContactPanel
-            conversation={activeConversation}
-            contact={contact || activeConversation?.contact || null}
-            windowStatus={windowStatus}
-          />
+          
+          {/* Center Column - Chat */}
+          <div className={`
+            flex-1 min-w-0 flex flex-col
+            ${!showMobileChat ? 'hidden md:flex' : 'flex'}
+          `}>
+            {/* Mobile back button */}
+            <div className="md:hidden flex items-center gap-2 p-2 border-b border-border bg-card">
+              <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={handleMobileBack}
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </Button>
+              {activeConversation && (
+                <span className="font-medium truncate">
+                  {activeConversation.contact?.name || 'Conversa'}
+                </span>
+              )}
+            </div>
+            
+            <div className="flex-1">
+              <ChatWindow
+                conversation={activeConversation}
+                messages={messages}
+                isLoading={!isDemoMode && messagesLoading}
+                windowStatus={windowStatus}
+                tenantId={isDemoMode ? 'demo-tenant' : tenantId!}
+              />
+            </div>
+          </div>
+          
+          {/* Right Column - Contact Panel (hidden on mobile and tablet) */}
+          <div className="w-80 flex-shrink-0 hidden xl:block">
+            <ContactPanel
+              conversation={activeConversation}
+              contact={contact}
+              windowStatus={windowStatus}
+            />
+          </div>
         </div>
       </div>
     </DashboardLayout>
