@@ -27,9 +27,18 @@ interface SidebarContentProps {
   tenantRole: TenantRole;
   isTenantAdmin: boolean;
   tenantName: string | null;
+  isSuperAdmin: boolean;
 }
 
-function RoleBadge({ role }: { role: TenantRole }) {
+function RoleBadge({ role, isSuperAdmin }: { role: TenantRole; isSuperAdmin: boolean }) {
+  if (isSuperAdmin) {
+    return (
+      <Badge variant="secondary" className="bg-red-500/10 text-red-600">
+        Super Admin
+      </Badge>
+    );
+  }
+
   if (!role) return null;
 
   const config = {
@@ -48,7 +57,10 @@ function RoleBadge({ role }: { role: TenantRole }) {
   );
 }
 
-function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: SidebarContentProps) {
+function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName, isSuperAdmin }: SidebarContentProps) {
+  // Super admin sees everything
+  const showAdminItems = isSuperAdmin || isTenantAdmin;
+  const showSystemAdmin = isSuperAdmin || isAppAdmin;
   return (
     <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-card px-6 pb-4">
       {/* Logo */}
@@ -58,13 +70,13 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: S
       </div>
 
       {/* Tenant info */}
-      {tenantName && (
+      {(tenantName || isSuperAdmin) && (
         <div className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-muted/50">
           <Shield className="h-4 w-4 text-muted-foreground" />
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium truncate">{tenantName}</p>
+            <p className="text-xs font-medium truncate">{tenantName || "Admin Central"}</p>
           </div>
-          <RoleBadge role={tenantRole} />
+          <RoleBadge role={tenantRole} isSuperAdmin={isSuperAdmin} />
         </div>
       )}
 
@@ -98,7 +110,7 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: S
               </li>
 
               {/* Templates - Admin only */}
-              {isTenantAdmin && (
+              {showAdminItems && (
                 <li>
                   <NavLink
                     to="/dashboard/templates"
@@ -124,7 +136,7 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: S
               </li>
 
               {/* Campaigns - Admin only */}
-              {isTenantAdmin && (
+              {showAdminItems && (
                 <>
                   <li>
                     <NavLink
@@ -150,7 +162,7 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: S
               )}
 
               {/* Channels - Admin only */}
-              {isTenantAdmin && (
+              {showAdminItems && (
                 <li>
                   <NavLink
                     to="/dashboard/channels"
@@ -164,7 +176,7 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: S
               )}
 
               {/* Settings - Admin only */}
-              {isTenantAdmin && (
+              {showAdminItems && (
                 <li>
                   <NavLink
                     to="/dashboard/settings"
@@ -178,7 +190,7 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: S
               )}
 
               {/* Audit Logs - Admin only */}
-              {isTenantAdmin && (
+              {showAdminItems && (
                 <li>
                   <NavLink
                     to="/dashboard/audit-logs"
@@ -194,7 +206,7 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: S
           </li>
 
           {/* App Admin section */}
-          {isAppAdmin && (
+          {showSystemAdmin && (
             <li>
               <Separator className="my-2" />
               <p className="px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
@@ -222,7 +234,7 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: S
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <User className="h-4 w-4" />
           <span className="text-xs">
-            {tenantRole ? `Logado como ${tenantRole}` : "Sem organização"}
+            {isSuperAdmin ? "Super Admin" : tenantRole ? `Logado como ${tenantRole}` : "Sem organização"}
           </span>
         </div>
       </div>
@@ -233,13 +245,14 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName }: S
 export function DashboardSidebar() {
   const [open, setOpen] = useState(false);
   const { isAdmin: isAppAdmin } = useUserRole();
-  const { role: tenantRole, isAdmin: isTenantAdmin, tenantName } = useTenantRole();
+  const { role: tenantRole, isAdmin: isTenantAdmin, tenantName, isSuperAdmin } = useTenantRole();
 
   const sidebarProps = {
     isAppAdmin,
     tenantRole,
     isTenantAdmin,
-    tenantName,
+    tenantName: tenantName || "",
+    isSuperAdmin,
   };
 
   return (

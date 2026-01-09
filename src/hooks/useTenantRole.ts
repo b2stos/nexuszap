@@ -5,10 +5,13 @@
  * - owner: Full access to everything
  * - admin: Full access except billing/tenant deletion
  * - agent: Limited access (inbox, contacts, view-only templates/campaigns)
+ * 
+ * Super Admin: Bypasses all restrictions (configured in superAdmin.ts)
  */
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { isSuperAdminEmail } from "@/utils/superAdmin";
 
 export type TenantRole = "owner" | "admin" | "agent" | null;
 
@@ -17,6 +20,8 @@ interface TenantContext {
   tenantName: string | null;
   role: TenantRole;
   loading: boolean;
+  isSuperAdmin: boolean;
+  userEmail: string | null;
 }
 
 interface UseTenantRoleReturn extends TenantContext {
@@ -39,6 +44,8 @@ export function useTenantRole(): UseTenantRoleReturn {
     tenantName: null,
     role: null,
     loading: true,
+    isSuperAdmin: false,
+    userEmail: null,
   });
 
   const fetchTenantRole = useCallback(async () => {
@@ -46,9 +53,19 @@ export function useTenantRole(): UseTenantRoleReturn {
       const { data: { session } } = await supabase.auth.getSession();
       
       if (!session?.user) {
-        setContext({ tenantId: null, tenantName: null, role: null, loading: false });
+        setContext({ 
+          tenantId: null, 
+          tenantName: null, 
+          role: null, 
+          loading: false,
+          isSuperAdmin: false,
+          userEmail: null,
+        });
         return;
       }
+
+      const userEmail = session.user.email || null;
+      const superAdmin = isSuperAdminEmail(userEmail);
 
       // Fetch user's tenant membership with tenant info
       const { data: membership, error } = await supabase
@@ -65,12 +82,28 @@ export function useTenantRole(): UseTenantRoleReturn {
 
       if (error) {
         console.error("Error fetching tenant role:", error);
-        setContext({ tenantId: null, tenantName: null, role: null, loading: false });
+        // Super admin still gets access even without tenant
+        setContext({ 
+          tenantId: null, 
+          tenantName: null, 
+          role: superAdmin ? "owner" : null, 
+          loading: false,
+          isSuperAdmin: superAdmin,
+          userEmail,
+        });
         return;
       }
 
       if (!membership || !membership.tenant) {
-        setContext({ tenantId: null, tenantName: null, role: null, loading: false });
+        // Super admin still gets access even without tenant
+        setContext({ 
+          tenantId: null, 
+          tenantName: superAdmin ? "Admin Central" : null, 
+          role: superAdmin ? "owner" : null, 
+          loading: false,
+          isSuperAdmin: superAdmin,
+          userEmail,
+        });
         return;
       }
 
@@ -80,12 +113,21 @@ export function useTenantRole(): UseTenantRoleReturn {
       setContext({
         tenantId: tenant.id,
         tenantName: tenant.name,
-        role: membership.role as TenantRole,
+        role: superAdmin ? "owner" : membership.role as TenantRole,
         loading: false,
+        isSuperAdmin: superAdmin,
+        userEmail,
       });
     } catch (err) {
       console.error("Error in useTenantRole:", err);
-      setContext({ tenantId: null, tenantName: null, role: null, loading: false });
+      setContext({ 
+        tenantId: null, 
+        tenantName: null, 
+        role: null, 
+        loading: false,
+        isSuperAdmin: false,
+        userEmail: null,
+      });
     }
   }, []);
 
@@ -96,7 +138,14 @@ export function useTenantRole(): UseTenantRoleReturn {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         if (!session) {
-          setContext({ tenantId: null, tenantName: null, role: null, loading: false });
+          setContext({ 
+            tenantId: null, 
+            tenantName: null, 
+            role: null, 
+            loading: false,
+            isSuperAdmin: false,
+            userEmail: null,
+          });
         } else {
           fetchTenantRole();
         }
@@ -108,17 +157,20 @@ export function useTenantRole(): UseTenantRoleReturn {
     };
   }, [fetchTenantRole]);
 
-  // Role checks
-  const isOwner = context.role === "owner";
-  const isAdmin = context.role === "owner" || context.role === "admin";
-  const isAgent = context.role === "agent";
+  // Super admin bypasses all checks
+  const { isSuperAdmin } = context;
 
-  // Permission checks
-  const canManageTemplates = isAdmin;
-  const canManageCampaigns = isAdmin;
-  const canManageChannels = isAdmin;
-  const canViewSettings = isAdmin;
-  const canViewAuditLogs = isAdmin;
+  // Role checks - super admin always has full access
+  const isOwner = isSuperAdmin || context.role === "owner";
+  const isAdmin = isSuperAdmin || context.role === "owner" || context.role === "admin";
+  const isAgent = !isSuperAdmin && context.role === "agent";
+
+  // Permission checks - super admin has all permissions
+  const canManageTemplates = isSuperAdmin || isAdmin;
+  const canManageCampaigns = isSuperAdmin || isAdmin;
+  const canManageChannels = isSuperAdmin || isAdmin;
+  const canViewSettings = isSuperAdmin || isAdmin;
+  const canViewAuditLogs = isSuperAdmin || isAdmin;
   const canSendMessages = true; // All roles can send messages
   const canManageContacts = true; // All roles can manage contacts
 
