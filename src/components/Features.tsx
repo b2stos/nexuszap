@@ -1,36 +1,36 @@
-import { Upload, Send, BarChart3, Users, Lock, Zap } from "lucide-react";
+import { MessageSquare, Send, BarChart3, Users, Shield, Inbox } from "lucide-react";
 
 export const Features = () => {
   const features = [
     {
-      icon: Upload,
-      title: "Importação Simples",
-      description: "Carregue sua base de contatos facilmente via CSV ou XLSX. Processo rápido e seguro."
+      icon: Inbox,
+      title: "Inbox Profissional",
+      description: "Atenda todos os clientes em um só lugar. Experiência idêntica ao WhatsApp Web."
     },
     {
       icon: Send,
-      title: "Envio Individual",
-      description: "Cada mensagem é enviada de forma individual, maximizando visualização e engajamento."
-    },
-    {
-      icon: BarChart3,
-      title: "Dashboard Completo",
-      description: "Métricas claras: disparos, entregas e visualizações em tempo real."
+      title: "Campanhas em Massa",
+      description: "Envie mensagens para milhares de contatos usando templates aprovados pela Meta."
     },
     {
       icon: Users,
-      title: "Gestão de Contatos",
-      description: "Organize e gerencie seus contatos de forma eficiente e segura."
+      title: "Multiusuários",
+      description: "Toda sua equipe atendendo no mesmo número, com controle e organização."
     },
     {
-      icon: Lock,
-      title: "Segurança LGPD",
-      description: "Conformidade total com a Lei Geral de Proteção de Dados."
+      icon: MessageSquare,
+      title: "Templates Aprovados",
+      description: "Crie e gerencie templates para iniciar conversas fora da janela de 24h."
     },
     {
-      icon: Zap,
-      title: "Disparo Robusto",
-      description: "Infraestrutura preparada para garantir entrega e performance."
+      icon: BarChart3,
+      title: "Métricas em Tempo Real",
+      description: "Acompanhe entregas, leituras e respostas com dashboards completos."
+    },
+    {
+      icon: Shield,
+      title: "Sem Risco de Bloqueio",
+      description: "API Oficial aprovada pela Meta. Atende todas as regras de compliance."
     }
   ];
 
@@ -39,10 +39,10 @@ export const Features = () => {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
           <h2 className="text-4xl md:text-5xl font-bold mb-4">
-            Funcionalidades que <span className="text-accent">transformam</span> resultados
+            Tudo para <span className="text-accent">vender e atender</span> pelo WhatsApp
           </h2>
           <p className="text-xl text-secondary-foreground/70 max-w-3xl mx-auto">
-            Tudo que você precisa para se comunicar de forma eficiente via WhatsApp.
+            Recursos profissionais para empresas que levam a comunicação a sério.
           </p>
         </div>
 

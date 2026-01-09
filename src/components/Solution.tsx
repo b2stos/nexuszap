@@ -1,27 +1,27 @@
-import { CheckCircle, Target, TrendingUp, Shield } from "lucide-react";
+import { CheckCircle, Shield, MessageSquare, Users, Zap } from "lucide-react";
 import { Card } from "@/components/ui/card";
 
 export const Solution = () => {
   const features = [
     {
-      icon: Target,
-      title: "Entrega Individual Garantida",
-      description: "Cada mensagem é enviada individualmente, garantindo chegada direta na caixa de entrada do destinatário."
-    },
-    {
-      icon: TrendingUp,
-      title: "Alta Taxa de Visualização",
-      description: "Mensagens individuais têm até 10x mais chances de serem visualizadas do que grupos ou listas."
-    },
-    {
-      icon: CheckCircle,
-      title: "Métricas em Tempo Real",
-      description: "Acompanhe entregas, visualizações e engajamento com dados precisos e acionáveis."
-    },
-    {
       icon: Shield,
-      title: "Conformidade e Segurança",
-      description: "Totalmente em conformidade com LGPD, garantindo a proteção dos dados dos seus contatos."
+      title: "Sem Risco de Bloqueio",
+      description: "API Oficial aprovada pela Meta. Seu número está 100% protegido."
+    },
+    {
+      icon: MessageSquare,
+      title: "Inbox Profissional",
+      description: "Atenda todos os clientes em um só lugar, com experiência igual ao WhatsApp Web."
+    },
+    {
+      icon: Zap,
+      title: "Campanhas em Massa",
+      description: "Envie para milhares de contatos com templates aprovados pela Meta."
+    },
+    {
+      icon: Users,
+      title: "Atendimento em Equipe",
+      description: "Múltiplos atendentes trabalhando no mesmo número, com controle total."
     }
   ];
 
@@ -31,15 +31,15 @@ export const Solution = () => {
       
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
         <div className="text-center mb-16">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent/10 border border-accent/20 mb-6">
-            <CheckCircle className="w-4 h-4 text-accent" />
-            <span className="text-sm font-medium text-accent-foreground">A Solução</span>
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-green-500/10 border border-green-500/20 mb-6">
+            <CheckCircle className="w-4 h-4 text-green-600" />
+            <span className="text-sm font-medium text-green-600">A solução oficial</span>
           </div>
           <h2 className="text-4xl md:text-5xl font-bold mb-4">
-            O <span className="bg-gradient-accent bg-clip-text text-transparent">Nexus Zap</span> resolve isso
+            <span className="bg-gradient-accent bg-clip-text text-transparent">Nexus Zap</span>: WhatsApp Oficial
           </h2>
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto">
-            Uma plataforma completa que garante que sua mensagem não apenas chegue, mas seja vista e gere resultados.
+            Tudo o que sua empresa precisa para usar WhatsApp API Oficial, em um só lugar.
           </p>
         </div>
 
@@ -61,24 +61,23 @@ export const Solution = () => {
         {/* Value Proposition */}
         <div className="bg-gradient-hero rounded-2xl p-12 text-center text-primary-foreground shadow-glow">
           <h3 className="text-3xl md:text-4xl font-bold mb-4">
-            Não é só disparo. É entrega real.
+            Atendimento e campanhas no WhatsApp Oficial
           </h3>
           <p className="text-xl opacity-90 mb-8 max-w-2xl mx-auto">
-            O Nexus Zap é o centro onde a mensagem ganha destino, impacto e visualização, 
-            criando um novo padrão de resultado.
+            Com experiência de WhatsApp Web, sem gambiarras e sem risco de bloqueio.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <div className="bg-white/10 backdrop-blur rounded-lg px-6 py-3 border border-white/20">
-              <div className="text-2xl font-bold">98%</div>
-              <div className="text-sm opacity-80">Taxa de entrega</div>
+              <div className="text-2xl font-bold">API Oficial</div>
+              <div className="text-sm opacity-80">Aprovada pela Meta</div>
             </div>
             <div className="bg-white/10 backdrop-blur rounded-lg px-6 py-3 border border-white/20">
-              <div className="text-2xl font-bold">85%</div>
-              <div className="text-sm opacity-80">Visualização média</div>
+              <div className="text-2xl font-bold">BSP</div>
+              <div className="text-sm opacity-80">Homologado</div>
             </div>
             <div className="bg-white/10 backdrop-blur rounded-lg px-6 py-3 border border-white/20">
               <div className="text-2xl font-bold">100%</div>
-              <div className="text-sm opacity-80">Individual</div>
+              <div className="text-sm opacity-80">Conforme regras Meta</div>
             </div>
           </div>
         </div>

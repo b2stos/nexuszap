@@ -26,6 +26,7 @@ import Templates from "./pages/Templates";
 import Channels from "./pages/Channels";
 import AuditLogs from "./pages/AuditLogs";
 import HowItWorks from "./pages/HowItWorks";
+import Pricing from "./pages/Pricing";
 import NotFound from "./pages/NotFound";
 
 // Error Boundary to prevent white screen on errors
@@ -83,6 +84,7 @@ const App = () => (
               <Route path="/termos" element={<Terms />} />
               <Route path="/privacidade" element={<Privacy />} />
               <Route path="/como-funciona" element={<HowItWorks />} />
+              <Route path="/precos" element={<Pricing />} />
               <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
               <Route path="/dashboard/inbox" element={<ProtectedRoute><Inbox /></ProtectedRoute>} />
               <Route path="/dashboard/templates" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Templates /></RequireRole></ProtectedRoute>} />
