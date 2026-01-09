@@ -1,5 +1,5 @@
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
-import { CampaignForm } from "@/components/campaigns/CampaignForm";
+import { MTCampaignForm } from "@/components/campaigns/MTCampaignForm";
 import { WhatsAppStatusBanner } from "@/components/dashboard/WhatsAppStatusBanner";
 import { useProtectedUser } from "@/components/auth/ProtectedRoute";
 
@@ -13,11 +13,11 @@ export default function NewCampaign() {
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-foreground">Nova Campanha</h2>
           <p className="text-muted-foreground mt-2">
-            Crie uma nova campanha de mensagens para seus contatos
+            Crie uma campanha de mensagens usando templates aprovados
           </p>
         </div>
         
-        <CampaignForm />
+        <MTCampaignForm />
       </div>
     </DashboardLayout>
   );
