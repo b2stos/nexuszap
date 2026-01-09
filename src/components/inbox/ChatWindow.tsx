@@ -13,7 +13,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { InboxConversation, InboxMessage, WindowStatus } from '@/types/inbox';
 import { MessageBubble, DateSeparator } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
+import { TemplateComposer } from './TemplateComposer';
 import { useSendMessage, useRetryMessage } from '@/hooks/useSendMessage';
+import { useSendTemplate } from '@/hooks/useSendTemplate';
+import { useApprovedTemplates, useCurrentTenantForTemplates } from '@/hooks/useTemplates';
 import { format, isSameDay } from 'date-fns';
 
 interface ChatWindowProps {
@@ -108,9 +111,11 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sendMessage = useSendMessage();
   const retryMessage = useRetryMessage();
+  const sendTemplate = useSendTemplate();
   
-  // Scroll to bottom when messages change
-  useEffect(() => {
+  // Templates for TemplateComposer
+  const { data: tenantData } = useCurrentTenantForTemplates();
+  const { data: templates = [], isLoading: templatesLoading } = useApprovedTemplates(tenantData?.tenantId);
     if (scrollRef.current) {
       const scrollContainer = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
       if (scrollContainer) {
@@ -158,6 +163,17 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
     });
   }, [conversation, retryMessage]);
   
+  // Handle template send
+  const handleSendTemplate = useCallback(async (templateId: string, variables: Record<string, string>) => {
+    if (!conversation) return;
+    
+    await sendTemplate.mutateAsync({
+      conversationId: conversation.id,
+      templateId,
+      variables,
+    });
+  }, [conversation, sendTemplate]);
+  
   if (!conversation) {
     return <EmptyState />;
   }
@@ -197,13 +213,22 @@ export function ChatWindow({ conversation, messages, isLoading, windowStatus }: 
         </div>
       </ScrollArea>
       
-      {/* Composer */}
-      <MessageComposer
-        conversationId={conversation.id}
-        windowStatus={windowStatus}
-        onSend={handleSend}
-        isSending={sendMessage.isPending}
-      />
+      {/* Composer - Text or Template based on window status */}
+      {windowStatus.isOpen ? (
+        <MessageComposer
+          conversationId={conversation.id}
+          windowStatus={windowStatus}
+          onSend={handleSend}
+          isSending={sendMessage.isPending}
+        />
+      ) : (
+        <TemplateComposer
+          templates={templates}
+          isLoadingTemplates={templatesLoading}
+          onSend={handleSendTemplate}
+          isSending={sendTemplate.isPending}
+        />
+      )}
     </div>
   );
 }
