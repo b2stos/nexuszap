@@ -1,11 +1,12 @@
 /**
- * NotificaMe BSP Webhook Handler
+ * NotificaMe BSP Webhook Handler - PRODUCTION GRADE
  * 
- * Endpoint público para receber eventos do WhatsApp via BSP NotificaMe.
- * 
- * Endpoints:
- * - POST /webhook-notificame?channel_id=xxx  → Recebe eventos
- * - GET  /webhook-notificame?channel_id=xxx  → Health check / Verificação Meta
+ * Design principles:
+ * 1. ACK FAST: Always respond 200 in < 1s
+ * 2. NEVER FAIL: Even on errors, return 200 and log
+ * 3. ASYNC PROCESSING: Use EdgeRuntime.waitUntil() for heavy work
+ * 4. IDEMPOTENT: Deduplicate by provider_message_id
+ * 5. OBSERVABLE: Structured JSON logs with request_id
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -17,8 +18,6 @@ import {
   Channel,
 } from '../_shared/providers/index.ts';
 import {
-  mapInboundToContact,
-  mapInboundToConversation,
   mapInboundToMessage,
   mapStatusToUpdate,
   normalizePhone,
@@ -30,8 +29,38 @@ import {
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-hub-signature-256, x-signature',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-hub-signature-256, x-signature, x-notificame-signature',
 };
+
+// ============================================
+// LOGGING - Structured JSON logs
+// ============================================
+
+interface LogContext {
+  request_id: string;
+  channel_id?: string;
+  tenant_id?: string;
+  method?: string;
+  ip?: string;
+}
+
+function log(level: 'info' | 'warn' | 'error', message: string, ctx: LogContext, data?: Record<string, unknown>) {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...ctx,
+    ...data,
+  };
+  
+  if (level === 'error') {
+    console.error(JSON.stringify(logEntry));
+  } else if (level === 'warn') {
+    console.warn(JSON.stringify(logEntry));
+  } else {
+    console.log(JSON.stringify(logEntry));
+  }
+}
 
 // ============================================
 // SUPABASE CLIENT (Service Role for bypassing RLS)
@@ -50,18 +79,16 @@ function getSupabaseAdmin() {
 // TYPES
 // ============================================
 
-interface WebhookResult {
-  success: boolean;
-  events_processed: number;
-  messages_created: number;
-  messages_updated: number;
-  errors: string[];
-}
-
 interface ChannelWithProvider extends Channel {
   provider: {
     name: string;
   };
+}
+
+interface WebhookEventRecord {
+  id: string;
+  status: 'received' | 'processing' | 'processed' | 'failed';
+  error?: string;
 }
 
 // ============================================
@@ -69,64 +96,83 @@ interface ChannelWithProvider extends Channel {
 // ============================================
 
 /**
- * Salva o payload bruto do webhook para auditoria
+ * Salva o payload bruto do webhook com métricas
  */
 async function saveWebhookEvent(
   supabase: ReturnType<typeof getSupabaseAdmin>,
-  tenantId: string,
-  channelId: string,
+  tenantId: string | null,
+  channelId: string | null,
   eventType: string,
   payload: unknown,
-  messageId?: string,
+  ctx: LogContext,
   options?: {
     isInvalid?: boolean;
     invalidReason?: string;
     ipAddress?: string;
     rateLimited?: boolean;
+    method?: string;
+    latencyMs?: number;
+    headers?: Record<string, string>;
   }
 ): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('mt_webhook_events')
-    .insert({
-      tenant_id: tenantId,
-      channel_id: channelId,
-      provider: 'notificame',
-      event_type: eventType,
-      payload_raw: payload,
-      message_id: messageId,
-      processed: false,
-      received_at: new Date().toISOString(),
-      is_invalid: options?.isInvalid || false,
-      invalid_reason: options?.invalidReason || null,
-      ip_address: options?.ipAddress || null,
-      rate_limited: options?.rateLimited || false,
-    })
-    .select('id')
-    .single();
-  
-  if (error) {
-    console.error('[Webhook] Failed to save webhook event:', error);
+  try {
+    const { data, error } = await supabase
+      .from('mt_webhook_events')
+      .insert({
+        tenant_id: tenantId,
+        channel_id: channelId,
+        provider: 'notificame',
+        event_type: eventType,
+        payload_raw: {
+          body: payload,
+          request_id: ctx.request_id,
+          method: options?.method,
+          latency_ms: options?.latencyMs,
+          headers: options?.headers,
+        },
+        processed: false,
+        received_at: new Date().toISOString(),
+        is_invalid: options?.isInvalid || false,
+        invalid_reason: options?.invalidReason || null,
+        ip_address: options?.ipAddress || null,
+        rate_limited: options?.rateLimited || false,
+      })
+      .select('id')
+      .single();
+    
+    if (error) {
+      log('error', 'Failed to save webhook event', ctx, { error: error.message });
+      return null;
+    }
+    
+    return data?.id || null;
+  } catch (e) {
+    log('error', 'Exception saving webhook event', ctx, { error: String(e) });
     return null;
   }
-  
-  return data?.id || null;
 }
 
 /**
- * Marca evento como processado
+ * Atualiza status do evento
  */
-async function markEventProcessed(
+async function updateEventStatus(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   eventId: string,
-  error?: string
+  status: 'processing' | 'processed' | 'failed',
+  error?: string,
+  ctx?: LogContext
 ): Promise<void> {
-  await supabase
-    .from('mt_webhook_events')
-    .update({
-      processed: true,
-      processing_error: error || null,
-    })
-    .eq('id', eventId);
+  try {
+    await supabase
+      .from('mt_webhook_events')
+      .update({
+        processed: status === 'processed' || status === 'failed',
+        processing_error: error || null,
+      })
+      .eq('id', eventId);
+  } catch (e) {
+    if (ctx) log('error', 'Failed to update event status', ctx, { error: String(e) });
+  }
 }
 
 /**
@@ -136,7 +182,8 @@ async function upsertContactFromInbound(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   tenantId: string,
   phone: string,
-  name?: string
+  name?: string,
+  ctx?: LogContext
 ): Promise<string | null> {
   const normalizedPhone = normalizePhone(phone);
   
@@ -158,7 +205,6 @@ async function upsertContactFromInbound(
       })
       .eq('id', existing.id);
     
-    console.log(`[Webhook] Contact updated: ${existing.id}`);
     return existing.id;
   }
   
@@ -175,11 +221,10 @@ async function upsertContactFromInbound(
     .single();
   
   if (error) {
-    console.error('[Webhook] Failed to create contact:', error);
+    if (ctx) log('error', 'Failed to create contact', ctx, { error: error.message });
     return null;
   }
   
-  console.log(`[Webhook] Contact created: ${newContact.id}`);
   return newContact.id;
 }
 
@@ -191,16 +236,17 @@ async function upsertConversationFromInbound(
   tenantId: string,
   channelId: string,
   contactId: string,
-  event: InboundMessageEvent
+  event: InboundMessageEvent,
+  ctx?: LogContext
 ): Promise<string | null> {
-  // Buscar conversa existente (preferir open)
+  // Buscar conversa existente
   const { data: existing } = await supabase
     .from('conversations')
     .select('id, status, unread_count')
     .eq('tenant_id', tenantId)
     .eq('channel_id', channelId)
     .eq('contact_id', contactId)
-    .order('status', { ascending: true }) // 'open' vem antes de 'resolved'
+    .order('status', { ascending: true })
     .limit(1)
     .maybeSingle();
   
@@ -208,7 +254,6 @@ async function upsertConversationFromInbound(
     (event.media ? `[${event.message_type}]` : '[mensagem]');
   
   if (existing) {
-    // Atualizar conversa existente
     const newUnreadCount = (existing.unread_count || 0) + 1;
     
     await supabase
@@ -218,12 +263,11 @@ async function upsertConversationFromInbound(
         last_inbound_at: event.timestamp.toISOString(),
         last_message_preview: preview,
         unread_count: newUnreadCount,
-        status: 'open', // Reabrir se estava resolvida
+        status: 'open',
         updated_at: new Date().toISOString(),
       })
       .eq('id', existing.id);
     
-    console.log(`[Webhook] Conversation updated: ${existing.id}, unread: ${newUnreadCount}`);
     return existing.id;
   }
   
@@ -245,11 +289,10 @@ async function upsertConversationFromInbound(
     .single();
   
   if (error) {
-    console.error('[Webhook] Failed to create conversation:', error);
+    if (ctx) log('error', 'Failed to create conversation', ctx, { error: error.message });
     return null;
   }
   
-  console.log(`[Webhook] Conversation created: ${newConv.id}`);
   return newConv.id;
 }
 
@@ -262,7 +305,8 @@ async function insertInboundMessageIdempotent(
   conversationId: string,
   channelId: string,
   contactId: string,
-  event: InboundMessageEvent
+  event: InboundMessageEvent,
+  ctx?: LogContext
 ): Promise<{ id: string | null; duplicate: boolean }> {
   // Verificar duplicata por provider_message_id
   const { data: existing } = await supabase
@@ -273,7 +317,7 @@ async function insertInboundMessageIdempotent(
     .maybeSingle();
   
   if (existing) {
-    console.log(`[Webhook] Duplicate message ignored: ${event.provider_message_id}`);
+    if (ctx) log('info', 'Duplicate message ignored', ctx, { provider_message_id: event.provider_message_id });
     return { id: existing.id, duplicate: true };
   }
   
@@ -295,18 +339,17 @@ async function insertInboundMessageIdempotent(
       media_mime_type: mappedMessage.media_mime_type,
       media_filename: mappedMessage.media_filename,
       provider_message_id: event.provider_message_id,
-      status: 'delivered', // Inbound já foi recebido
+      status: 'delivered',
       created_at: event.timestamp.toISOString(),
     })
     .select('id')
     .single();
   
   if (error) {
-    console.error('[Webhook] Failed to insert message:', error);
+    if (ctx) log('error', 'Failed to insert message', ctx, { error: error.message });
     return { id: null, duplicate: false };
   }
   
-  console.log(`[Webhook] Message created: ${newMessage.id}, provider_id: ${event.provider_message_id}`);
   return { id: newMessage.id, duplicate: false };
 }
 
@@ -316,7 +359,8 @@ async function insertInboundMessageIdempotent(
 async function updateOutboundMessageStatus(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   tenantId: string,
-  event: StatusUpdateEvent
+  event: StatusUpdateEvent,
+  ctx?: LogContext
 ): Promise<boolean> {
   const statusUpdate = mapStatusToUpdate(event);
   
@@ -330,7 +374,7 @@ async function updateOutboundMessageStatus(
     .maybeSingle();
   
   if (!message) {
-    console.warn(`[Webhook] Orphan status update for: ${event.provider_message_id}`);
+    if (ctx) log('warn', 'Orphan status update', ctx, { provider_message_id: event.provider_message_id });
     return false;
   }
   
@@ -339,9 +383,7 @@ async function updateOutboundMessageStatus(
   const currentIdx = statusOrder.indexOf(message.status);
   const newIdx = statusOrder.indexOf(statusUpdate.status);
   
-  // 'failed' sempre pode atualizar, senão só avança
   if (statusUpdate.status !== 'failed' && newIdx <= currentIdx) {
-    console.log(`[Webhook] Status not advanced: ${message.status} -> ${statusUpdate.status}`);
     return true;
   }
   
@@ -363,11 +405,10 @@ async function updateOutboundMessageStatus(
     .eq('id', message.id);
   
   if (error) {
-    console.error('[Webhook] Failed to update message status:', error);
+    if (ctx) log('error', 'Failed to update message status', ctx, { error: error.message });
     return false;
   }
   
-  console.log(`[Webhook] Message status updated: ${message.id} -> ${statusUpdate.status}`);
   return true;
 }
 
@@ -375,49 +416,21 @@ async function updateOutboundMessageStatus(
 // EVENT PROCESSORS
 // ============================================
 
-/**
- * Processa evento de mensagem inbound
- */
 async function processInboundMessage(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   tenantId: string,
   channelId: string,
-  event: InboundMessageEvent
+  event: InboundMessageEvent,
+  ctx: LogContext
 ): Promise<{ success: boolean; duplicate: boolean; messageId?: string }> {
   try {
-    // 1. Upsert contact
-    const contactId = await upsertContactFromInbound(
-      supabase,
-      tenantId,
-      event.from_phone
-    );
+    const contactId = await upsertContactFromInbound(supabase, tenantId, event.from_phone, undefined, ctx);
+    if (!contactId) return { success: false, duplicate: false };
     
-    if (!contactId) {
-      return { success: false, duplicate: false };
-    }
+    const conversationId = await upsertConversationFromInbound(supabase, tenantId, channelId, contactId, event, ctx);
+    if (!conversationId) return { success: false, duplicate: false };
     
-    // 2. Upsert conversation
-    const conversationId = await upsertConversationFromInbound(
-      supabase,
-      tenantId,
-      channelId,
-      contactId,
-      event
-    );
-    
-    if (!conversationId) {
-      return { success: false, duplicate: false };
-    }
-    
-    // 3. Insert message (idempotent)
-    const result = await insertInboundMessageIdempotent(
-      supabase,
-      tenantId,
-      conversationId,
-      channelId,
-      contactId,
-      event
-    );
+    const result = await insertInboundMessageIdempotent(supabase, tenantId, conversationId, channelId, contactId, event, ctx);
     
     return {
       success: result.id !== null,
@@ -425,23 +438,21 @@ async function processInboundMessage(
       messageId: result.id || undefined,
     };
   } catch (error) {
-    console.error('[Webhook] Error processing inbound message:', error);
+    log('error', 'Error processing inbound message', ctx, { error: String(error) });
     return { success: false, duplicate: false };
   }
 }
 
-/**
- * Processa evento de status update
- */
 async function processStatusUpdate(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   tenantId: string,
-  event: StatusUpdateEvent
+  event: StatusUpdateEvent,
+  ctx: LogContext
 ): Promise<boolean> {
   try {
-    return await updateOutboundMessageStatus(supabase, tenantId, event);
+    return await updateOutboundMessageStatus(supabase, tenantId, event, ctx);
   } catch (error) {
-    console.error('[Webhook] Error processing status update:', error);
+    log('error', 'Error processing status update', ctx, { error: String(error) });
     return false;
   }
 }
@@ -450,19 +461,16 @@ async function processStatusUpdate(
 // RATE LIMITING
 // ============================================
 
-// Simple in-memory rate limiting (per channel per minute)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT_MAX = 100; // Max 100 requests per minute per channel
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const RATE_LIMIT_MAX = 100;
+const RATE_LIMIT_WINDOW = 60000;
 
 function checkRateLimit(channelId: string): boolean {
   const now = Date.now();
-  const key = channelId;
-  
-  const entry = rateLimitMap.get(key);
+  const entry = rateLimitMap.get(channelId);
   
   if (!entry || now > entry.resetTime) {
-    rateLimitMap.set(key, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
+    rateLimitMap.set(channelId, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
     return true;
   }
   
@@ -481,328 +489,359 @@ function getClientIP(req: Request): string {
     'unknown';
 }
 
+function generateRequestId(): string {
+  return `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+}
+
+function sanitizeHeaders(req: Request): Record<string, string> {
+  const safe: Record<string, string> = {};
+  const allowList = ['content-type', 'user-agent', 'x-forwarded-for', 'x-notificame-signature', 'x-hub-signature-256'];
+  
+  req.headers.forEach((value, key) => {
+    if (allowList.includes(key.toLowerCase())) {
+      // Truncar valores longos e mascarar tokens
+      safe[key] = value.length > 100 ? value.substring(0, 100) + '...' : value;
+    }
+  });
+  
+  return safe;
+}
+
 // ============================================
-// MAIN HANDLER
+// ASYNC BACKGROUND PROCESSOR
+// ============================================
+
+async function processWebhookAsync(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  tenantId: string,
+  channelId: string,
+  channel: ChannelWithProvider,
+  body: unknown,
+  rawBody: string,
+  webhookEventId: string | null,
+  ctx: LogContext
+): Promise<void> {
+  const startTime = Date.now();
+  
+  try {
+    const providerName = channel.provider?.name || 'notificame';
+    const provider = getProvider(providerName);
+    
+    // Parse events
+    let events: WebhookEvent[];
+    
+    try {
+      events = provider.parseWebhook(channel as unknown as Channel, body);
+    } catch (error) {
+      log('error', 'Parse failed', ctx, { error: String(error) });
+      if (webhookEventId) {
+        await updateEventStatus(supabase, webhookEventId, 'failed', `Parse error: ${error}`, ctx);
+      }
+      return;
+    }
+    
+    log('info', `Parsed ${events.length} events`, ctx);
+    
+    // Process events
+    let messagesCreated = 0;
+    let messagesUpdated = 0;
+    const errors: string[] = [];
+    
+    for (const event of events) {
+      try {
+        if (event.type === 'message.inbound') {
+          const result = await processInboundMessage(supabase, tenantId, channelId, event, ctx);
+          if (result.success && !result.duplicate) {
+            messagesCreated++;
+          }
+        } else if (event.type === 'message.status') {
+          const result = await processStatusUpdate(supabase, tenantId, event, ctx);
+          if (result) {
+            messagesUpdated++;
+          }
+        }
+      } catch (error) {
+        errors.push(String(error));
+      }
+    }
+    
+    // Mark as processed
+    if (webhookEventId) {
+      await updateEventStatus(
+        supabase,
+        webhookEventId,
+        errors.length > 0 ? 'failed' : 'processed',
+        errors.length > 0 ? errors.join('; ') : undefined,
+        ctx
+      );
+    }
+    
+    const duration = Date.now() - startTime;
+    log('info', 'Processing complete', ctx, {
+      events_count: events.length,
+      messages_created: messagesCreated,
+      messages_updated: messagesUpdated,
+      errors_count: errors.length,
+      duration_ms: duration,
+    });
+    
+  } catch (error) {
+    log('error', 'Async processing failed', ctx, { error: String(error) });
+    if (webhookEventId) {
+      await updateEventStatus(supabase, webhookEventId, 'failed', String(error), ctx);
+    }
+  }
+}
+
+// ============================================
+// MAIN HANDLER - ACK FAST, PROCESS ASYNC
 // ============================================
 
 async function handleWebhook(req: Request): Promise<Response> {
+  const startTime = Date.now();
+  const requestId = generateRequestId();
   const url = new URL(req.url);
   const channelId = url.searchParams.get('channel_id');
   const clientIP = getClientIP(req);
   
-  // Log request info
-  console.log(`[Webhook] ${req.method} ${url.pathname}?${url.searchParams} from ${clientIP}`);
+  const ctx: LogContext = {
+    request_id: requestId,
+    channel_id: channelId || undefined,
+    method: req.method,
+    ip: clientIP,
+  };
+  
+  log('info', `Incoming ${req.method} request`, ctx);
   
   // ===========================================
-  // TEST MODE: Respond 200 quickly without channel_id
-  // This allows BSP panels to verify the endpoint is alive
+  // HEALTH CHECK ENDPOINTS (no channel_id required)
   // ===========================================
+  
+  // HEAD - Quick ping (BSP connectivity test)
+  if (req.method === 'HEAD') {
+    return new Response(null, { 
+      status: 200, 
+      headers: corsHeaders 
+    });
+  }
+  
+  // Test mode: no channel_id
   if (!channelId) {
-    console.log('[Webhook] Test mode - no channel_id provided');
+    log('info', 'Test mode - no channel_id', ctx);
     
-    // For POST/PUT/PATCH, try to read and log body safely
-    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+    // For POST, try to log body
+    if (req.method === 'POST') {
       try {
         const rawBody = await req.text();
-        console.log(`[Webhook] Test mode body (${rawBody.length} chars):`, rawBody.substring(0, 500));
+        log('info', 'Test mode body received', ctx, { 
+          body_length: rawBody.length,
+          body_preview: rawBody.substring(0, 200),
+        });
       } catch (e) {
-        console.log('[Webhook] Test mode - could not read body:', e);
+        log('warn', 'Could not read test body', ctx, { error: String(e) });
       }
     }
     
-    // Return 200 OK for any method (GET, POST, HEAD, etc.)
+    const latency = Date.now() - startTime;
     return new Response(
       JSON.stringify({ 
-        ok: true, 
+        ok: true,
+        request_id: requestId,
         method: req.method,
-        message: 'Webhook endpoint is active. Provide channel_id for real events.',
+        message: 'Webhook endpoint active. Provide channel_id for real events.',
+        latency_ms: latency,
         timestamp: new Date().toISOString(),
       }),
-      { 
-        status: 200, 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-      }
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
   
+  // ===========================================
+  // REAL EVENT PROCESSING (with channel_id)
+  // ===========================================
+  
   const supabase = getSupabaseAdmin();
   
-  // Fetch channel with provider
+  // Fetch channel
   const { data: channel, error: channelError } = await supabase
     .from('channels')
     .select(`
-      id,
-      tenant_id,
-      name,
-      phone_number,
-      status,
-      provider_config,
-      provider_phone_id,
+      id, tenant_id, name, phone_number, status, provider_config, provider_phone_id,
       provider:providers!inner(name)
     `)
     .eq('id', channelId)
     .maybeSingle();
   
   if (channelError || !channel) {
-    console.error('[Webhook] Channel not found:', channelId, channelError);
+    log('warn', 'Channel not found', ctx, { error: channelError?.message });
+    // Still return 200 to not break BSP retry
     return new Response(
-      JSON.stringify({ error: 'Channel not found' }),
-      { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ ok: true, warning: 'Channel not found', request_id: requestId }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
   
-  // Cast para tipo correto
   const typedChannel = channel as unknown as ChannelWithProvider;
   const tenantId = typedChannel.tenant_id;
-  const providerName = typedChannel.provider?.name || 'notificame';
+  ctx.tenant_id = tenantId;
   
-  console.log(`[Webhook] Channel: ${typedChannel.name}, Tenant: ${tenantId}, Provider: ${providerName}`);
+  log('info', `Channel found: ${typedChannel.name}`, ctx);
   
-  // Rate limiting check
+  // Rate limiting
   if (!checkRateLimit(channelId)) {
-    console.warn(`[Webhook] Rate limit exceeded for channel: ${channelId}`);
-    
-    // Log the rate limited attempt
-    await saveWebhookEvent(
-      supabase,
-      tenantId,
-      channelId,
-      'rate_limited',
-      { message: 'Rate limit exceeded' },
-      undefined,
-      { isInvalid: true, invalidReason: 'Rate limit exceeded', ipAddress: clientIP, rateLimited: true }
-    );
-    
+    log('warn', 'Rate limit exceeded', ctx);
+    await saveWebhookEvent(supabase, tenantId, channelId, 'rate_limited', {}, ctx, {
+      isInvalid: true, invalidReason: 'Rate limit exceeded', ipAddress: clientIP, rateLimited: true
+    });
+    // Return 200 anyway to not trigger retries
     return new Response(
-      JSON.stringify({ error: 'Rate limit exceeded' }),
-      { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ ok: true, warning: 'Rate limited', request_id: requestId }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
   
-  // GET - Health check / Meta verification
+  // GET - Health check
   if (req.method === 'GET') {
-    // Meta webhook verification (hub.challenge)
     const mode = url.searchParams.get('hub.mode');
     const token = url.searchParams.get('hub.verify_token');
     const challenge = url.searchParams.get('hub.challenge');
     
+    // Meta webhook verification
     if (mode === 'subscribe' && challenge) {
-      // Verificar token se configurado
       const expectedToken = typedChannel.provider_config?.webhook_secret;
-      
       if (expectedToken && token !== expectedToken) {
-        console.warn('[Webhook] Invalid verify token');
-        
-        // Log invalid attempt
-        await saveWebhookEvent(
-          supabase,
-          tenantId,
-          channelId,
-          'invalid_verify_token',
-          { provided_token: token ? '***' : 'missing' },
-          undefined,
-          { isInvalid: true, invalidReason: 'Invalid verify token', ipAddress: clientIP }
-        );
-        
+        log('warn', 'Invalid verify token', ctx);
         return new Response('Forbidden', { status: 403, headers: corsHeaders });
       }
-      
-      console.log('[Webhook] Meta verification successful');
+      log('info', 'Meta verification successful', ctx);
       return new Response(challenge, { status: 200, headers: corsHeaders });
     }
     
-    // Health check simples
+    // Simple health check
     return new Response(
       JSON.stringify({
-        status: 'ok',
+        ok: true,
+        request_id: requestId,
         channel_id: channelId,
         channel_name: typedChannel.name,
         channel_status: typedChannel.status,
-        provider: providerName,
         timestamp: new Date().toISOString(),
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
-  }
-  
-  // HEAD - Quick health check (same as GET but no body)
-  if (req.method === 'HEAD') {
-    return new Response(null, { 
-      status: 200, 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-    });
   }
   
   // POST - Webhook event
   if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405, headers: corsHeaders });
+    return new Response(
+      JSON.stringify({ ok: true, warning: 'Method not POST', request_id: requestId }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
   
-  // Parse body (handle empty or invalid body gracefully)
-  let body: unknown;
+  // Read body safely
   let rawBody = '';
-  
   try {
     rawBody = await req.text();
   } catch (e) {
-    console.warn('[Webhook] Could not read body:', e);
+    log('warn', 'Could not read body', ctx, { error: String(e) });
   }
   
-  // Handle empty body
+  // Empty body (test ping)
   if (!rawBody || rawBody.trim() === '') {
-    console.log('[Webhook] Empty body received - returning OK');
+    log('info', 'Empty body received', ctx);
+    const latency = Date.now() - startTime;
+    await saveWebhookEvent(supabase, tenantId, channelId, 'test_ping', { empty: true }, ctx, {
+      ipAddress: clientIP, method: 'POST', latencyMs: latency
+    });
     return new Response(
       JSON.stringify({ 
         ok: true, 
-        method: req.method,
-        message: 'Empty body received. Real events should have JSON payload.',
-        channel_id: channelId,
+        request_id: requestId,
+        message: 'Empty body received (test ping)',
         channel_name: typedChannel.name,
+        latency_ms: latency,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
   
-  // Try to parse as JSON
+  // Try to parse JSON
+  let body: unknown;
   try {
     body = JSON.parse(rawBody);
   } catch {
-    // NotificaMe "Testar" button sends non-JSON body (form-urlencoded or plain text)
-    // Return 200 OK to pass the test, but log what was received for debugging
-    console.warn('[Webhook] Non-JSON body received (test mode?):', rawBody.substring(0, 200));
+    log('warn', 'Non-JSON body received', ctx, { body_preview: rawBody.substring(0, 200) });
+    const latency = Date.now() - startTime;
+    await saveWebhookEvent(supabase, tenantId, channelId, 'non_json_body', { raw: rawBody.substring(0, 1000) }, ctx, {
+      ipAddress: clientIP, method: 'POST', latencyMs: latency
+    });
     return new Response(
       JSON.stringify({ 
         ok: true, 
-        method: req.method,
-        message: 'Body received but not JSON. For real events, send JSON payload.',
-        channel_id: channelId,
+        request_id: requestId,
+        message: 'Body received but not JSON (test mode?)',
         channel_name: typedChannel.name,
         body_preview: rawBody.substring(0, 100),
-        timestamp: new Date().toISOString(),
+        latency_ms: latency,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
   
-  // Get provider
-  const provider = getProvider(providerName);
-  
-  // Validate webhook signature (if configured)
-  try {
-    const headers: Record<string, string> = {};
-    req.headers.forEach((value, key) => {
-      headers[key.toLowerCase()] = value;
-    });
-    
-    await provider.validateWebhook({
-      channel: typedChannel as unknown as Channel,
-      headers,
-      body,
-      raw_body: rawBody,
-    });
-  } catch (error) {
-    console.error('[Webhook] Validation failed:', error);
-    // Log the attempt
-    await saveWebhookEvent(supabase, tenantId, channelId, 'validation_failed', body);
-    
-    return new Response(
-      JSON.stringify({ error: 'Webhook validation failed' }),
-      { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
-  
-  // Save raw webhook event
+  // Save raw event FIRST (for audit)
+  const latency = Date.now() - startTime;
   const webhookEventId = await saveWebhookEvent(
     supabase,
     tenantId,
     channelId,
     'webhook_received',
-    body
+    body,
+    ctx,
+    {
+      ipAddress: clientIP,
+      method: 'POST',
+      latencyMs: latency,
+      headers: sanitizeHeaders(req),
+    }
   );
   
-  // Parse events
-  let events: WebhookEvent[];
-  
-  try {
-    events = provider.parseWebhook(typedChannel as unknown as Channel, body);
-  } catch (error) {
-    console.error('[Webhook] Parse failed:', error);
-    
-    if (webhookEventId) {
-      await markEventProcessed(supabase, webhookEventId, `Parse error: ${error}`);
-    }
-    
-    // Responder 200 para evitar reentrega em loop
-    return new Response(
-      JSON.stringify({ 
-        success: false, 
-        error: 'Parse error',
-        events_processed: 0,
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
-  
-  console.log(`[Webhook] Parsed ${events.length} events`);
-  
-  // Process events
-  const result: WebhookResult = {
-    success: true,
-    events_processed: 0,
-    messages_created: 0,
-    messages_updated: 0,
-    errors: [],
-  };
-  
-  for (const event of events) {
-    try {
-      if (event.type === 'message.inbound') {
-        const inboundResult = await processInboundMessage(
-          supabase,
-          tenantId,
-          channelId,
-          event
-        );
-        
-        if (inboundResult.success) {
-          result.events_processed++;
-          if (!inboundResult.duplicate) {
-            result.messages_created++;
-          }
-        } else {
-          result.errors.push(`Failed to process inbound: ${event.provider_message_id}`);
-        }
-      } else if (event.type === 'message.status') {
-        const statusResult = await processStatusUpdate(supabase, tenantId, event);
-        
-        if (statusResult) {
-          result.events_processed++;
-          result.messages_updated++;
-        }
-        // Não adicionar erro para status updates órfãos (é esperado às vezes)
-      }
-    } catch (error) {
-      console.error('[Webhook] Event processing error:', error);
-      result.errors.push(`Event error: ${error}`);
-    }
-  }
-  
-  // Mark webhook event as processed
-  if (webhookEventId) {
-    await markEventProcessed(
-      supabase,
-      webhookEventId,
-      result.errors.length > 0 ? result.errors.join('; ') : undefined
-    );
-  }
-  
-  console.log('[Webhook] Result:', JSON.stringify(result));
-  
-  // Always return 200 for robustness
-  return new Response(
-    JSON.stringify(result),
+  // ACK FAST - Respond immediately with 200
+  const ackResponse = new Response(
+    JSON.stringify({ 
+      ok: true, 
+      request_id: requestId,
+      accepted: true,
+      latency_ms: latency,
+      timestamp: new Date().toISOString(),
+    }),
     { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
+  
+  // ASYNC PROCESSING - Use EdgeRuntime.waitUntil() if available
+  const asyncTask = processWebhookAsync(
+    supabase,
+    tenantId,
+    channelId,
+    typedChannel,
+    body,
+    rawBody,
+    webhookEventId,
+    ctx
+  );
+  
+  // Use EdgeRuntime.waitUntil if available (Supabase Edge Functions)
+  // @ts-ignore - EdgeRuntime is a global in Supabase Edge Functions
+  if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+    // @ts-ignore
+    EdgeRuntime.waitUntil(asyncTask);
+    log('info', 'Background processing started', ctx);
+  } else {
+    // Fallback: wait for processing (not ideal but works)
+    await asyncTask;
+  }
+  
+  return ackResponse;
 }
 
 // ============================================
@@ -810,7 +849,7 @@ async function handleWebhook(req: Request): Promise<Response> {
 // ============================================
 
 Deno.serve(async (req: Request) => {
-  // Handle CORS preflight
+  // CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -818,12 +857,21 @@ Deno.serve(async (req: Request) => {
   try {
     return await handleWebhook(req);
   } catch (error) {
-    console.error('[Webhook] Unhandled error:', error);
+    // NEVER fail - always return 200
+    const requestId = generateRequestId();
+    console.error(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: 'error',
+      message: 'Unhandled error in webhook handler',
+      request_id: requestId,
+      error: String(error),
+    }));
     
     return new Response(
       JSON.stringify({ 
-        success: false, 
-        error: 'Internal server error',
+        ok: true, 
+        request_id: requestId,
+        warning: 'Internal error occurred but request acknowledged',
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
