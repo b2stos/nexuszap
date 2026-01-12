@@ -99,8 +99,20 @@ async function notificameRequest<T = unknown>(
   
   // Auth header - Use server-side ENV: NOTIFICAME_X_API_TOKEN
   // Falls back to config.api_key for backwards compatibility, but ENV takes priority
-  const envApiToken = (Deno.env.get('NOTIFICAME_X_API_TOKEN') || '').trim();
-  const configApiToken = (config.api_key || '').trim();
+  const envApiTokenRaw = Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
+  const configApiTokenRaw = config.api_key || '';
+  
+  // CRITICAL: Sanitize token to remove newlines, carriage returns, and extra whitespace
+  // This prevents "not a valid ByteString" errors in fetch headers
+  const sanitizeToken = (token: string): string => {
+    return token
+      .replace(/[\r\n\t]/g, '') // Remove CR, LF, tabs
+      .replace(/\s+/g, ' ')     // Collapse multiple spaces
+      .trim();                   // Trim edges
+  };
+  
+  const envApiToken = sanitizeToken(envApiTokenRaw);
+  const configApiToken = sanitizeToken(configApiTokenRaw);
   const apiToken = envApiToken || configApiToken;
 
   if (!apiToken) {
@@ -115,6 +127,11 @@ async function notificameRequest<T = unknown>(
       createProviderError('auth', 'INVALID_TOKEN_FORMAT', 'Token inválido. Cole apenas o token puro, sem JSON.')
     );
   }
+  
+  // Log sanitized token info for debugging (masked)
+  const tokenPreview = apiToken.length > 10 ? `${apiToken.substring(0, 8)}...${apiToken.substring(apiToken.length - 4)}` : '[SHORT]';
+  console.log(`[NotificaMe] Using API Token: ${tokenPreview} (length: ${apiToken.length})`);
+  
   headers['X-API-Token'] = apiToken;
 
   // Timeout handling
