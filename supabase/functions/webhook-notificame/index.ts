@@ -493,12 +493,35 @@ async function handleWebhook(req: Request): Promise<Response> {
   // Log request info
   console.log(`[Webhook] ${req.method} ${url.pathname}?${url.searchParams} from ${clientIP}`);
   
-  // Validate channel_id
+  // ===========================================
+  // TEST MODE: Respond 200 quickly without channel_id
+  // This allows BSP panels to verify the endpoint is alive
+  // ===========================================
   if (!channelId) {
-    console.error('[Webhook] Missing channel_id');
+    console.log('[Webhook] Test mode - no channel_id provided');
+    
+    // For POST/PUT/PATCH, try to read and log body safely
+    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+      try {
+        const rawBody = await req.text();
+        console.log(`[Webhook] Test mode body (${rawBody.length} chars):`, rawBody.substring(0, 500));
+      } catch (e) {
+        console.log('[Webhook] Test mode - could not read body:', e);
+      }
+    }
+    
+    // Return 200 OK for any method (GET, POST, HEAD, etc.)
     return new Response(
-      JSON.stringify({ error: 'Missing channel_id parameter' }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ 
+        ok: true, 
+        method: req.method,
+        message: 'Webhook endpoint is active. Provide channel_id for real events.',
+        timestamp: new Date().toISOString(),
+      }),
+      { 
+        status: 200, 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      }
     );
   }
   
@@ -602,17 +625,39 @@ async function handleWebhook(req: Request): Promise<Response> {
     );
   }
   
+  // HEAD - Quick health check (same as GET but no body)
+  if (req.method === 'HEAD') {
+    return new Response(null, { 
+      status: 200, 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
+  }
+  
   // POST - Webhook event
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405, headers: corsHeaders });
   }
   
-  // Parse body
+  // Parse body (handle empty or invalid body gracefully)
   let body: unknown;
   let rawBody: string;
   
   try {
     rawBody = await req.text();
+    
+    // Handle empty body
+    if (!rawBody || rawBody.trim() === '') {
+      console.log('[Webhook] Empty body received - returning OK');
+      return new Response(
+        JSON.stringify({ 
+          ok: true, 
+          method: req.method,
+          message: 'Empty body received. Real events should have JSON payload.',
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    
     body = JSON.parse(rawBody);
   } catch {
     console.error('[Webhook] Invalid JSON body');
