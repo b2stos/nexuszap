@@ -48,7 +48,7 @@ export interface CreateChannelInput {
   provider_config: {
     api_key: string;
     subscription_id: string;
-    base_url: string;
+    base_url?: string;
     webhook_secret?: string;
   };
 }
