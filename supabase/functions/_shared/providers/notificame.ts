@@ -64,19 +64,12 @@ async function notificameRequest<T = unknown>(
   config: ChannelProviderConfig,
   options: HttpRequestOptions
 ): Promise<HttpResponse<T>> {
-  // IMPORTANT: Validate and fix base_url
-  let baseUrl = config.base_url?.replace(/\/$/, '') || '';
+  // NotificaMe API base URL is always https://api.notificame.com.br
+  let baseUrl = 'https://api.notificame.com.br';
   
-  // Auto-fix common misconfiguration: dashboard URL instead of API URL
-  if (baseUrl.includes('app.notificame.com.br') || baseUrl.includes('dashboard')) {
-    console.warn('[NotificaMe] CRITICAL: base_url points to dashboard, not API. Auto-fixing to https://api.notifica.me');
-    baseUrl = 'https://api.notifica.me';
-  }
-  
-  // Ensure we have a valid API base URL
-  if (!baseUrl || !baseUrl.startsWith('https://')) {
-    console.error('[NotificaMe] Invalid base_url:', baseUrl, '- Using default https://api.notifica.me');
-    baseUrl = 'https://api.notifica.me';
+  // Log if config has a different base_url (for debugging)
+  if (config.base_url && !config.base_url.includes('api.notificame.com.br')) {
+    console.warn('[NotificaMe] WARN: config base_url is not api.notificame.com.br, using default');
   }
   
   const url = `${baseUrl}${options.path}`;
@@ -88,10 +81,8 @@ async function notificameRequest<T = unknown>(
     ...options.headers,
   };
   
-  // Auth header - NotificaMe Hub uses x-api-token header
-  const authHeader = config.api_key_header || 'x-api-token';
-  const authPrefix = config.api_key_prefix ?? ''; // NotificaMe doesn't use Bearer prefix
-  headers[authHeader] = authPrefix ? `${authPrefix} ${config.api_key}` : config.api_key;
+  // Auth header - NotificaMe Hub uses X-API-Token header (capital X)
+  headers['X-API-Token'] = config.api_key;
   
   // Timeout handling
   const timeout = options.timeout_ms || config.timeout_ms || DEFAULT_TIMEOUT_MS;
@@ -477,19 +468,19 @@ export const notificameProvider: Provider = {
   async sendText(request: SendTextRequest): Promise<SendResponse> {
     const { channel, to, text, reply_to_provider_message_id } = request;
     const config = channel.provider_config;
-    const endpoint = getEndpoint(config, 'send_message');
     
-    // NotificaMe Hub API format
+    // NotificaMe Hub API format based on SDK analysis
     // The api_key is the subscriptionId which acts as both auth token and sender identifier
     const subscriptionId = config.api_key;
     const recipientPhone = normalizePhoneNumber(to);
     
-    // NotificaMe Hub uses a specific format
-    // POST /v1/messages/{subscriptionId}/{recipientPhone}
-    // Body: { contents: [{ type: "text", text: "message" }] }
-    const notificaMePath = `/v1/messages/${subscriptionId}/${recipientPhone}`;
+    // Correct endpoint: POST /v2/channels/whatsapp/messages
+    // Body: { from: subscriptionId, to: phone, contents: [{ type: "text", text: "message" }] }
+    const notificaMePath = '/v2/channels/whatsapp/messages';
     
     const payload: Record<string, unknown> = {
+      from: subscriptionId,
+      to: recipientPhone,
       contents: [{
         type: 'text',
         text: text,
@@ -504,6 +495,8 @@ export const notificameProvider: Provider = {
     }
     
     console.log(`[NotificaMe] Sending text to ${recipientPhone} via subscription ${subscriptionId}`);
+    console.log(`[NotificaMe] POST ${notificaMePath}`);
+    console.log(`[NotificaMe] Payload:`, JSON.stringify(payload));
     
     try {
       const response = await notificameRequest<{
@@ -517,15 +510,18 @@ export const notificameProvider: Provider = {
         body: payload,
       });
       
+      console.log(`[NotificaMe] Response status: ${response.status}, ok: ${response.ok}`);
+      
       if (!response.ok) {
         const error = extractErrorFromResponse(response.status, response.data);
+        console.error(`[NotificaMe] Send failed:`, JSON.stringify(error));
         return { success: false, raw: response.data, error };
       }
       
       // NotificaMe may return messageId in different formats
       const messageId = response.data.id || response.data.messageId || response.data.messages?.[0]?.id;
       
-      console.log(`[NotificaMe] Message sent successfully, id: ${messageId}`);
+      console.log(`[NotificaMe] Message sent successfully, provider_message_id: ${messageId}`);
       
       return {
         success: true,
@@ -533,6 +529,7 @@ export const notificameProvider: Provider = {
         raw: response.data,
       };
     } catch (error) {
+      console.error(`[NotificaMe] Exception during send:`, error);
       if (error instanceof ProviderException) {
         return { success: false, raw: null, error: error.providerError };
       }
