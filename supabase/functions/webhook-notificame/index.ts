@@ -601,7 +601,26 @@ async function handleWebhook(req: Request): Promise<Response> {
   const startTime = Date.now();
   const requestId = generateRequestId();
   const url = new URL(req.url);
-  const channelId = url.searchParams.get('channel_id');
+  
+  // CRITICAL FIX: Extract channel_id and clean it from any extra params
+  // NotificaMe may append ?hub_access_token=... to the URL, contaminating channel_id
+  let channelId = url.searchParams.get('channel_id');
+  if (channelId) {
+    // If channelId contains "?" it means extra params were appended incorrectly
+    const questionMarkIndex = channelId.indexOf('?');
+    if (questionMarkIndex > -1) {
+      channelId = channelId.substring(0, questionMarkIndex);
+    }
+    // Also strip any whitespace
+    channelId = channelId.trim();
+    // Validate UUID format (basic check)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(channelId)) {
+      console.warn(`Invalid channel_id format after cleanup: ${channelId}`);
+      channelId = null; // Treat as test mode
+    }
+  }
+  
   const clientIP = getClientIP(req);
   
   const ctx: LogContext = {
