@@ -11,11 +11,14 @@
 
 export interface ChannelProviderConfig {
   base_url: string;
-  api_key: string;
+  api_key: string; // Token de autenticação da API
   api_key_header?: string; // default: "Authorization"
   api_key_prefix?: string; // default: "Bearer"
   webhook_secret?: string; // para HMAC validation
   phone_number_id?: string;
+  
+  // NotificaMe specific
+  subscription_id?: string; // UUID do canal no NotificaMe (from)
   
   // Endpoint paths (override defaults)
   endpoints?: {
