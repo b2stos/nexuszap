@@ -17,3 +17,12 @@ verify_jwt = false
 
 [functions.webhook-notificame]
 verify_jwt = false
+
+[functions.test-channel-connection]
+verify_jwt = false
+
+[functions.notificame-send-test]
+verify_jwt = false
+
+[functions.notificame-health-check]
+verify_jwt = false
