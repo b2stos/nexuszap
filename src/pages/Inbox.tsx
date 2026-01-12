@@ -2,18 +2,17 @@
  * Inbox Page
  * 
  * Página principal do Inbox estilo WhatsApp Web com 3 colunas
- * Suporta Demo Mode para visualização de dados fictícios (Super Admin only)
+ * PRODUCTION: Apenas dados reais do banco
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Building2, ArrowLeft, MessageCircle } from 'lucide-react';
+import { Loader2, Building2, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
 import { ConversationList } from '@/components/inbox/ConversationList';
 import { ChatWindow } from '@/components/inbox/ChatWindow';
 import { ContactPanel } from '@/components/inbox/ContactPanel';
-import { DemoModeToggle, DemoModeBanner } from '@/components/inbox/DemoModeToggle';
 import { supabase } from '@/integrations/supabase/client';
 import { User } from '@supabase/supabase-js';
 import {
@@ -27,8 +26,6 @@ import {
 } from '@/hooks/useInbox';
 import { InboxConversation, ConversationFilter } from '@/types/inbox';
 import { useOnboarding } from '@/hooks/useOnboarding';
-import { useDemoMode } from '@/hooks/useDemoMode';
-import { demoConversations, getDemoMessages, getDemoContact } from '@/data/demoInboxData';
 
 // Track inbox_opened onboarding step
 function useTrackInboxOpened() {
@@ -55,9 +52,6 @@ export default function Inbox() {
   });
   const [showMobileChat, setShowMobileChat] = useState(false);
   
-  // Demo Mode
-  const { isDemoMode, canUseDemoMode } = useDemoMode();
-  
   // Track onboarding step
   useTrackInboxOpened();
   
@@ -66,66 +60,30 @@ export default function Inbox() {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
   }, []);
   
-  // Queries (disabled when in demo mode)
+  // Queries - ALWAYS use real data
   const { data: tenantData, isLoading: tenantLoading, error: tenantError } = useCurrentTenant();
   const tenantId = tenantData?.tenantId;
   
   const { 
-    data: realConversations = [], 
+    data: conversations = [], 
     isLoading: conversationsLoading 
-  } = useConversations(isDemoMode ? undefined : tenantId, filter);
+  } = useConversations(tenantId, filter);
   
   const { 
-    data: realMessages = [], 
+    data: messages = [], 
     isLoading: messagesLoading 
-  } = useMessages(isDemoMode ? undefined : activeConversation?.id);
+  } = useMessages(activeConversation?.id);
   
   const { 
-    data: realContact 
-  } = useContact(isDemoMode ? undefined : activeConversation?.contact_id);
+    data: contact 
+  } = useContact(activeConversation?.contact_id);
   
   const markAsRead = useMarkAsRead();
   
-  // Demo data filtering
-  const filteredDemoConversations = useMemo(() => {
-    if (!isDemoMode) return [];
-    
-    let convs = [...demoConversations];
-    
-    // Apply filters
-    if (filter.unreadOnly) {
-      convs = convs.filter(c => c.unread_count > 0);
-    }
-    
-    if (filter.status && filter.status !== 'all') {
-      convs = convs.filter(c => c.status === filter.status);
-    }
-    
-    if (filter.search) {
-      const searchLower = filter.search.toLowerCase();
-      convs = convs.filter(c => {
-        const contactName = c.contact?.name?.toLowerCase() || '';
-        const contactPhone = c.contact?.phone || '';
-        return contactName.includes(searchLower) || contactPhone.includes(filter.search);
-      });
-    }
-    
-    return convs;
-  }, [isDemoMode, filter]);
-  
-  // Use demo or real data
-  const conversations = isDemoMode ? filteredDemoConversations : realConversations;
-  const messages = isDemoMode && activeConversation 
-    ? getDemoMessages(activeConversation.id) 
-    : realMessages;
-  const contact = isDemoMode && activeConversation 
-    ? getDemoContact(activeConversation.contact_id) 
-    : (realContact || activeConversation?.contact || null);
-  
-  // Realtime (disabled when in demo mode)
+  // Realtime - ALWAYS enabled for production
   useInboxRealtime(
-    isDemoMode ? undefined : tenantId,
-    isDemoMode ? undefined : activeConversation?.id,
+    tenantId,
+    activeConversation?.id,
     useCallback(() => {
       // Could play notification sound here
     }, []),
@@ -141,19 +99,14 @@ export default function Inbox() {
     }
   }, [conversations, activeConversation]);
   
-  // Reset active conversation when demo mode changes
+  // Mark as read when conversation is selected
   useEffect(() => {
-    setActiveConversation(null);
-  }, [isDemoMode]);
-  
-  // Mark as read when conversation is selected (only for real data)
-  useEffect(() => {
-    if (!isDemoMode && activeConversation && activeConversation.unread_count > 0) {
+    if (activeConversation && activeConversation.unread_count > 0) {
       markAsRead.mutate(activeConversation.id);
       // Update local state
       setActiveConversation(prev => prev ? { ...prev, unread_count: 0 } : null);
     }
-  }, [activeConversation?.id, isDemoMode]);
+  }, [activeConversation?.id]);
   
   // Calculate 24h window
   const windowStatus = calculate24hWindow(activeConversation?.last_inbound_at || null);
@@ -169,8 +122,8 @@ export default function Inbox() {
     setShowMobileChat(false);
   };
   
-  // Loading state (not applicable in demo mode)
-  if (!isDemoMode && tenantLoading) {
+  // Loading state
+  if (tenantLoading) {
     return (
       <DashboardLayout user={user}>
         <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
@@ -183,8 +136,8 @@ export default function Inbox() {
     );
   }
   
-  // No tenant state (not applicable in demo mode)
-  if (!isDemoMode && (tenantError || !tenantId)) {
+  // No tenant state
+  if (tenantError || !tenantId) {
     return (
       <DashboardLayout user={user}>
         <div className="flex flex-col items-center justify-center h-[calc(100vh-4rem)] p-4">
@@ -194,12 +147,6 @@ export default function Inbox() {
             Você precisa estar vinculado a uma organização para acessar o Inbox.
             Entre em contato com o administrador.
           </p>
-          {canUseDemoMode && (
-            <div className="flex flex-col items-center gap-3 mt-4">
-              <p className="text-sm text-muted-foreground">Ou ative o Demo Mode para visualizar:</p>
-              <DemoModeToggle />
-            </div>
-          )}
           <Button onClick={() => navigate('/dashboard')} className="mt-4">
             Voltar ao Dashboard
           </Button>
@@ -211,16 +158,6 @@ export default function Inbox() {
   return (
     <DashboardLayout user={user}>
       <div className="h-[calc(100vh-4rem)] flex flex-col overflow-hidden bg-muted/30">
-        {/* Demo Mode Banner & Toggle */}
-        {canUseDemoMode && (
-          <div className="p-2 border-b border-border flex items-center gap-2 bg-card">
-            <DemoModeToggle />
-            <div className="flex-1">
-              <DemoModeBanner />
-            </div>
-          </div>
-        )}
-        
         <div className="flex-1 flex overflow-hidden">
           {/* Left Column - Conversation List (hidden on mobile when chat is open) */}
           <div className={`
@@ -229,7 +166,7 @@ export default function Inbox() {
           `}>
             <ConversationList
               conversations={conversations}
-              isLoading={!isDemoMode && conversationsLoading}
+              isLoading={conversationsLoading}
               activeId={activeConversation?.id}
               filter={filter}
               onFilterChange={setFilter}
@@ -262,9 +199,9 @@ export default function Inbox() {
               <ChatWindow
                 conversation={activeConversation}
                 messages={messages}
-                isLoading={!isDemoMode && messagesLoading}
+                isLoading={messagesLoading}
                 windowStatus={windowStatus}
-                tenantId={isDemoMode ? 'demo-tenant' : tenantId!}
+                tenantId={tenantId}
               />
             </div>
           </div>
@@ -273,7 +210,7 @@ export default function Inbox() {
           <div className="w-80 flex-shrink-0 hidden xl:block">
             <ContactPanel
               conversation={activeConversation}
-              contact={contact}
+              contact={contact || activeConversation?.contact || null}
               windowStatus={windowStatus}
             />
           </div>
