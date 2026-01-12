@@ -39,8 +39,8 @@ import { useCurrentTenantForChannels, useChannels } from '@/hooks/useChannels';
 
 interface WebhookEvent {
   id: string;
-  tenant_id: string;
-  channel_id: string;
+  tenant_id: string | null;
+  channel_id: string | null;
   provider: string;
   event_type: string;
   payload_raw: unknown;
@@ -48,6 +48,10 @@ interface WebhookEvent {
   processed: boolean;
   processing_error: string | null;
   received_at: string;
+  ip_address?: string | null;
+  is_invalid?: boolean | null;
+  invalid_reason?: string | null;
+  rate_limited?: boolean | null;
 }
 
 function EventTypeBadge({ type }: { type: string }) {
@@ -122,12 +126,36 @@ function EventRow({ event, expanded, onToggle }: {
       </button>
       
       {expanded && (
-        <div className="px-3 pb-3 pt-0">
+        <div className="px-3 pb-3 pt-0 space-y-2">
+          {/* Event metadata */}
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="px-2 py-0.5 bg-muted rounded">
+              <strong>ID:</strong> {event.id.substring(0, 8)}...
+            </span>
+            {event.channel_id && (
+              <span className="px-2 py-0.5 bg-muted rounded">
+                <strong>Canal:</strong> {event.channel_id.substring(0, 8)}...
+              </span>
+            )}
+            {!event.channel_id && (
+              <span className="px-2 py-0.5 bg-orange-500/20 text-orange-700 rounded">
+                Sem canal (teste)
+              </span>
+            )}
+          </div>
+          
           {event.processing_error && (
-            <div className="mb-2 p-2 bg-destructive/10 rounded text-sm text-destructive">
+            <div className="p-2 bg-destructive/10 rounded text-sm text-destructive">
               <strong>Erro:</strong> {event.processing_error}
             </div>
           )}
+          
+          {event.invalid_reason && (
+            <div className="p-2 bg-orange-500/10 rounded text-sm text-orange-700">
+              <strong>Inválido:</strong> {event.invalid_reason}
+            </div>
+          )}
+          
           <div className="bg-muted rounded p-2 overflow-x-auto">
             <pre className="text-xs text-muted-foreground whitespace-pre-wrap">
               {JSON.stringify(event.payload_raw, null, 2)}
@@ -150,14 +178,17 @@ export function WebhookMonitorMT() {
   const { data: events = [], isLoading, refetch, isFetching } = useQuery({
     queryKey: ['mt-webhook-events', tenantData?.tenantId, channelFilter, typeFilter],
     queryFn: async () => {
-      if (!tenantData?.tenantId) return [];
-
+      // Fetch all events for this tenant, or all events if no tenant filter (for debugging)
       let query = supabase
         .from('mt_webhook_events')
         .select('*')
-        .eq('tenant_id', tenantData.tenantId)
         .order('received_at', { ascending: false })
         .limit(50);
+
+      // Filter by tenant if available, but also show events without tenant (test events)
+      if (tenantData?.tenantId) {
+        query = query.or(`tenant_id.eq.${tenantData.tenantId},tenant_id.is.null`);
+      }
 
       if (channelFilter !== 'all') {
         query = query.eq('channel_id', channelFilter);
@@ -171,8 +202,8 @@ export function WebhookMonitorMT() {
       if (error) throw error;
       return data as WebhookEvent[];
     },
-    enabled: !!tenantData?.tenantId,
-    refetchInterval: 10000, // Refresh every 10s
+    enabled: true, // Always enabled to show test events
+    refetchInterval: 5000, // Refresh every 5s for faster feedback
   });
 
   // Stats

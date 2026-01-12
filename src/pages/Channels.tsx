@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Dialog,
   DialogContent,
@@ -64,6 +65,7 @@ import {
   ChannelProviderConfig,
 } from '@/hooks/useChannels';
 import { useOnboarding } from '@/hooks/useOnboarding';
+import { WebhookMonitorMT } from '@/components/dashboard/WebhookMonitorMT';
 
 // Track onboarding when a channel is created
 function useTrackChannelCreation(channelsCount: number) {
@@ -502,7 +504,7 @@ export default function Channels() {
 
   return (
     <DashboardLayout user={user}>
-      <div className="space-y-6 max-w-4xl">
+      <div className="space-y-6 max-w-5xl">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -523,30 +525,6 @@ export default function Channels() {
             />
           )}
         </div>
-        
-        {/* Info Card */}
-        <Card className="bg-primary/5 border-primary/20">
-          <CardContent className="pt-6">
-            <div className="flex items-start gap-4">
-              <div className="p-2 rounded-lg bg-primary/10">
-                <Globe className="w-6 h-6 text-primary" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="font-semibold">API Oficial do WhatsApp</h3>
-                <p className="text-sm text-muted-foreground">
-                  Esta integração utiliza a API Oficial do WhatsApp via BSP (Business Solution Provider).
-                  Você precisa ter uma conta ativa no NotificaMe para configurar o canal.
-                </p>
-                <Button variant="link" className="h-auto p-0 text-primary" asChild>
-                  <a href="https://notificame.com.br" target="_blank" rel="noopener noreferrer">
-                    Saiba mais sobre o NotificaMe
-                    <ExternalLink className="w-3 h-3 ml-1" />
-                  </a>
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
         
         {/* Loading */}
         {isLoading && (
@@ -572,39 +550,83 @@ export default function Channels() {
           </Card>
         )}
         
-        {/* Channels List */}
+        {/* Main content with tabs */}
         {!isLoading && tenantData?.tenantId && (
-          <div className="space-y-4">
-            {channels.length === 0 ? (
-              <Card>
+          <Tabs defaultValue="channels" className="space-y-4">
+            <TabsList>
+              <TabsTrigger value="channels" className="flex items-center gap-2">
+                <Phone className="w-4 h-4" />
+                Canais
+              </TabsTrigger>
+              <TabsTrigger value="webhooks" className="flex items-center gap-2">
+                <Webhook className="w-4 h-4" />
+                Logs Webhook
+              </TabsTrigger>
+            </TabsList>
+            
+            <TabsContent value="channels" className="space-y-4">
+              {/* Info Card */}
+              <Card className="bg-primary/5 border-primary/20">
                 <CardContent className="pt-6">
-                  <div className="text-center py-8">
-                    <Phone className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-                    <h3 className="font-semibold mb-1">Nenhum canal configurado</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Crie um canal para começar a enviar e receber mensagens pelo Inbox.
-                    </p>
-                    {provider && (
-                      <CreateChannelDialog
-                        tenantId={tenantData.tenantId}
-                        providerId={provider.id}
-                        onCreated={() => refetch()}
-                      />
-                    )}
+                  <div className="flex items-start gap-4">
+                    <div className="p-2 rounded-lg bg-primary/10">
+                      <Globe className="w-6 h-6 text-primary" />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-semibold">API Oficial do WhatsApp</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Esta integração utiliza a API Oficial do WhatsApp via BSP (Business Solution Provider).
+                        Você precisa ter uma conta ativa no NotificaMe para configurar o canal.
+                      </p>
+                      <Button variant="link" className="h-auto p-0 text-primary" asChild>
+                        <a href="https://notificame.com.br" target="_blank" rel="noopener noreferrer">
+                          Saiba mais sobre o NotificaMe
+                          <ExternalLink className="w-3 h-3 ml-1" />
+                        </a>
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
-            ) : (
-              channels.map((channel) => (
-                <ChannelCard
-                  key={channel.id}
-                  channel={channel}
-                  onUpdate={() => refetch()}
-                  onDelete={() => refetch()}
-                />
-              ))
-            )}
-          </div>
+              
+              {/* Channels List */}
+              <div className="space-y-4">
+                {channels.length === 0 ? (
+                  <Card>
+                    <CardContent className="pt-6">
+                      <div className="text-center py-8">
+                        <Phone className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
+                        <h3 className="font-semibold mb-1">Nenhum canal configurado</h3>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Crie um canal para começar a enviar e receber mensagens pelo Inbox.
+                        </p>
+                        {provider && (
+                          <CreateChannelDialog
+                            tenantId={tenantData.tenantId}
+                            providerId={provider.id}
+                            onCreated={() => refetch()}
+                          />
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  channels.map((channel) => (
+                    <ChannelCard
+                      key={channel.id}
+                      channel={channel}
+                      onUpdate={() => refetch()}
+                      onDelete={() => refetch()}
+                    />
+                  ))
+                )}
+              </div>
+            </TabsContent>
+            
+            <TabsContent value="webhooks">
+              <WebhookMonitorMT />
+            </TabsContent>
+          </Tabs>
         )}
       </div>
     </DashboardLayout>
