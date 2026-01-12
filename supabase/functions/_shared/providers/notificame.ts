@@ -2,7 +2,7 @@
  * NotificaMe BSP Provider Implementation
  * 
  * Implementação do provider para API Oficial do WhatsApp via BSP NotificaMe.
- * Baseado na API do WhatsApp Cloud (Meta) com adaptações do BSP.
+ * Suporta tanto formato WhatsApp Cloud API (Meta) quanto formato nativo NotificaMe.
  */
 
 import {
@@ -163,7 +163,7 @@ function mapWebhookMessageType(waType: string): MessageType {
     location: 'location',
     contacts: 'contact',
   };
-  return typeMap[waType] || 'unknown';
+  return typeMap[waType] || 'text';
 }
 
 function mapWebhookStatus(waStatus: string): DeliveryStatus {
@@ -174,6 +174,268 @@ function mapWebhookStatus(waStatus: string): DeliveryStatus {
     failed: 'failed',
   };
   return statusMap[waStatus] || 'sent';
+}
+
+// ============================================
+// NOTIFICAME NATIVE FORMAT PARSER
+// ============================================
+
+/**
+ * Parse NotificaMe's native webhook format
+ * Example payload:
+ * {
+ *   "channel": "whatsapp_business_account",
+ *   "direction": "IN",
+ *   "id": "uuid",
+ *   "message": {
+ *     "from": "5511947892299",
+ *     "to": "subscription-id",
+ *     "timestamp": "2026-01-12 06:37:09 pm",
+ *     "contents": [{ "text": "Opa", "type": "text" }],
+ *     "visitor": { "name": "Bruno Bastos" }
+ *   },
+ *   "providerMessageId": "base64-encoded-id",
+ *   "type": "MESSAGE"
+ * }
+ */
+function parseNotificaMeNativeFormat(channel: Channel, payload: Record<string, unknown>): WebhookEvent[] {
+  const events: WebhookEvent[] = [];
+  
+  // Check if this is NotificaMe native format
+  const msgType = payload.type as string;
+  const direction = payload.direction as string;
+  const message = payload.message as Record<string, unknown> | undefined;
+  
+  if (!message) {
+    console.log('[NotificaMe] No message object in payload');
+    return events;
+  }
+  
+  // Handle MESSAGE type (inbound or outbound)
+  if (msgType === 'MESSAGE' && direction === 'IN') {
+    const fromPhone = String(message.from || '');
+    const providerMessageId = String(payload.providerMessageId || payload.id || '');
+    const contents = message.contents as Array<Record<string, unknown>> | undefined;
+    const visitor = message.visitor as Record<string, unknown> | undefined;
+    const timestampStr = String(message.timestamp || '');
+    
+    // Parse timestamp (format: "2026-01-12 06:37:09 pm")
+    let timestamp = new Date();
+    if (timestampStr) {
+      try {
+        // Convert "2026-01-12 06:37:09 pm" to parseable format
+        const cleanTs = timestampStr.replace(/ (am|pm)/i, (m) => m.toUpperCase());
+        const parsed = new Date(cleanTs);
+        if (!isNaN(parsed.getTime())) {
+          timestamp = parsed;
+        }
+      } catch {
+        // Keep current timestamp
+      }
+    }
+    
+    // Get first content (usually just one)
+    const firstContent = contents?.[0];
+    const contentType = String(firstContent?.type || 'text');
+    const textContent = String(firstContent?.text || '');
+    
+    const event: InboundMessageEvent = {
+      type: 'message.inbound',
+      provider_message_id: providerMessageId,
+      from_phone: fromPhone,
+      to_phone: channel.phone_number || '',
+      message_type: mapWebhookMessageType(contentType),
+      timestamp,
+      raw: payload,
+    };
+    
+    // Extract content based on type
+    if (contentType === 'text') {
+      event.text = textContent;
+    } else if (['image', 'document', 'audio', 'video', 'sticker'].includes(contentType)) {
+      const mediaUrl = String(firstContent?.url || firstContent?.fileUrl || '');
+      const mimeType = String(firstContent?.mimeType || firstContent?.mime_type || '');
+      const filename = String(firstContent?.fileName || firstContent?.filename || '');
+      
+      event.media = {
+        media_id: providerMessageId,
+        mime_type: mimeType,
+        sha256: '',
+        url: mediaUrl,
+        filename: filename,
+      };
+      
+      // Caption if any
+      const caption = String(firstContent?.caption || '');
+      if (caption) {
+        event.text = caption;
+      }
+    } else if (contentType === 'location') {
+      event.location = {
+        latitude: Number(firstContent?.latitude || 0),
+        longitude: Number(firstContent?.longitude || 0),
+        name: firstContent?.name ? String(firstContent.name) : undefined,
+        address: firstContent?.address ? String(firstContent.address) : undefined,
+      };
+    }
+    
+    // Store visitor name for contact creation
+    if (visitor?.name) {
+      (event as unknown as Record<string, unknown>).visitor_name = String(visitor.name);
+    }
+    
+    console.log(`[NotificaMe] Parsed inbound message from ${fromPhone}: "${textContent.substring(0, 50)}"`);
+    events.push(event);
+  }
+  
+  // Handle STATUS type (delivery status updates)
+  if (msgType === 'STATUS' || msgType === 'MESSAGE_STATUS') {
+    const status = String(payload.status || message.status || '').toLowerCase();
+    const providerMessageId = String(payload.providerMessageId || payload.messageId || payload.id || '');
+    
+    if (status && providerMessageId) {
+      const event: StatusUpdateEvent = {
+        type: 'message.status',
+        provider_message_id: providerMessageId,
+        status: mapWebhookStatus(status),
+        timestamp: new Date(),
+        raw: payload,
+      };
+      
+      console.log(`[NotificaMe] Parsed status update: ${status} for ${providerMessageId}`);
+      events.push(event);
+    }
+  }
+  
+  return events;
+}
+
+// ============================================
+// WHATSAPP CLOUD API FORMAT PARSER
+// ============================================
+
+function parseWhatsAppCloudFormat(channel: Channel, payload: Record<string, unknown>): WebhookEvent[] {
+  const events: WebhookEvent[] = [];
+  
+  // WhatsApp Cloud API webhook format
+  // entry[].changes[].value.messages[] ou value.statuses[]
+  
+  const entry = payload.entry as Array<Record<string, unknown>> | undefined;
+  
+  if (!entry?.length) {
+    return events;
+  }
+  
+  for (const e of entry) {
+    const changes = e.changes as Array<Record<string, unknown>> | undefined;
+    
+    if (!changes?.length) continue;
+    
+    for (const change of changes) {
+      const value = change.value as Record<string, unknown> | undefined;
+      
+      if (!value) continue;
+      
+      // Inbound messages
+      const messages = value.messages as Array<Record<string, unknown>> | undefined;
+      const contacts = value.contacts as Array<Record<string, unknown>> | undefined;
+      const metadata = value.metadata as Record<string, string> | undefined;
+      
+      if (messages?.length) {
+        for (const msg of messages) {
+          const contact = contacts?.find(c => c.wa_id === msg.from);
+          
+          const event: InboundMessageEvent = {
+            type: 'message.inbound',
+            provider_message_id: String(msg.id),
+            from_phone: String(msg.from),
+            to_phone: metadata?.display_phone_number || channel.phone_number || '',
+            message_type: mapWebhookMessageType(String(msg.type)),
+            timestamp: new Date(Number(msg.timestamp) * 1000),
+            raw: msg,
+          };
+          
+          // Extract content based on type
+          const msgType = String(msg.type);
+          
+          if (msgType === 'text') {
+            const textContent = msg.text as Record<string, unknown>;
+            event.text = String(textContent?.body || '');
+          } else if (['image', 'document', 'audio', 'video', 'sticker'].includes(msgType)) {
+            const mediaContent = msg[msgType] as Record<string, unknown>;
+            event.media = {
+              media_id: String(mediaContent?.id || ''),
+              mime_type: String(mediaContent?.mime_type || ''),
+              sha256: String(mediaContent?.sha256 || ''),
+            };
+            if (msgType === 'image' || msgType === 'sticker') {
+              event.text = String(mediaContent?.caption || '');
+            }
+            if (msgType === 'document') {
+              event.media.filename = String(mediaContent?.filename || '');
+              event.text = String(mediaContent?.caption || '');
+            }
+          } else if (msgType === 'location') {
+            const locContent = msg.location as Record<string, unknown>;
+            event.location = {
+              latitude: Number(locContent?.latitude || 0),
+              longitude: Number(locContent?.longitude || 0),
+              name: locContent?.name ? String(locContent.name) : undefined,
+              address: locContent?.address ? String(locContent.address) : undefined,
+            };
+          } else if (msgType === 'contacts') {
+            const contactsContent = msg.contacts as Array<Record<string, unknown>>;
+            event.contacts = contactsContent?.map(c => {
+              const name = c.name as Record<string, unknown>;
+              const phones = c.phones as Array<Record<string, unknown>>;
+              return {
+                name: String(name?.formatted_name || name?.first_name || ''),
+                phones: phones?.map(p => String(p.phone || p.wa_id || '')) || [],
+              };
+            });
+          }
+          
+          // Store visitor name from contact
+          if (contact?.profile) {
+            const profile = contact.profile as Record<string, unknown>;
+            (event as unknown as Record<string, unknown>).visitor_name = String(profile.name || '');
+          }
+          
+          events.push(event);
+        }
+      }
+      
+      // Status updates
+      const statuses = value.statuses as Array<Record<string, unknown>> | undefined;
+      
+      if (statuses?.length) {
+        for (const status of statuses) {
+          const event: StatusUpdateEvent = {
+            type: 'message.status',
+            provider_message_id: String(status.id),
+            status: mapWebhookStatus(String(status.status)),
+            timestamp: new Date(Number(status.timestamp) * 1000),
+            raw: status,
+          };
+          
+          // Error info
+          if (status.status === 'failed') {
+            const errors = status.errors as Array<Record<string, unknown>> | undefined;
+            if (errors?.length) {
+              event.error = {
+                code: String(errors[0].code || 'UNKNOWN'),
+                detail: String(errors[0].title || errors[0].message || 'Unknown error'),
+              };
+            }
+          }
+          
+          events.push(event);
+        }
+      }
+    }
+  }
+  
+  return events;
 }
 
 // ============================================
@@ -486,7 +748,6 @@ export const notificameProvider: Provider = {
       if (!signature) {
         console.warn('[NotificaMe] Webhook missing signature header');
         // Não bloquear por enquanto, apenas logar
-        // throw new ProviderException(createProviderError('auth', 'MISSING_SIGNATURE', 'Webhook signature missing'));
       }
       
       if (signature) {
@@ -522,127 +783,46 @@ export const notificameProvider: Provider = {
     return true;
   },
 
+  /**
+   * Parse webhook payload - supports both NotificaMe native and WhatsApp Cloud API formats
+   */
   parseWebhook(channel: Channel, body: unknown): WebhookEvent[] {
-    const events: WebhookEvent[] = [];
-    
     if (!body || typeof body !== 'object') {
       console.warn('[NotificaMe] Invalid webhook body');
-      return events;
+      return [];
     }
     
     const payload = body as Record<string, unknown>;
     
-    // WhatsApp Cloud API webhook format
-    // entry[].changes[].value.messages[] ou value.statuses[]
+    // DETECT FORMAT:
+    // 1. NotificaMe native: has "type": "MESSAGE", "direction", "message" object
+    // 2. WhatsApp Cloud API: has "entry" array
     
-    const entry = payload.entry as Array<Record<string, unknown>> | undefined;
+    let events: WebhookEvent[] = [];
     
-    if (!entry?.length) {
-      console.warn('[NotificaMe] No entry in webhook');
-      return events;
+    // Check for NotificaMe native format first
+    if (payload.type === 'MESSAGE' || payload.type === 'STATUS' || payload.type === 'MESSAGE_STATUS') {
+      console.log('[NotificaMe] Detected native NotificaMe format');
+      events = parseNotificaMeNativeFormat(channel, payload);
     }
-    
-    for (const e of entry) {
-      const changes = e.changes as Array<Record<string, unknown>> | undefined;
+    // Check for message object directly (simplified NotificaMe format)
+    else if (payload.message && payload.direction) {
+      console.log('[NotificaMe] Detected simplified NotificaMe format');
+      events = parseNotificaMeNativeFormat(channel, payload);
+    }
+    // Check for WhatsApp Cloud API format
+    else if (payload.entry) {
+      console.log('[NotificaMe] Detected WhatsApp Cloud API format');
+      events = parseWhatsAppCloudFormat(channel, payload);
+    }
+    // Unknown format - log for debugging
+    else {
+      console.warn('[NotificaMe] Unknown webhook format, keys:', Object.keys(payload));
       
-      if (!changes?.length) continue;
-      
-      for (const change of changes) {
-        const value = change.value as Record<string, unknown> | undefined;
-        
-        if (!value) continue;
-        
-        // Inbound messages
-        const messages = value.messages as Array<Record<string, unknown>> | undefined;
-        const contacts = value.contacts as Array<Record<string, unknown>> | undefined;
-        const metadata = value.metadata as Record<string, string> | undefined;
-        
-        if (messages?.length) {
-          for (const msg of messages) {
-            const contact = contacts?.find(c => c.wa_id === msg.from);
-            
-            const event: InboundMessageEvent = {
-              type: 'message.inbound',
-              provider_message_id: String(msg.id),
-              from_phone: String(msg.from),
-              to_phone: metadata?.display_phone_number || channel.phone_number || '',
-              message_type: mapWebhookMessageType(String(msg.type)),
-              timestamp: new Date(Number(msg.timestamp) * 1000),
-              raw: msg,
-            };
-            
-            // Extract content based on type
-            const msgType = String(msg.type);
-            
-            if (msgType === 'text') {
-              const textContent = msg.text as Record<string, unknown>;
-              event.text = String(textContent?.body || '');
-            } else if (['image', 'document', 'audio', 'video', 'sticker'].includes(msgType)) {
-              const mediaContent = msg[msgType] as Record<string, unknown>;
-              event.media = {
-                media_id: String(mediaContent?.id || ''),
-                mime_type: String(mediaContent?.mime_type || ''),
-                sha256: String(mediaContent?.sha256 || ''),
-              };
-              if (msgType === 'image' || msgType === 'sticker') {
-                // Caption
-                event.text = String(mediaContent?.caption || '');
-              }
-              if (msgType === 'document') {
-                event.media.filename = String(mediaContent?.filename || '');
-                event.text = String(mediaContent?.caption || '');
-              }
-            } else if (msgType === 'location') {
-              const locContent = msg.location as Record<string, unknown>;
-              event.location = {
-                latitude: Number(locContent?.latitude || 0),
-                longitude: Number(locContent?.longitude || 0),
-                name: locContent?.name ? String(locContent.name) : undefined,
-                address: locContent?.address ? String(locContent.address) : undefined,
-              };
-            } else if (msgType === 'contacts') {
-              const contactsContent = msg.contacts as Array<Record<string, unknown>>;
-              event.contacts = contactsContent?.map(c => {
-                const name = c.name as Record<string, unknown>;
-                const phones = c.phones as Array<Record<string, unknown>>;
-                return {
-                  name: String(name?.formatted_name || name?.first_name || ''),
-                  phones: phones?.map(p => String(p.phone || p.wa_id || '')) || [],
-                };
-              });
-            }
-            
-            events.push(event);
-          }
-        }
-        
-        // Status updates
-        const statuses = value.statuses as Array<Record<string, unknown>> | undefined;
-        
-        if (statuses?.length) {
-          for (const status of statuses) {
-            const event: StatusUpdateEvent = {
-              type: 'message.status',
-              provider_message_id: String(status.id),
-              status: mapWebhookStatus(String(status.status)),
-              timestamp: new Date(Number(status.timestamp) * 1000),
-              raw: status,
-            };
-            
-            // Error info
-            if (status.status === 'failed') {
-              const errors = status.errors as Array<Record<string, unknown>> | undefined;
-              if (errors?.length) {
-                event.error = {
-                  code: String(errors[0].code || 'UNKNOWN'),
-                  detail: String(errors[0].title || errors[0].message || 'Unknown error'),
-                };
-              }
-            }
-            
-            events.push(event);
-          }
-        }
+      // Try to extract any message-like data
+      if (payload.providerMessageId || payload.from || payload.message) {
+        console.log('[NotificaMe] Attempting generic parse');
+        events = parseNotificaMeNativeFormat(channel, payload);
       }
     }
     
