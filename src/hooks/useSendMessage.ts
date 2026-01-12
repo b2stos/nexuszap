@@ -34,7 +34,18 @@ export function useSendMessage() {
       if (!session) {
         throw new Error('Not authenticated');
       }
-      
+
+      const tryParseEdgeError = (msg?: string) => {
+        if (!msg) return null;
+        const idx = msg.indexOf('{');
+        if (idx < 0) return null;
+        try {
+          return JSON.parse(msg.slice(idx));
+        } catch {
+          return null;
+        }
+      };
+
       // Call edge function
       const response = await supabase.functions.invoke('inbox-send-text', {
         body: {
@@ -43,11 +54,14 @@ export function useSendMessage() {
           reply_to_message_id: replyToMessageId,
         },
       });
-      
+
+      // Supabase marks non-2xx as error; we still want to surface the backend payload to the UI
       if (response.error) {
+        const parsed = tryParseEdgeError(response.error.message);
+        if (parsed) return parsed as SendTextResponse;
         throw new Error(response.error.message || 'Failed to send message');
       }
-      
+
       return response.data as SendTextResponse;
     },
     
@@ -112,15 +126,20 @@ export function useSendMessage() {
       } else {
         // Handle API-level errors
         const errorMessage = data.message || data.error || 'Falha ao enviar mensagem';
-        
+        const errorCode = data.data?.error_code;
+
         if (data.error === 'window_closed') {
           toast.error('Janela de 24h fechada', {
             description: 'Use um template para retomar a conversa.',
           });
+        } else if (errorCode === 'AUTHENTICATION_ERROR' || /invalid token/i.test(errorMessage)) {
+          toast.error('Token NotificaMe inválido', {
+            description: 'Vá em Configurações > Canais e atualize credenciais.',
+          });
         } else {
           toast.error('Erro ao enviar', { description: errorMessage });
         }
-        
+
         // Update optimistic message to failed
         if (data.data) {
           queryClient.setQueryData<InboxMessage[]>(
@@ -167,7 +186,18 @@ export function useRetryMessage() {
       if (!session) {
         throw new Error('Not authenticated');
       }
-      
+
+      const tryParseEdgeError = (msg?: string) => {
+        if (!msg) return null;
+        const idx = msg.indexOf('{');
+        if (idx < 0) return null;
+        try {
+          return JSON.parse(msg.slice(idx));
+        } catch {
+          return null;
+        }
+      };
+
       // Create a new message (don't reuse failed one)
       const response = await supabase.functions.invoke('inbox-send-text', {
         body: {
@@ -175,11 +205,13 @@ export function useRetryMessage() {
           text: originalText,
         },
       });
-      
+
       if (response.error) {
+        const parsed = tryParseEdgeError(response.error.message);
+        if (parsed) return parsed as SendTextResponse;
         throw new Error(response.error.message || 'Failed to retry message');
       }
-      
+
       return response.data as SendTextResponse;
     },
     

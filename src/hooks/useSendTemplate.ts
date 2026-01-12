@@ -43,11 +43,21 @@ export function useSendTemplate() {
           variables,
         },
       });
-      
+
+      // Supabase marks non-2xx as error; we still want the backend payload for friendly UI handling
       if (response.error) {
+        const msg = response.error.message || '';
+        const idx = msg.indexOf('{');
+        if (idx >= 0) {
+          try {
+            return JSON.parse(msg.slice(idx)) as SendTemplateResponse;
+          } catch {
+            // fallthrough
+          }
+        }
         throw new Error(response.error.message || 'Failed to send template');
       }
-      
+
       return response.data as SendTemplateResponse;
     },
     
