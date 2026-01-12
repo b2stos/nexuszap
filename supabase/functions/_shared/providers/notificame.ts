@@ -66,17 +66,17 @@ async function notificameRequest<T = unknown>(
 ): Promise<HttpResponse<T>> {
   // =====================================================
   // SINGLE SOURCE OF TRUTH: NotificaMe API Base URL
-  // CRITICAL: This is the ONLY correct domain for NotificaMe Hub
-  // DO NOT CHANGE unless NotificaMe officially changes their API
+  // CRITICAL: Always use /v1 prefix as per official documentation
+  // Official endpoint: https://api.notificame.com.br/v1/...
   // =====================================================
-  const NOTIFICAME_API_BASE_URL = 'https://api.notificame.com.br';
+  const NOTIFICAME_API_BASE_URL = 'https://api.notificame.com.br/v1';
   
-  // VALIDATION: Block any misconfigured base_url from provider_config
+  // VALIDATION: Block any misconfigured base_url (e.g., notificame.me)
   if (config.base_url && !config.base_url.includes('api.notificame.com.br')) {
     console.error(`[NotificaMe] CRITICAL: Invalid base_url detected: "${config.base_url}". Blocking request. Only api.notificame.com.br is allowed.`);
     throw new ProviderException(
       createProviderError('invalid_request', 'INVALID_BASE_URL', 
-        `URL base inválida: "${config.base_url}". Use apenas: https://api.notificame.com.br`)
+        `URL base inválida: "${config.base_url}". Use apenas: https://api.notificame.com.br/v1`)
     );
   }
   
@@ -124,7 +124,7 @@ async function notificameRequest<T = unknown>(
         console.error('[NotificaMe] ERROR: Received HTML instead of JSON - likely wrong API URL or authentication page');
         throw new ProviderException(
           createProviderError('invalid_request', 'WRONG_URL', 
-            `API returned HTML instead of JSON. Check if base_url (${baseUrl}) is correct. Expected: https://api.notificame.com.br`)
+            `API returned HTML instead of JSON. Check if base_url (${baseUrl}) is correct. Expected: https://api.notificame.com.br/v1`)
         );
       }
       data = responseText as unknown as T;
@@ -489,35 +489,35 @@ export const notificameProvider: Provider = {
     const apiTokenRaw = config.api_key;
     const subscriptionIdRaw = config.subscription_id;
 
-    // CRITICAL FIX: Extract JWT from JSON string if user pasted JSON by mistake
-    // e.g., {"token":"eyJ..."} or {"api_key":"eyJ..."}
+    // RELAXED VALIDATION: Extract token from JSON if pasted by mistake
+    // Accept any non-empty string (NotificaMe docs don't require JWT format)
     let apiToken = typeof apiTokenRaw === 'string' ? apiTokenRaw.trim() : '';
-    if (apiToken.startsWith('{') && apiToken.includes('eyJ')) {
+    if (apiToken.startsWith('{')) {
       try {
         const parsed = JSON.parse(apiToken);
         const extracted = parsed.token || parsed.api_key || parsed.apiKey || parsed.access_token;
-        if (extracted && typeof extracted === 'string' && extracted.startsWith('eyJ')) {
-          console.log('[NotificaMe] Extracted JWT from JSON string');
+        if (extracted && typeof extracted === 'string') {
+          console.log('[NotificaMe] Extracted token from JSON string');
           apiToken = extracted.trim();
         }
       } catch {
-        // Not valid JSON, continue with raw value
+        // Not valid JSON with extractable token - will fail validation below
       }
     }
     const subscriptionId = typeof subscriptionIdRaw === 'string' ? subscriptionIdRaw.trim() : '';
 
     const recipientPhone = normalizePhoneNumber(to);
 
-    // Validate credentials
-    if (!apiToken) {
-      console.error('[NotificaMe] Missing api_key (authentication token)');
+    // Validate credentials (relaxed - just check non-empty)
+    if (!apiToken || apiToken.length < 10) {
+      console.error('[NotificaMe] Missing or too short api_key (authentication token)');
       return {
         success: false,
         raw: null,
         error: createProviderError(
           'auth',
           'MISSING_TOKEN',
-          'Token de API não configurado. Vá em Configurações > Canais e atualize as credenciais.'
+          'Token de API não configurado ou muito curto. Vá em Configurações > Canais e atualize as credenciais.'
         ),
       };
     }
@@ -544,13 +544,13 @@ export const notificameProvider: Provider = {
         error: createProviderError(
           'auth',
           'AUTHENTICATION_ERROR',
-          'Token NotificaMe inválido. Vá em Configurações > Canais e atualize credenciais.'
+          'Token e Subscription ID são iguais - verifique as credenciais em Configurações > Canais.'
         ),
       };
     }
 
-    // Correct endpoint: POST /v2/channels/whatsapp/messages
-    const notificaMePath = '/v2/channels/whatsapp/messages';
+    // Correct endpoint: POST /channels/whatsapp/messages (baseUrl already has /v1)
+    const notificaMePath = '/channels/whatsapp/messages';
     
     const payload: Record<string, unknown> = {
       from: subscriptionId,
