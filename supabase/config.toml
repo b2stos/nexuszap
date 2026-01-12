@@ -3,20 +3,17 @@ project_id = "xaypooqwcrhytkfqyzha"
 [functions.validate-phone-numbers]
 verify_jwt = true
 
-[functions.whatsapp-session]
-verify_jwt = true
-
-[functions.send-whatsapp-messages]
-verify_jwt = true
-
-[functions.uazapi-webhook]
-verify_jwt = false
-
 [functions.smart-contact-import]
 verify_jwt = true
 
-[functions.send-single-message]
-verify_jwt = true
+[functions.inbox-send-text]
+verify_jwt = false
+
+[functions.inbox-send-template]
+verify_jwt = false
+
+[functions.campaign-process-queue]
+verify_jwt = false
 
 [functions.webhook-notificame]
 verify_jwt = false

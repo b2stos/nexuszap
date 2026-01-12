@@ -640,30 +640,47 @@ async function handleWebhook(req: Request): Promise<Response> {
   
   // Parse body (handle empty or invalid body gracefully)
   let body: unknown;
-  let rawBody: string;
+  let rawBody = '';
   
   try {
     rawBody = await req.text();
-    
-    // Handle empty body
-    if (!rawBody || rawBody.trim() === '') {
-      console.log('[Webhook] Empty body received - returning OK');
-      return new Response(
-        JSON.stringify({ 
-          ok: true, 
-          method: req.method,
-          message: 'Empty body received. Real events should have JSON payload.',
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-    
+  } catch (e) {
+    console.warn('[Webhook] Could not read body:', e);
+  }
+  
+  // Handle empty body
+  if (!rawBody || rawBody.trim() === '') {
+    console.log('[Webhook] Empty body received - returning OK');
+    return new Response(
+      JSON.stringify({ 
+        ok: true, 
+        method: req.method,
+        message: 'Empty body received. Real events should have JSON payload.',
+        channel_id: channelId,
+        channel_name: typedChannel.name,
+      }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+  
+  // Try to parse as JSON
+  try {
     body = JSON.parse(rawBody);
   } catch {
-    console.error('[Webhook] Invalid JSON body');
+    // NotificaMe "Testar" button sends non-JSON body (form-urlencoded or plain text)
+    // Return 200 OK to pass the test, but log what was received for debugging
+    console.warn('[Webhook] Non-JSON body received (test mode?):', rawBody.substring(0, 200));
     return new Response(
-      JSON.stringify({ error: 'Invalid JSON' }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ 
+        ok: true, 
+        method: req.method,
+        message: 'Body received but not JSON. For real events, send JSON payload.',
+        channel_id: channelId,
+        channel_name: typedChannel.name,
+        body_preview: rawBody.substring(0, 100),
+        timestamp: new Date().toISOString(),
+      }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
   
