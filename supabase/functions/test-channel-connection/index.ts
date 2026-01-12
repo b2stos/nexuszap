@@ -95,12 +95,31 @@ Deno.serve(async (req) => {
 
     // Test connection to NotificaMe API
     const baseUrl = 'https://api.notificame.com.br';
-    const apiToken = (config.api_key || '').trim();
+    let apiToken = (config.api_key || '').trim();
     const subscriptionId = (config.subscription_id || '').trim();
+
+    // CRITICAL FIX: Extract JWT from JSON string if user pasted JSON by mistake
+    // e.g., {"token":"eyJ..."} or {"api_key":"eyJ..."}
+    if (apiToken.startsWith('{') && apiToken.includes('eyJ')) {
+      try {
+        const parsed = JSON.parse(apiToken);
+        const extracted = parsed.token || parsed.api_key || parsed.apiKey || parsed.access_token;
+        if (extracted && typeof extracted === 'string' && extracted.startsWith('eyJ')) {
+          console.log('[test-channel] Extracted JWT from JSON string');
+          apiToken = extracted.trim();
+        }
+      } catch {
+        // Not valid JSON, continue with raw value
+      }
+    }
 
     console.log(`[test-channel] Testing connection for channel ${channel_id}`);
     console.log(`[test-channel] API Token length: ${apiToken.length}`);
-    console.log(`[test-channel] API Token preview: ${apiToken.substring(0, 20)}...`);
+    // SECURITY: Mask token in logs (show only first 6 and last 4 chars)
+    const maskedToken = apiToken.length > 10 
+      ? `${apiToken.substring(0, 6)}...${apiToken.substring(apiToken.length - 4)}`
+      : '***';
+    console.log(`[test-channel] API Token (masked): ${maskedToken}`);
     console.log(`[test-channel] Subscription ID: ${subscriptionId}`);
 
     // Validate token format (should be JWT-like, starting with eyJ)
@@ -166,7 +185,11 @@ Deno.serve(async (req) => {
       responseText;
 
     console.log(`[test-channel] Response status: ${testResponse.status}`);
-    console.log(`[test-channel] Response body: ${String(providerMessage).substring(0, 300)}`);
+    // SECURITY: Mask any tokens that might appear in error response
+    const sanitizedProviderMessage = String(providerMessage)
+      .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[JWT_MASKED]')
+      .substring(0, 300);
+    console.log(`[test-channel] Response body: ${sanitizedProviderMessage}`);
 
     // Analyze response
     const invalidToken =

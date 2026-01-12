@@ -474,7 +474,21 @@ export const notificameProvider: Provider = {
     const apiTokenRaw = config.api_key;
     const subscriptionIdRaw = config.subscription_id;
 
-    const apiToken = typeof apiTokenRaw === 'string' ? apiTokenRaw.trim() : '';
+    // CRITICAL FIX: Extract JWT from JSON string if user pasted JSON by mistake
+    // e.g., {"token":"eyJ..."} or {"api_key":"eyJ..."}
+    let apiToken = typeof apiTokenRaw === 'string' ? apiTokenRaw.trim() : '';
+    if (apiToken.startsWith('{') && apiToken.includes('eyJ')) {
+      try {
+        const parsed = JSON.parse(apiToken);
+        const extracted = parsed.token || parsed.api_key || parsed.apiKey || parsed.access_token;
+        if (extracted && typeof extracted === 'string' && extracted.startsWith('eyJ')) {
+          console.log('[NotificaMe] Extracted JWT from JSON string');
+          apiToken = extracted.trim();
+        }
+      } catch {
+        // Not valid JSON, continue with raw value
+      }
+    }
     const subscriptionId = typeof subscriptionIdRaw === 'string' ? subscriptionIdRaw.trim() : '';
 
     const recipientPhone = normalizePhoneNumber(to);
@@ -541,7 +555,11 @@ export const notificameProvider: Provider = {
     
     console.log(`[NotificaMe] Sending text to ${recipientPhone}`);
     console.log(`[NotificaMe] Using subscription_id: ${subscriptionId.substring(0, 8)}...`);
-    console.log(`[NotificaMe] API Token present: ${apiToken ? 'yes (length: ' + apiToken.length + ')' : 'no'}`);
+    // SECURITY: Mask token in logs (show only first 6 and last 4 chars)
+    const maskedToken = apiToken.length > 10 
+      ? `${apiToken.substring(0, 6)}...${apiToken.substring(apiToken.length - 4)}`
+      : '***';
+    console.log(`[NotificaMe] API Token (masked): ${maskedToken}, length: ${apiToken.length}`);
     console.log(`[NotificaMe] POST ${notificaMePath}`);
     console.log(`[NotificaMe] Payload:`, JSON.stringify(payload));
     
