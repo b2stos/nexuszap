@@ -95,10 +95,45 @@ Deno.serve(async (req) => {
 
     // Test connection to NotificaMe API
     const baseUrl = 'https://api.notificame.com.br';
+    const apiToken = (config.api_key || '').trim();
+    const subscriptionId = (config.subscription_id || '').trim();
 
     console.log(`[test-channel] Testing connection for channel ${channel_id}`);
-    console.log(`[test-channel] API Token length: ${config.api_key.length}`);
-    console.log(`[test-channel] Subscription ID: ${config.subscription_id.substring(0, 8)}...`);
+    console.log(`[test-channel] API Token length: ${apiToken.length}`);
+    console.log(`[test-channel] API Token preview: ${apiToken.substring(0, 20)}...`);
+    console.log(`[test-channel] Subscription ID: ${subscriptionId}`);
+
+    // Validate token format (should be JWT-like, starting with eyJ)
+    const isJwtFormat = apiToken.startsWith('eyJ') && apiToken.length >= 50;
+    if (!isJwtFormat) {
+      console.log(`[test-channel] Token format invalid - not a JWT`);
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: {
+            detail: `Token inválido. O Token da API deve ser um JWT longo (começa com "eyJ"). Formato recebido: "${apiToken.substring(0, 15)}..." (${apiToken.length} chars)`,
+            code: 'INVALID_TOKEN_FORMAT',
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Validate subscription_id is a UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(subscriptionId)) {
+      console.log(`[test-channel] Subscription ID format invalid - not a UUID`);
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: {
+            detail: `Subscription ID inválido. Deve ser um UUID (ex: 066f4d91-fd0c-4726-8b1c-...). Valor recebido: "${subscriptionId.substring(0, 20)}"`,
+            code: 'INVALID_SUBSCRIPTION_ID_FORMAT',
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     // We intentionally send an INVALID payload to a real endpoint.
     // Expected outcomes:
@@ -106,10 +141,13 @@ Deno.serve(async (req) => {
     // - 400/422 => token is accepted (payload rejected), considered OK for credential test
     const testEndpoint = `${baseUrl}/v2/channels/whatsapp/messages`;
 
+    console.log(`[test-channel] Calling endpoint: ${testEndpoint}`);
+    console.log(`[test-channel] Header: X-API-Token: ${apiToken.substring(0, 20)}...`);
+
     const testResponse = await fetch(testEndpoint, {
       method: 'POST',
       headers: {
-        'X-API-Token': config.api_key.trim(),
+        'X-API-Token': apiToken,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({}),
@@ -127,22 +165,25 @@ Deno.serve(async (req) => {
       (responseJson && (responseJson.message || responseJson.error || responseJson.detail)) ||
       responseText;
 
-    console.log(`[test-channel] Endpoint: ${testEndpoint}`);
     console.log(`[test-channel] Response status: ${testResponse.status}`);
-    console.log(`[test-channel] Response body: ${String(providerMessage).substring(0, 200)}`);
+    console.log(`[test-channel] Response body: ${String(providerMessage).substring(0, 300)}`);
 
+    // Analyze response
     const invalidToken =
       testResponse.status === 401 ||
       testResponse.status === 403 ||
-      /invalid token/i.test(String(providerMessage));
+      /invalid token/i.test(String(providerMessage)) ||
+      /unauthorized/i.test(String(providerMessage)) ||
+      /não autorizado/i.test(String(providerMessage));
 
     if (invalidToken) {
       return new Response(
         JSON.stringify({
           success: false,
           error: {
-            detail:
-              'Token NotificaMe inválido. Vá em Configurações > Canais e atualize credenciais.',
+            detail: `Credenciais rejeitadas pelo NotificaMe (HTTP ${testResponse.status}). Verifique se o Token da API está correto. Resposta: ${String(providerMessage).substring(0, 150)}`,
+            code: `HTTP_${testResponse.status}`,
+            http_status: testResponse.status,
           },
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -154,7 +195,8 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({
           success: true,
-          message: 'Credenciais autenticadas com sucesso! (validação de payload esperada)',
+          message: `✅ Token autenticado com sucesso! (HTTP ${testResponse.status} - payload de teste rejeitado, mas credenciais aceitas)`,
+          http_status: testResponse.status,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -165,7 +207,9 @@ Deno.serve(async (req) => {
         JSON.stringify({
           success: false,
           error: {
-            detail: `Falha ao validar credenciais (HTTP ${testResponse.status}). ${String(providerMessage).substring(0, 120)}`,
+            detail: `Erro inesperado do NotificaMe (HTTP ${testResponse.status}). Resposta: ${String(providerMessage).substring(0, 150)}`,
+            code: `HTTP_${testResponse.status}`,
+            http_status: testResponse.status,
           },
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -173,7 +217,11 @@ Deno.serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ success: true, message: 'Credenciais validadas com sucesso!' }),
+      JSON.stringify({ 
+        success: true, 
+        message: `✅ Credenciais validadas com sucesso! (HTTP ${testResponse.status})`,
+        http_status: testResponse.status,
+      }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (error) {
