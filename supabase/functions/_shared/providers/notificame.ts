@@ -88,9 +88,9 @@ async function notificameRequest<T = unknown>(
     ...options.headers,
   };
   
-  // Auth header - NotificaMe uses Authorization: Bearer <api_key>
-  const authHeader = config.api_key_header || 'Authorization';
-  const authPrefix = config.api_key_prefix ?? 'Bearer';
+  // Auth header - NotificaMe Hub uses x-api-token header
+  const authHeader = config.api_key_header || 'x-api-token';
+  const authPrefix = config.api_key_prefix ?? ''; // NotificaMe doesn't use Bearer prefix
   headers[authHeader] = authPrefix ? `${authPrefix} ${config.api_key}` : config.api_key;
   
   // Timeout handling
@@ -479,32 +479,41 @@ export const notificameProvider: Provider = {
     const config = channel.provider_config;
     const endpoint = getEndpoint(config, 'send_message');
     
-    // Payload WhatsApp Cloud API format
+    // NotificaMe Hub API format
+    // The api_key is the subscriptionId which acts as both auth token and sender identifier
+    const subscriptionId = config.api_key;
+    const recipientPhone = normalizePhoneNumber(to);
+    
+    // NotificaMe Hub uses a specific format
+    // POST /v1/messages/{subscriptionId}/{recipientPhone}
+    // Body: { contents: [{ type: "text", text: "message" }] }
+    const notificaMePath = `/v1/messages/${subscriptionId}/${recipientPhone}`;
+    
     const payload: Record<string, unknown> = {
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: normalizePhoneNumber(to),
-      type: 'text',
-      text: {
-        preview_url: true,
-        body: text,
-      },
+      contents: [{
+        type: 'text',
+        text: text,
+      }],
     };
     
-    // Reply context
+    // Reply context (if NotificaMe supports it)
     if (reply_to_provider_message_id) {
       payload.context = {
         message_id: reply_to_provider_message_id,
       };
     }
     
+    console.log(`[NotificaMe] Sending text to ${recipientPhone} via subscription ${subscriptionId}`);
+    
     try {
       const response = await notificameRequest<{
+        id?: string;
+        messageId?: string;
         messages?: Array<{ id: string }>;
         error?: unknown;
       }>(config, {
         method: 'POST',
-        path: endpoint,
+        path: notificaMePath,
         body: payload,
       });
       
@@ -513,7 +522,10 @@ export const notificameProvider: Provider = {
         return { success: false, raw: response.data, error };
       }
       
-      const messageId = response.data.messages?.[0]?.id;
+      // NotificaMe may return messageId in different formats
+      const messageId = response.data.id || response.data.messageId || response.data.messages?.[0]?.id;
+      
+      console.log(`[NotificaMe] Message sent successfully, id: ${messageId}`);
       
       return {
         success: true,
