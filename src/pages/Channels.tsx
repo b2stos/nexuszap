@@ -139,7 +139,6 @@ function CreateChannelDialog({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [apiKey, setApiKey] = useState('');
   const [subscriptionId, setSubscriptionId] = useState('');
   
   const createChannel = useCreateChannel();
@@ -147,54 +146,23 @@ function CreateChannelDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    const trimmedApiKey = apiKey.trim();
     const trimmedSubscriptionId = subscriptionId.trim();
     
-    if (!name.trim() || !trimmedApiKey || !trimmedSubscriptionId) {
+    if (!name.trim() || !trimmedSubscriptionId) {
       toast({
         title: 'Campos obrigatórios',
-        description: 'Preencha o nome, Token da API e Channel ID/Subscription ID.',
+        description: 'Preencha o nome e Subscription ID.',
         variant: 'destructive',
       });
       return;
     }
     
-    // Validation: Subscription ID must be UUID format (36 chars, no slashes)
+    // Validation: Subscription ID must be UUID format (36 chars)
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(trimmedSubscriptionId)) {
       toast({
         title: 'Subscription ID inválido',
-        description: 'Deve ser um UUID (formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx). Você pode ter colado a URL do webhook aqui por engano.',
-        variant: 'destructive',
-      });
-      return;
-    }
-    
-    // Validation: API Token should NOT be a UUID (common mistake)
-    if (uuidRegex.test(trimmedApiKey)) {
-      toast({
-        title: 'Token da API inválido',
-        description: 'Você colou um UUID no campo Token. O Token da API é um valor de autenticação (não é o Channel ID).',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    // Validation: reject JSON (token must be pasted as plain string)
-    if (trimmedApiKey.startsWith('{') || trimmedApiKey.startsWith('[')) {
-      toast({
-        title: 'Token inválido',
-        description: 'Cole apenas o token puro, sem JSON.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    // Validation: API Token should be reasonably long
-    if (trimmedApiKey.length < 20) {
-      toast({
-        title: 'Token da API parece curto',
-        description: 'Verifique se copiou o valor completo do Token de Acesso.',
+        description: 'Deve ser um UUID (formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).',
         variant: 'destructive',
       });
       return;
@@ -207,7 +175,6 @@ function CreateChannelDialog({
         name: name.trim(),
         phone_number: phoneNumber.trim() || undefined,
         provider_config: {
-          api_key: apiKey.trim(),
           subscription_id: subscriptionId.trim(),
         },
       },
@@ -216,7 +183,6 @@ function CreateChannelDialog({
     setOpen(false);
     setName('');
     setPhoneNumber('');
-    setApiKey('');
     setSubscriptionId('');
     onCreated();
   };
@@ -234,6 +200,7 @@ function CreateChannelDialog({
           <DialogTitle>Criar Canal WhatsApp</DialogTitle>
           <DialogDescription>
             Configure um novo canal para enviar e receber mensagens via API Oficial (NotificaMe BSP).
+            O Token da API é configurado no servidor pelo administrador.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -263,35 +230,15 @@ function CreateChannelDialog({
           
           <Separator />
           
-            <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
+          <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
             <div className="flex items-center gap-2 text-sm font-medium text-primary">
               <Key className="w-4 h-4" />
-              Credenciais NotificaMe Hub
+              Identificação do Canal NotificaMe
             </div>
             
-            {/* API Token - único campo de autenticação */}
-            <div className="space-y-2">
-              <Label htmlFor="apiKey">
-                Token da API *
-              </Label>
-              <Input
-                id="apiKey"
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Cole o token da sua conta NotificaMe"
-                required
-                className="font-mono text-sm"
-              />
-              <p className="text-xs text-muted-foreground">
-                Encontrado em: <span className="font-medium">NotificaMe Hub → Configurações → API → Token de Acesso</span>
-              </p>
-            </div>
-            
-            {/* Subscription ID - para identificar o canal */}
             <div className="space-y-2">
               <Label htmlFor="subscriptionId">
-                Subscription ID (canal) *
+                Subscription ID (UUID do canal) *
               </Label>
               <Input
                 id="subscriptionId"
@@ -335,7 +282,6 @@ function ChannelCard({
   const [editOpen, setEditOpen] = useState(false);
   const [name, setName] = useState(channel.name);
   const [phoneNumber, setPhoneNumber] = useState(channel.phone_number || '');
-  const [apiKey, setApiKey] = useState('');
   const [subscriptionId, setSubscriptionId] = useState('');
   
   const updateChannel = useUpdateChannel();
@@ -346,7 +292,6 @@ function ChannelCard({
   const config = channel.provider_config as ChannelProviderConfig;
 
   const handleSave = async () => {
-    const trimmedApiKey = apiKey.trim();
     const trimmedSubscriptionId = subscriptionId.trim();
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     
@@ -360,33 +305,12 @@ function ChannelCard({
       return;
     }
     
-    // Validate new API key if provided
-    if (trimmedApiKey) {
-      if (uuidRegex.test(trimmedApiKey)) {
-        toast({
-          title: 'Token da API inválido',
-          description: 'Você colou um UUID no campo Token. O Token é o valor de autenticação da API.',
-          variant: 'destructive',
-        });
-        return;
-      }
-      if (trimmedApiKey.length < 20) {
-        toast({
-          title: 'Token da API parece curto',
-          description: 'Verifique se copiou o valor completo.',
-          variant: 'destructive',
-        });
-        return;
-      }
-    }
-    
     const input: Record<string, unknown> = {
       name: name.trim(),
       phone_number: phoneNumber.trim() || null,
     };
     
     const providerConfigUpdates: Record<string, unknown> = {};
-    if (trimmedApiKey) providerConfigUpdates.api_key = trimmedApiKey;
     if (trimmedSubscriptionId) providerConfigUpdates.subscription_id = trimmedSubscriptionId;
     
     if (Object.keys(providerConfigUpdates).length > 0) {
@@ -399,7 +323,6 @@ function ChannelCard({
     });
     
     setEditOpen(false);
-    setApiKey('');
     setSubscriptionId('');
     onUpdate();
   };
@@ -533,16 +456,14 @@ function ChannelCard({
           </div>
         )}
         
-        {/* Missing credentials warning */}
-        {(!config?.api_key || !config?.subscription_id) && (
+        {/* Missing subscription_id warning */}
+        {!config?.subscription_id && (
           <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-destructive mt-0.5" />
             <div className="text-sm">
-              <p className="font-medium text-destructive">Credenciais incompletas</p>
+              <p className="font-medium text-destructive">Subscription ID não configurado</p>
               <p className="text-muted-foreground">
-                {!config?.api_key && 'Token da API não configurado. '}
-                {!config?.subscription_id && 'Subscription ID não configurado. '}
-                Edite o canal para adicionar.
+                Edite o canal para adicionar o UUID do canal NotificaMe.
               </p>
             </div>
           </div>
@@ -556,6 +477,7 @@ function ChannelCard({
             <DialogTitle>Editar Canal</DialogTitle>
             <DialogDescription>
               Atualize as configurações do canal WhatsApp.
+              O Token da API é configurado no servidor pelo administrador.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -583,33 +505,12 @@ function ChannelCard({
             <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
               <div className="flex items-center gap-2 text-sm font-medium text-primary">
                 <Key className="w-4 h-4" />
-                Credenciais NotificaMe Hub
+                Identificação do Canal NotificaMe
               </div>
 
-              {/* Token da API (segredo) */}
-              <div className="space-y-2">
-                <Label htmlFor="edit-apiKey">
-                  Token da API (X-Api-Token)
-                </Label>
-                <Input
-                  id="edit-apiKey"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Deixe vazio para manter o atual"
-                  className="font-mono text-sm"
-                />
-                <p className="text-xs text-muted-foreground">
-                  {config?.api_key && config.api_key.length > 10
-                    ? `✓ Token configurado (${config.api_key.length} chars)`
-                    : '✗ Token NÃO configurado ou inválido'}
-                </p>
-              </div>
-
-              {/* Channel ID (não é segredo) */}
               <div className="space-y-2">
                 <Label htmlFor="edit-subscriptionId">
-                  Channel ID / Subscription ID (UUID)
+                  Subscription ID (UUID do canal)
                 </Label>
                 <Input
                   id="edit-subscriptionId"
@@ -620,8 +521,8 @@ function ChannelCard({
                 />
                 <p className="text-xs text-muted-foreground">
                   {config?.subscription_id && config.subscription_id.length === 36 && !config.subscription_id.includes('/')
-                    ? `✓ Atual: ${config.subscription_id.substring(0, 8)}...` 
-                    : '✗ Channel ID/Subscription ID NÃO configurado ou inválido'}
+                    ? `✓ Atual: ${config.subscription_id.substring(0, 8)}...${config.subscription_id.substring(28)}` 
+                    : '✗ Subscription ID NÃO configurado'}
                 </p>
               </div>
             </div>

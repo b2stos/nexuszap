@@ -46,8 +46,9 @@ export interface CreateChannelInput {
   name: string;
   phone_number?: string;
   provider_config: {
-    api_key: string;
     subscription_id: string;
+    // api_key is now server-side only (ENV: NOTIFICAME_X_API_TOKEN)
+    api_key?: string;
     base_url?: string;
     webhook_secret?: string;
   };
