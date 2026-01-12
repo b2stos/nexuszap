@@ -469,13 +469,35 @@ export const notificameProvider: Provider = {
     const { channel, to, text, reply_to_provider_message_id } = request;
     const config = channel.provider_config;
     
-    // NotificaMe Hub API format based on SDK analysis
-    // The api_key is the subscriptionId which acts as both auth token and sender identifier
-    const subscriptionId = config.api_key;
+    // NotificaMe Hub API format:
+    // - api_key: Token de autenticação (header X-API-Token)
+    // - subscription_id: UUID do canal no NotificaMe (campo "from")
+    const subscriptionId = config.subscription_id || config.api_key; // fallback para compatibilidade
+    const apiToken = config.api_key;
     const recipientPhone = normalizePhoneNumber(to);
     
+    // Validate credentials
+    if (!apiToken) {
+      console.error('[NotificaMe] Missing api_key (authentication token)');
+      return {
+        success: false,
+        raw: null,
+        error: createProviderError('auth', 'MISSING_TOKEN', 
+          'Token de API não configurado. Vá em Configurações > Canais e atualize as credenciais.'),
+      };
+    }
+    
+    if (!subscriptionId) {
+      console.error('[NotificaMe] Missing subscription_id');
+      return {
+        success: false,
+        raw: null,
+        error: createProviderError('invalid_request', 'MISSING_SUBSCRIPTION_ID', 
+          'Subscription ID não configurado. Vá em Configurações > Canais e atualize as credenciais.'),
+      };
+    }
+    
     // Correct endpoint: POST /v2/channels/whatsapp/messages
-    // Body: { from: subscriptionId, to: phone, contents: [{ type: "text", text: "message" }] }
     const notificaMePath = '/v2/channels/whatsapp/messages';
     
     const payload: Record<string, unknown> = {
@@ -494,7 +516,9 @@ export const notificameProvider: Provider = {
       };
     }
     
-    console.log(`[NotificaMe] Sending text to ${recipientPhone} via subscription ${subscriptionId}`);
+    console.log(`[NotificaMe] Sending text to ${recipientPhone}`);
+    console.log(`[NotificaMe] Using subscription_id: ${subscriptionId.substring(0, 8)}...`);
+    console.log(`[NotificaMe] API Token present: ${apiToken ? 'yes (length: ' + apiToken.length + ')' : 'no'}`);
     console.log(`[NotificaMe] POST ${notificaMePath}`);
     console.log(`[NotificaMe] Payload:`, JSON.stringify(payload));
     

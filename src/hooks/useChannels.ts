@@ -9,7 +9,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 
 export interface ChannelProviderConfig {
-  api_key?: string;
+  api_key?: string; // Token de autenticação da API
+  subscription_id?: string; // UUID do canal no NotificaMe (from)
   base_url?: string;
   api_key_header?: string;
   api_key_prefix?: string;
@@ -46,6 +47,7 @@ export interface CreateChannelInput {
   phone_number?: string;
   provider_config: {
     api_key: string;
+    subscription_id: string;
     base_url: string;
     webhook_secret?: string;
   };
@@ -295,20 +297,25 @@ export function useDeleteChannel() {
 export function useTestChannel() {
   return useMutation({
     mutationFn: async (channelId: string) => {
-      const { data, error } = await supabase.functions.invoke('inbox-send-text', {
+      const { data, error } = await supabase.functions.invoke('test-channel-connection', {
         body: {
-          action: 'test_connection',
           channel_id: channelId,
         },
       });
 
       if (error) throw error;
+      
+      // Check for API-level errors
+      if (data && !data.success) {
+        throw new Error(data.error?.detail || data.message || 'Falha na conexão');
+      }
+      
       return data;
     },
     onSuccess: () => {
       toast({
-        title: 'Conexão testada',
-        description: 'A conexão com o BSP está funcionando.',
+        title: 'Conexão OK!',
+        description: 'As credenciais estão funcionando corretamente.',
       });
     },
     onError: (error) => {

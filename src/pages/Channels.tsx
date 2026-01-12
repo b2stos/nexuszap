@@ -60,6 +60,7 @@ import {
   useCreateChannel,
   useUpdateChannel,
   useDeleteChannel,
+  useTestChannel,
   getWebhookUrl,
   Channel,
   ChannelProviderConfig,
@@ -139,6 +140,7 @@ function CreateChannelDialog({
   const [name, setName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [subscriptionId, setSubscriptionId] = useState('');
   const [baseUrl, setBaseUrl] = useState('https://api.notificame.com.br');
   const [webhookSecret, setWebhookSecret] = useState('');
   
@@ -147,10 +149,10 @@ function CreateChannelDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!name.trim() || !apiKey.trim()) {
+    if (!name.trim() || !apiKey.trim() || !subscriptionId.trim()) {
       toast({
         title: 'Campos obrigatórios',
-        description: 'Preencha o nome e o token da API.',
+        description: 'Preencha o nome, Token da API e Subscription ID.',
         variant: 'destructive',
       });
       return;
@@ -164,6 +166,7 @@ function CreateChannelDialog({
         phone_number: phoneNumber.trim() || undefined,
         provider_config: {
           api_key: apiKey.trim(),
+          subscription_id: subscriptionId.trim(),
           base_url: baseUrl.trim(),
           webhook_secret: webhookSecret.trim() || undefined,
         },
@@ -174,6 +177,7 @@ function CreateChannelDialog({
     setName('');
     setPhoneNumber('');
     setApiKey('');
+    setSubscriptionId('');
     setWebhookSecret('');
     onCreated();
   };
@@ -186,7 +190,7 @@ function CreateChannelDialog({
           Novo Canal
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Criar Canal WhatsApp</DialogTitle>
           <DialogDescription>
@@ -220,16 +224,40 @@ function CreateChannelDialog({
           
           <Separator />
           
-          <div className="space-y-2">
-            <Label htmlFor="apiKey">Token da API (NotificaMe) *</Label>
-            <Input
-              id="apiKey"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="Seu token do BSP"
-              required
-            />
+          <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-primary">
+              <Key className="w-4 h-4" />
+              Credenciais NotificaMe
+            </div>
+            
+            <div className="space-y-2">
+              <Label htmlFor="apiKey">Token da API *</Label>
+              <Input
+                id="apiKey"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="Seu token de autenticação"
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                Token usado para autenticar chamadas à API (encontrado no painel NotificaMe)
+              </p>
+            </div>
+            
+            <div className="space-y-2">
+              <Label htmlFor="subscriptionId">Subscription ID *</Label>
+              <Input
+                id="subscriptionId"
+                value={subscriptionId}
+                onChange={(e) => setSubscriptionId(e.target.value)}
+                placeholder="Ex: 066f4d91-fd0c-4726-8b1c-..."
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                UUID do canal/subscription no NotificaMe (campo "from" nas mensagens)
+              </p>
+            </div>
           </div>
           
           <div className="space-y-2">
@@ -284,14 +312,17 @@ function ChannelCard({
   const [name, setName] = useState(channel.name);
   const [phoneNumber, setPhoneNumber] = useState(channel.phone_number || '');
   const [apiKey, setApiKey] = useState('');
+  const [subscriptionId, setSubscriptionId] = useState('');
   const [baseUrl, setBaseUrl] = useState(
     (channel.provider_config as ChannelProviderConfig)?.base_url || ''
   );
   
   const updateChannel = useUpdateChannel();
   const deleteChannel = useDeleteChannel();
+  const testChannel = useTestChannel();
   
   const webhookUrl = getWebhookUrl(channel.id);
+  const config = channel.provider_config as ChannelProviderConfig;
 
   const handleSave = async () => {
     const input: Record<string, unknown> = {
@@ -299,10 +330,13 @@ function ChannelCard({
       phone_number: phoneNumber.trim() || null,
     };
     
-    if (apiKey.trim() || baseUrl.trim()) {
-      input.provider_config = {};
-      if (apiKey.trim()) (input.provider_config as Record<string, unknown>).api_key = apiKey.trim();
-      if (baseUrl.trim()) (input.provider_config as Record<string, unknown>).base_url = baseUrl.trim();
+    const providerConfigUpdates: Record<string, unknown> = {};
+    if (apiKey.trim()) providerConfigUpdates.api_key = apiKey.trim();
+    if (subscriptionId.trim()) providerConfigUpdates.subscription_id = subscriptionId.trim();
+    if (baseUrl.trim()) providerConfigUpdates.base_url = baseUrl.trim();
+    
+    if (Object.keys(providerConfigUpdates).length > 0) {
+      input.provider_config = providerConfigUpdates;
     }
 
     await updateChannel.mutateAsync({
@@ -312,12 +346,17 @@ function ChannelCard({
     
     setEditOpen(false);
     setApiKey('');
+    setSubscriptionId('');
     onUpdate();
   };
 
   const handleDelete = async () => {
     await deleteChannel.mutateAsync(channel.id);
     onDelete();
+  };
+
+  const handleTestConnection = async () => {
+    await testChannel.mutateAsync(channel.id);
   };
 
   return (
@@ -345,6 +384,19 @@ function ChannelCard({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleTestConnection}
+              disabled={testChannel.isPending}
+            >
+              {testChannel.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Shield className="w-4 h-4 mr-2" />
+              )}
+              Testar
+            </Button>
             <Button variant="outline" size="icon" onClick={() => setEditOpen(true)}>
               <Settings className="w-4 h-4" />
             </Button>
@@ -389,6 +441,19 @@ function ChannelCard({
           </div>
         </div>
         
+        {/* Subscription ID info */}
+        {config?.subscription_id && (
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground flex items-center gap-1">
+              <Key className="w-3 h-3" />
+              Subscription ID
+            </Label>
+            <div className="font-mono text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1">
+              {config.subscription_id.substring(0, 8)}...{config.subscription_id.substring(config.subscription_id.length - 4)}
+            </div>
+          </div>
+        )}
+        
         {/* Config info */}
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
@@ -413,11 +478,26 @@ function ChannelCard({
             </div>
           </div>
         )}
+        
+        {/* Missing credentials warning */}
+        {(!config?.api_key || !config?.subscription_id) && (
+          <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-destructive mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-destructive">Credenciais incompletas</p>
+              <p className="text-muted-foreground">
+                {!config?.api_key && 'Token da API não configurado. '}
+                {!config?.subscription_id && 'Subscription ID não configurado. '}
+                Edite o canal para adicionar.
+              </p>
+            </div>
+          </div>
+        )}
       </CardContent>
       
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Editar Canal</DialogTitle>
             <DialogDescription>
@@ -446,15 +526,40 @@ function ChannelCard({
             
             <Separator />
             
-            <div className="space-y-2">
-              <Label htmlFor="edit-apiKey">Novo Token da API (deixe vazio para manter)</Label>
-              <Input
-                id="edit-apiKey"
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="••••••••••••"
-              />
+            <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-primary">
+                <Key className="w-4 h-4" />
+                Credenciais NotificaMe
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-apiKey">Novo Token da API</Label>
+                <Input
+                  id="edit-apiKey"
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Deixe vazio para manter o atual"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {config?.api_key ? '✓ Token configurado' : '✗ Token não configurado'}
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-subscriptionId">Novo Subscription ID</Label>
+                <Input
+                  id="edit-subscriptionId"
+                  value={subscriptionId}
+                  onChange={(e) => setSubscriptionId(e.target.value)}
+                  placeholder="Deixe vazio para manter o atual"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {config?.subscription_id 
+                    ? `✓ Atual: ${config.subscription_id.substring(0, 8)}...` 
+                    : '✗ Subscription ID não configurado'}
+                </p>
+              </div>
             </div>
             
             <div className="space-y-2">
