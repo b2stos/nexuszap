@@ -466,7 +466,10 @@ async function processInboundMessage(
   ctx: LogContext
 ): Promise<{ success: boolean; duplicate: boolean; messageId?: string }> {
   try {
-    const contactId = await upsertContactFromInbound(supabase, tenantId, event.from_phone, undefined, ctx);
+    // Extract visitor name from event (stored by provider parser)
+    const visitorName = (event as unknown as Record<string, unknown>).visitor_name as string | undefined;
+    
+    const contactId = await upsertContactFromInbound(supabase, tenantId, event.from_phone, visitorName, ctx);
     if (!contactId) return { success: false, duplicate: false };
     
     const conversationId = await upsertConversationFromInbound(supabase, tenantId, channelId, contactId, event, ctx);
