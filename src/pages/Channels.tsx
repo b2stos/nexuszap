@@ -141,8 +141,6 @@ function CreateChannelDialog({
   const [phoneNumber, setPhoneNumber] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [subscriptionId, setSubscriptionId] = useState('');
-  const [baseUrl, setBaseUrl] = useState('https://api.notificame.com.br');
-  const [webhookSecret, setWebhookSecret] = useState('');
   
   const createChannel = useCreateChannel();
 
@@ -176,17 +174,17 @@ function CreateChannelDialog({
     if (uuidRegex.test(trimmedApiKey)) {
       toast({
         title: 'Token da API inválido',
-        description: 'Você colou um UUID no campo Token. O Token é um JWT longo (100+ caracteres), não um UUID.',
+        description: 'Você colou um UUID no campo Token. O Token é o valor de autenticação da API, não um UUID.',
         variant: 'destructive',
       });
       return;
     }
     
-    // Validation: API Token should be reasonably long (JWTs are typically 100+ chars)
-    if (trimmedApiKey.length < 50) {
+    // Validation: API Token should be reasonably long
+    if (trimmedApiKey.length < 20) {
       toast({
         title: 'Token da API parece curto',
-        description: 'O Token de API do NotificaMe é geralmente um JWT longo (100+ caracteres). Verifique se copiou o valor completo.',
+        description: 'Verifique se copiou o valor completo do Token de Acesso.',
         variant: 'destructive',
       });
       return;
@@ -201,8 +199,6 @@ function CreateChannelDialog({
         provider_config: {
           api_key: apiKey.trim(),
           subscription_id: subscriptionId.trim(),
-          base_url: baseUrl.trim(),
-          webhook_secret: webhookSecret.trim() || undefined,
         },
       },
     });
@@ -212,7 +208,6 @@ function CreateChannelDialog({
     setPhoneNumber('');
     setApiKey('');
     setSubscriptionId('');
-    setWebhookSecret('');
     onCreated();
   };
 
@@ -261,36 +256,32 @@ function CreateChannelDialog({
             <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
             <div className="flex items-center gap-2 text-sm font-medium text-primary">
               <Key className="w-4 h-4" />
-              Credenciais NotificaMe (Hub API)
+              Credenciais NotificaMe Hub
             </div>
             
-            {/* API Token - for authentication header */}
+            {/* API Token - único campo de autenticação */}
             <div className="space-y-2">
-              <Label htmlFor="apiKey" className="flex items-center gap-1">
-                Token da API (X-API-Token) *
-                <span className="text-xs text-muted-foreground font-normal ml-1">— para envio outbound</span>
+              <Label htmlFor="apiKey">
+                Token da API *
               </Label>
               <Input
                 id="apiKey"
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Ex: eyJhbGciOiJIUzI1NiIsIn... (JWT longo)"
+                placeholder="Cole o token da sua conta NotificaMe"
                 required
                 className="font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                <strong>Atenção:</strong> Este é o <strong>JWT/Bearer token</strong> encontrado em:{' '}
-                <span className="font-medium">NotificaMe → Configurações → API → Token de Acesso</span>.{' '}
-                <strong>NÃO</strong> é o UUID do canal.
+                Encontrado em: <span className="font-medium">NotificaMe Hub → Configurações → API → Token de Acesso</span>
               </p>
             </div>
             
-            {/* Subscription ID - for "from" field */}
+            {/* Subscription ID - para identificar o canal */}
             <div className="space-y-2">
-              <Label htmlFor="subscriptionId" className="flex items-center gap-1">
+              <Label htmlFor="subscriptionId">
                 Subscription ID (canal) *
-                <span className="text-xs text-muted-foreground font-normal ml-1">— usado no "from"</span>
               </Label>
               <Input
                 id="subscriptionId"
@@ -301,47 +292,11 @@ function CreateChannelDialog({
                 className="font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                UUID do canal no NotificaMe (formato: <code>xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</code>).{' '}
-                Encontrado em: <span className="font-medium">NotificaMe → Canais → WhatsApp → Detalhes do canal</span>.
+                UUID do canal. Encontrado em: <span className="font-medium">NotificaMe → Canais → WhatsApp → Detalhes</span>
               </p>
             </div>
-            
-            {/* Validation hint */}
-            <div className="p-2 rounded bg-orange-500/10 border border-orange-500/20 text-xs text-orange-700 dark:text-orange-300">
-              <AlertTriangle className="w-3 h-3 inline mr-1" />
-              Erros comuns: colar o <strong>Subscription ID no campo de Token</strong> ou vice-versa. 
-              Token é um JWT longo (≥100 chars). Subscription ID é um UUID (36 chars).
-            </div>
           </div>
           
-          <div className="space-y-2">
-            <Label htmlFor="baseUrl">URL Base da API</Label>
-            <Input
-              id="baseUrl"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://api.notificame.com.br"
-              disabled
-              className="bg-muted"
-            />
-            <p className="text-xs text-muted-foreground">
-              Valor fixo, não altere.
-            </p>
-          </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="webhookSecret">Secret do Webhook (opcional)</Label>
-            <Input
-              id="webhookSecret"
-              type="password"
-              value={webhookSecret}
-              onChange={(e) => setWebhookSecret(e.target.value)}
-              placeholder="Para validação HMAC"
-            />
-            <p className="text-xs text-muted-foreground">
-              Se configurado, será usado para validar a autenticidade dos webhooks
-            </p>
-          </div>
           
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
@@ -372,9 +327,6 @@ function ChannelCard({
   const [phoneNumber, setPhoneNumber] = useState(channel.phone_number || '');
   const [apiKey, setApiKey] = useState('');
   const [subscriptionId, setSubscriptionId] = useState('');
-  const [baseUrl, setBaseUrl] = useState(
-    (channel.provider_config as ChannelProviderConfig)?.base_url || ''
-  );
   
   const updateChannel = useUpdateChannel();
   const deleteChannel = useDeleteChannel();
@@ -403,15 +355,15 @@ function ChannelCard({
       if (uuidRegex.test(trimmedApiKey)) {
         toast({
           title: 'Token da API inválido',
-          description: 'Você colou um UUID no campo Token. O Token é um JWT longo, não um UUID.',
+          description: 'Você colou um UUID no campo Token. O Token é o valor de autenticação da API.',
           variant: 'destructive',
         });
         return;
       }
-      if (trimmedApiKey.length < 50) {
+      if (trimmedApiKey.length < 20) {
         toast({
           title: 'Token da API parece curto',
-          description: 'O Token de API é geralmente um JWT longo (100+ caracteres).',
+          description: 'Verifique se copiou o valor completo.',
           variant: 'destructive',
         });
         return;
@@ -426,7 +378,6 @@ function ChannelCard({
     const providerConfigUpdates: Record<string, unknown> = {};
     if (trimmedApiKey) providerConfigUpdates.api_key = trimmedApiKey;
     if (trimmedSubscriptionId) providerConfigUpdates.subscription_id = trimmedSubscriptionId;
-    if (baseUrl.trim()) providerConfigUpdates.base_url = baseUrl.trim();
     
     if (Object.keys(providerConfigUpdates).length > 0) {
       input.provider_config = providerConfigUpdates;
@@ -665,15 +616,6 @@ function ChannelCard({
                     : '✗ Subscription ID NÃO configurado ou inválido'}
                 </p>
               </div>
-            </div>
-            
-            <div className="space-y-2">
-              <Label htmlFor="edit-baseUrl">URL Base</Label>
-              <Input
-                id="edit-baseUrl"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-              />
             </div>
           </div>
           <DialogFooter>
