@@ -64,7 +64,21 @@ async function notificameRequest<T = unknown>(
   config: ChannelProviderConfig,
   options: HttpRequestOptions
 ): Promise<HttpResponse<T>> {
-  const baseUrl = config.base_url.replace(/\/$/, '');
+  // IMPORTANT: Validate and fix base_url
+  let baseUrl = config.base_url?.replace(/\/$/, '') || '';
+  
+  // Auto-fix common misconfiguration: dashboard URL instead of API URL
+  if (baseUrl.includes('app.notificame.com.br') || baseUrl.includes('dashboard')) {
+    console.warn('[NotificaMe] CRITICAL: base_url points to dashboard, not API. Auto-fixing to https://api.notifica.me');
+    baseUrl = 'https://api.notifica.me';
+  }
+  
+  // Ensure we have a valid API base URL
+  if (!baseUrl || !baseUrl.startsWith('https://')) {
+    console.error('[NotificaMe] Invalid base_url:', baseUrl, '- Using default https://api.notifica.me');
+    baseUrl = 'https://api.notifica.me';
+  }
+  
   const url = `${baseUrl}${options.path}`;
   
   // Build headers
@@ -74,7 +88,7 @@ async function notificameRequest<T = unknown>(
     ...options.headers,
   };
   
-  // Auth header
+  // Auth header - NotificaMe uses Authorization: Bearer <api_key>
   const authHeader = config.api_key_header || 'Authorization';
   const authPrefix = config.api_key_prefix ?? 'Bearer';
   headers[authHeader] = authPrefix ? `${authPrefix} ${config.api_key}` : config.api_key;
@@ -86,6 +100,7 @@ async function notificameRequest<T = unknown>(
   
   try {
     console.log(`[NotificaMe] ${options.method} ${url}`);
+    console.log(`[NotificaMe] Request body:`, options.body ? JSON.stringify(options.body).substring(0, 300) : 'none');
     
     const response = await fetch(url, {
       method: options.method,
@@ -96,13 +111,22 @@ async function notificameRequest<T = unknown>(
     
     clearTimeout(timeoutId);
     
+    const responseText = await response.text();
     let data: T;
-    const contentType = response.headers.get('content-type');
     
-    if (contentType?.includes('application/json')) {
-      data = await response.json();
-    } else {
-      data = await response.text() as unknown as T;
+    // Try to parse as JSON
+    try {
+      data = JSON.parse(responseText) as T;
+    } catch {
+      // If not JSON, check if it's an HTML page (login page = wrong URL)
+      if (responseText.includes('<!DOCTYPE html>') || responseText.includes('<html')) {
+        console.error('[NotificaMe] ERROR: Received HTML instead of JSON - likely wrong API URL or authentication page');
+        throw new ProviderException(
+          createProviderError('invalid_request', 'WRONG_URL', 
+            `API returned HTML instead of JSON. Check if base_url (${baseUrl}) is correct. Expected: https://api.notifica.me`)
+        );
+      }
+      data = responseText as unknown as T;
     }
     
     console.log(`[NotificaMe] Response ${response.status}:`, JSON.stringify(data).substring(0, 500));
@@ -114,6 +138,10 @@ async function notificameRequest<T = unknown>(
     };
   } catch (error) {
     clearTimeout(timeoutId);
+    
+    if (error instanceof ProviderException) {
+      throw error;
+    }
     
     if (error instanceof Error && error.name === 'AbortError') {
       throw new ProviderException(
