@@ -153,7 +153,7 @@ function CreateChannelDialog({
     if (!name.trim() || !trimmedApiKey || !trimmedSubscriptionId) {
       toast({
         title: 'Campos obrigatórios',
-        description: 'Preencha o nome, Token da API e Subscription ID.',
+        description: 'Preencha o nome, Token da API e Channel ID/Subscription ID.',
         variant: 'destructive',
       });
       return;
@@ -174,12 +174,22 @@ function CreateChannelDialog({
     if (uuidRegex.test(trimmedApiKey)) {
       toast({
         title: 'Token da API inválido',
-        description: 'Você colou um UUID no campo Token. O Token é o valor de autenticação da API, não um UUID.',
+        description: 'Você colou um UUID no campo Token. O Token da API é um valor de autenticação (não é o Channel ID).',
         variant: 'destructive',
       });
       return;
     }
-    
+
+    // Validation: reject JSON (token must be pasted as plain string)
+    if (trimmedApiKey.startsWith('{') || trimmedApiKey.startsWith('[')) {
+      toast({
+        title: 'Token inválido',
+        description: 'Cole apenas o token puro, sem JSON.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     // Validation: API Token should be reasonably long
     if (trimmedApiKey.length < 20) {
       toast({
@@ -573,14 +583,13 @@ function ChannelCard({
             <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
               <div className="flex items-center gap-2 text-sm font-medium text-primary">
                 <Key className="w-4 h-4" />
-                Credenciais NotificaMe (Hub API)
+                Credenciais NotificaMe Hub
               </div>
-              
-              {/* API Token */}
+
+              {/* Token da API (segredo) */}
               <div className="space-y-2">
-                <Label htmlFor="edit-apiKey" className="flex items-center gap-1">
-                  Token da API (X-API-Token)
-                  <span className="text-xs text-muted-foreground font-normal ml-1">— JWT longo</span>
+                <Label htmlFor="edit-apiKey">
+                  Token da API (X-Api-Token)
                 </Label>
                 <Input
                   id="edit-apiKey"
@@ -596,12 +605,11 @@ function ChannelCard({
                     : '✗ Token NÃO configurado ou inválido'}
                 </p>
               </div>
-              
-              {/* Subscription ID */}
+
+              {/* Channel ID (não é segredo) */}
               <div className="space-y-2">
-                <Label htmlFor="edit-subscriptionId" className="flex items-center gap-1">
-                  Subscription ID (canal)
-                  <span className="text-xs text-muted-foreground font-normal ml-1">— UUID 36 chars</span>
+                <Label htmlFor="edit-subscriptionId">
+                  Channel ID / Subscription ID (UUID)
                 </Label>
                 <Input
                   id="edit-subscriptionId"
@@ -613,7 +621,7 @@ function ChannelCard({
                 <p className="text-xs text-muted-foreground">
                   {config?.subscription_id && config.subscription_id.length === 36 && !config.subscription_id.includes('/')
                     ? `✓ Atual: ${config.subscription_id.substring(0, 8)}...` 
-                    : '✗ Subscription ID NÃO configurado ou inválido'}
+                    : '✗ Channel ID/Subscription ID NÃO configurado ou inválido'}
                 </p>
               </div>
             </div>
