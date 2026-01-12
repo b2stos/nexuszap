@@ -27,6 +27,7 @@ import HowItWorks from "./pages/HowItWorks";
 import Pricing from "./pages/Pricing";
 import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
+import NotificameDiagnostics from "./pages/NotificameDiagnostics";
 
 // Error Boundary to prevent white screen on errors
 class ErrorBoundary extends Component<
@@ -96,6 +97,7 @@ const App = () => (
               <Route path="/dashboard/validation-test" element={<ProtectedRoute><ValidationTest /></ProtectedRoute>} />
               <Route path="/dashboard/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
               <Route path="/dashboard/admin" element={<ProtectedRoute><AdminRoute><Admin /></AdminRoute></ProtectedRoute>} />
+              <Route path="/dashboard/diagnostics" element={<ProtectedRoute><AdminRoute><NotificameDiagnostics /></AdminRoute></ProtectedRoute>} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>
