@@ -165,9 +165,9 @@ O `provider_config` do channel deve conter:
 
 ```json
 {
-  "base_url": "https://api.notifica.me",
-  "api_key": "seu-token-aqui",
-  "api_key_header": "Authorization",
+  "base_url": "https://api.notificame.com.br",
+  "api_key": "seu-token-jwt-aqui",
+  "subscription_id": "uuid-do-canal",
   "api_key_prefix": "Bearer",
   "webhook_secret": "opcional-para-hmac",
   "phone_number_id": "id-do-numero-no-provider",

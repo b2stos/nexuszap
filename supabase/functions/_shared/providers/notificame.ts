@@ -64,14 +64,23 @@ async function notificameRequest<T = unknown>(
   config: ChannelProviderConfig,
   options: HttpRequestOptions
 ): Promise<HttpResponse<T>> {
-  // NotificaMe API base URL is always https://api.notificame.com.br
-  let baseUrl = 'https://api.notificame.com.br';
+  // =====================================================
+  // SINGLE SOURCE OF TRUTH: NotificaMe API Base URL
+  // CRITICAL: This is the ONLY correct domain for NotificaMe Hub
+  // DO NOT CHANGE unless NotificaMe officially changes their API
+  // =====================================================
+  const NOTIFICAME_API_BASE_URL = 'https://api.notificame.com.br';
   
-  // Log if config has a different base_url (for debugging)
+  // VALIDATION: Block any misconfigured base_url from provider_config
   if (config.base_url && !config.base_url.includes('api.notificame.com.br')) {
-    console.warn('[NotificaMe] WARN: config base_url is not api.notificame.com.br, using default');
+    console.error(`[NotificaMe] CRITICAL: Invalid base_url detected: "${config.base_url}". Blocking request. Only api.notificame.com.br is allowed.`);
+    throw new ProviderException(
+      createProviderError('invalid_request', 'INVALID_BASE_URL', 
+        `URL base inválida: "${config.base_url}". Use apenas: https://api.notificame.com.br`)
+    );
   }
   
+  const baseUrl = NOTIFICAME_API_BASE_URL;
   const url = `${baseUrl}${options.path}`;
   
   // Build headers
@@ -89,8 +98,10 @@ async function notificameRequest<T = unknown>(
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   
   try {
-    console.log(`[NotificaMe] ${options.method} ${url}`);
-    console.log(`[NotificaMe] Request body:`, options.body ? JSON.stringify(options.body).substring(0, 300) : 'none');
+    // LOG: Full URL being called (for debugging)
+    console.log(`[NotificaMe] >>> ${options.method} ${url}`);
+    console.log(`[NotificaMe] >>> Base URL: ${baseUrl} (SSOT enforced)`);
+    console.log(`[NotificaMe] >>> Request body:`, options.body ? JSON.stringify(options.body).substring(0, 300) : 'none');
     
     const response = await fetch(url, {
       method: options.method,
@@ -113,13 +124,17 @@ async function notificameRequest<T = unknown>(
         console.error('[NotificaMe] ERROR: Received HTML instead of JSON - likely wrong API URL or authentication page');
         throw new ProviderException(
           createProviderError('invalid_request', 'WRONG_URL', 
-            `API returned HTML instead of JSON. Check if base_url (${baseUrl}) is correct. Expected: https://api.notifica.me`)
+            `API returned HTML instead of JSON. Check if base_url (${baseUrl}) is correct. Expected: https://api.notificame.com.br`)
         );
       }
       data = responseText as unknown as T;
     }
     
-    console.log(`[NotificaMe] Response ${response.status}:`, JSON.stringify(data).substring(0, 500));
+    // LOG: Response with sanitized content (mask any tokens)
+    const sanitizedResponse = JSON.stringify(data)
+      .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[JWT_MASKED]')
+      .substring(0, 500);
+    console.log(`[NotificaMe] <<< Response ${response.status}: ${sanitizedResponse}`);
     
     return {
       ok: response.ok,
