@@ -7,6 +7,7 @@
  * 3. ASYNC PROCESSING: Use EdgeRuntime.waitUntil() for heavy work
  * 4. IDEMPOTENT: Deduplicate by provider_message_id
  * 5. OBSERVABLE: Structured JSON logs with request_id
+ * 6. AUTO-CONNECT: Update channel status to connected on valid webhook
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -113,6 +114,9 @@ async function saveWebhookEvent(
     method?: string;
     latencyMs?: number;
     headers?: Record<string, string>;
+    contentType?: string;
+    rawBody?: string;
+    parsedBody?: unknown;
   }
 ): Promise<string | null> {
   try {
@@ -129,6 +133,9 @@ async function saveWebhookEvent(
           method: options?.method,
           latency_ms: options?.latencyMs,
           headers: options?.headers,
+          content_type: options?.contentType,
+          raw_body_preview: options?.rawBody?.substring(0, 500),
+          parsed_body: options?.parsedBody,
         },
         processed: false,
         received_at: new Date().toISOString(),
@@ -172,6 +179,35 @@ async function updateEventStatus(
       .eq('id', eventId);
   } catch (e) {
     if (ctx) log('error', 'Failed to update event status', ctx, { error: String(e) });
+  }
+}
+
+/**
+ * AUTO-CONNECT: Atualiza status do canal para "connected" quando recebe webhook válido
+ */
+async function updateChannelStatusToConnected(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  channelId: string,
+  ctx?: LogContext
+): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from('channels')
+      .update({
+        status: 'connected',
+        last_connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', channelId)
+      .neq('status', 'connected'); // Só atualiza se não estiver já conectado
+    
+    if (error) {
+      if (ctx) log('warn', 'Failed to update channel status', ctx, { error: error.message });
+    } else {
+      if (ctx) log('info', 'Channel status updated to connected', ctx);
+    }
+  } catch (e) {
+    if (ctx) log('error', 'Exception updating channel status', ctx, { error: String(e) });
   }
 }
 
@@ -350,6 +386,12 @@ async function insertInboundMessageIdempotent(
     return { id: null, duplicate: false };
   }
   
+  if (ctx) log('info', 'INBOUND_MESSAGE_CREATED', ctx, { 
+    conversation_id: conversationId, 
+    message_id: newMessage.id,
+    provider_message_id: event.provider_message_id,
+  });
+  
   return { id: newMessage.id, duplicate: false };
 }
 
@@ -508,6 +550,62 @@ function sanitizeHeaders(req: Request): Record<string, string> {
 }
 
 // ============================================
+// BODY PARSER - Multi-format support
+// ============================================
+
+interface ParsedBody {
+  parsed: unknown;
+  format: 'json' | 'form-urlencoded' | 'text' | 'empty';
+  raw: string;
+}
+
+/**
+ * Parser robusto que aceita múltiplos formatos:
+ * - application/json
+ * - application/x-www-form-urlencoded
+ * - text/plain
+ * - empty body
+ */
+function parseBodySafe(rawBody: string, contentType: string): ParsedBody {
+  // Empty body
+  if (!rawBody || rawBody.trim() === '') {
+    return { parsed: null, format: 'empty', raw: rawBody };
+  }
+  
+  const normalizedContentType = (contentType || '').toLowerCase();
+  
+  // 1. Try JSON first (most common)
+  if (normalizedContentType.includes('application/json') || rawBody.trim().startsWith('{') || rawBody.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(rawBody);
+      return { parsed, format: 'json', raw: rawBody };
+    } catch {
+      // Not valid JSON, continue to other parsers
+    }
+  }
+  
+  // 2. Try form-urlencoded
+  if (normalizedContentType.includes('application/x-www-form-urlencoded') || rawBody.includes('=')) {
+    try {
+      const params = new URLSearchParams(rawBody);
+      const parsed: Record<string, string> = {};
+      params.forEach((value, key) => {
+        parsed[key] = value;
+      });
+      // Only use if we actually parsed something
+      if (Object.keys(parsed).length > 0) {
+        return { parsed, format: 'form-urlencoded', raw: rawBody };
+      }
+    } catch {
+      // Not valid form data, continue
+    }
+  }
+  
+  // 3. Fallback: treat as text
+  return { parsed: { text: rawBody }, format: 'text', raw: rawBody };
+}
+
+// ============================================
 // ASYNC BACKGROUND PROCESSOR
 // ============================================
 
@@ -524,6 +622,9 @@ async function processWebhookAsync(
   const startTime = Date.now();
   
   try {
+    // AUTO-CONNECT: Atualiza status do canal para connected
+    await updateChannelStatusToConnected(supabase, channelId, ctx);
+    
     const providerName = channel.provider?.name || 'notificame';
     const provider = getProvider(providerName);
     
@@ -601,6 +702,7 @@ async function handleWebhook(req: Request): Promise<Response> {
   const startTime = Date.now();
   const requestId = generateRequestId();
   const url = new URL(req.url);
+  const contentType = req.headers.get('content-type') || '';
   
   // CRITICAL FIX: Extract channel_id and clean it from any extra params
   // NotificaMe may append ?hub_access_token=... to the URL, contaminating channel_id
@@ -630,7 +732,7 @@ async function handleWebhook(req: Request): Promise<Response> {
     ip: clientIP,
   };
   
-  log('info', `Incoming ${req.method} request`, ctx);
+  log('info', `Incoming ${req.method} request`, ctx, { content_type: contentType });
   
   // ===========================================
   // HEALTH CHECK ENDPOINTS (no channel_id required)
@@ -652,8 +754,10 @@ async function handleWebhook(req: Request): Promise<Response> {
     if (req.method === 'POST') {
       try {
         const rawBody = await req.text();
+        const parsed = parseBodySafe(rawBody, contentType);
         log('info', 'Test mode body received', ctx, { 
           body_length: rawBody.length,
+          body_format: parsed.format,
           body_preview: rawBody.substring(0, 200),
         });
       } catch (e) {
@@ -733,17 +837,23 @@ async function handleWebhook(req: Request): Promise<Response> {
         return new Response('Forbidden', { status: 403, headers: corsHeaders });
       }
       log('info', 'Meta verification successful', ctx);
+      
+      // AUTO-CONNECT on verification success
+      await updateChannelStatusToConnected(supabase, channelId, ctx);
+      
       return new Response(challenge, { status: 200, headers: corsHeaders });
     }
     
-    // Simple health check
+    // Simple health check - also auto-connect
+    await updateChannelStatusToConnected(supabase, channelId, ctx);
+    
     return new Response(
       JSON.stringify({
         ok: true,
         request_id: requestId,
         channel_id: channelId,
         channel_name: typedChannel.name,
-        channel_status: typedChannel.status,
+        channel_status: 'connected', // Will be connected after this
         timestamp: new Date().toISOString(),
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -766,12 +876,20 @@ async function handleWebhook(req: Request): Promise<Response> {
     log('warn', 'Could not read body', ctx, { error: String(e) });
   }
   
+  // Parse body with multi-format support
+  const parsedBody = parseBodySafe(rawBody, contentType);
+  log('info', 'Body parsed', ctx, { format: parsedBody.format, raw_length: rawBody.length });
+  
   // Empty body (test ping)
-  if (!rawBody || rawBody.trim() === '') {
+  if (parsedBody.format === 'empty') {
     log('info', 'Empty body received', ctx);
     const latency = Date.now() - startTime;
+    
+    // AUTO-CONNECT on any valid request
+    await updateChannelStatusToConnected(supabase, channelId, ctx);
+    
     await saveWebhookEvent(supabase, tenantId, channelId, 'test_ping', { empty: true }, ctx, {
-      ipAddress: clientIP, method: 'POST', latencyMs: latency
+      ipAddress: clientIP, method: 'POST', latencyMs: latency, contentType
     });
     return new Response(
       JSON.stringify({ 
@@ -779,34 +897,46 @@ async function handleWebhook(req: Request): Promise<Response> {
         request_id: requestId,
         message: 'Empty body received (test ping)',
         channel_name: typedChannel.name,
+        channel_status: 'connected',
         latency_ms: latency,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
   
-  // Try to parse JSON
-  let body: unknown;
-  try {
-    body = JSON.parse(rawBody);
-  } catch {
-    log('warn', 'Non-JSON body received', ctx, { body_preview: rawBody.substring(0, 200) });
+  // For non-JSON but parsed content (form-urlencoded or text)
+  if (parsedBody.format !== 'json') {
+    log('info', `Non-JSON body (${parsedBody.format}) received and parsed`, ctx);
     const latency = Date.now() - startTime;
-    await saveWebhookEvent(supabase, tenantId, channelId, 'non_json_body', { raw: rawBody.substring(0, 1000) }, ctx, {
-      ipAddress: clientIP, method: 'POST', latencyMs: latency
+    
+    // AUTO-CONNECT on any valid request
+    await updateChannelStatusToConnected(supabase, channelId, ctx);
+    
+    await saveWebhookEvent(supabase, tenantId, channelId, `body_${parsedBody.format}`, parsedBody.parsed, ctx, {
+      ipAddress: clientIP, 
+      method: 'POST', 
+      latencyMs: latency, 
+      contentType,
+      rawBody: rawBody.substring(0, 500),
+      parsedBody: parsedBody.parsed,
     });
+    
     return new Response(
       JSON.stringify({ 
         ok: true, 
         request_id: requestId,
-        message: 'Body received but not JSON (test mode?)',
+        message: `Body received as ${parsedBody.format}`,
         channel_name: typedChannel.name,
-        body_preview: rawBody.substring(0, 100),
+        channel_status: 'connected',
+        body_format: parsedBody.format,
         latency_ms: latency,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
+  
+  // JSON body - save and process
+  const body = parsedBody.parsed;
   
   // Save raw event FIRST (for audit)
   const latency = Date.now() - startTime;
@@ -822,6 +952,7 @@ async function handleWebhook(req: Request): Promise<Response> {
       method: 'POST',
       latencyMs: latency,
       headers: sanitizeHeaders(req),
+      contentType,
     }
   );
   
