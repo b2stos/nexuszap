@@ -312,10 +312,10 @@ export function useTestChannel() {
       
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast({
         title: 'Conexão OK!',
-        description: 'As credenciais estão funcionando corretamente.',
+        description: data?.message || 'As credenciais estão funcionando corretamente.',
       });
     },
     onError: (error) => {
