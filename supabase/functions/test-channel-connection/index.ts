@@ -114,17 +114,22 @@ Deno.serve(async (req) => {
       );
     }
 
-    let apiToken = (config.api_key || '').trim();
+    // API Token: Use server-side ENV: NOTIFICAME_X_API_TOKEN
+    // Falls back to config.api_key for backwards compatibility
+    const envApiToken = (Deno.env.get('NOTIFICAME_X_API_TOKEN') || '').trim();
+    const configApiToken = (config.api_key || '').trim();
+    const apiToken = envApiToken || configApiToken;
     const subscriptionId = (config.subscription_id || '').trim();
 
-    // Token must be pasted as plain string (reject JSON)
-    if (apiToken.startsWith('{') || apiToken.startsWith('[')) {
+    // Check if token is configured at all
+    if (!apiToken) {
+      console.log(`[test-channel] No API token configured (ENV or DB)`);
       return new Response(
         JSON.stringify({
           success: false,
           error: {
-            detail: 'Token inválido. Cole apenas o token puro, sem JSON.',
-            code: 'INVALID_TOKEN_FORMAT',
+            detail: 'Token NotificaMe não configurado no servidor. Configure NOTIFICAME_X_API_TOKEN.',
+            code: 'MISSING_TOKEN',
           },
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -132,6 +137,7 @@ Deno.serve(async (req) => {
     }
 
     console.log(`[test-channel] Testing connection for channel ${channel_id}`);
+    console.log(`[test-channel] API Token source: ${envApiToken ? 'ENV' : 'DB'}`);
     console.log(`[test-channel] API Token length: ${apiToken.length}`);
     // SECURITY: Mask token in logs (show only first 6 and last 4 chars)
     const maskedToken = apiToken.length > 10 
@@ -139,21 +145,6 @@ Deno.serve(async (req) => {
       : '***';
     console.log(`[test-channel] API Token (masked): ${maskedToken}`);
     console.log(`[test-channel] Subscription ID: ${subscriptionId}`);
-
-    // RELAXED VALIDATION: Just check non-empty (no JWT format required)
-    if (!apiToken || apiToken.length < 10) {
-      console.log(`[test-channel] Token too short or empty`);
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: {
-            detail: `Token inválido. Cole o Token da API da sua conta NotificaMe. Tamanho recebido: ${apiToken.length} chars`,
-            code: 'INVALID_TOKEN_FORMAT',
-          },
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
 
     // Validate subscription_id is a UUID
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

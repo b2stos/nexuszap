@@ -97,14 +97,25 @@ async function notificameRequest<T = unknown>(
     ...options.headers,
   };
   
-  // Auth header - NotificaMe Hub uses X-API-Token header
-  const apiTokenHeaderValue = (config.api_key || '').trim();
-  if (apiTokenHeaderValue.startsWith('{') || apiTokenHeaderValue.startsWith('[')) {
+  // Auth header - Use server-side ENV: NOTIFICAME_X_API_TOKEN
+  // Falls back to config.api_key for backwards compatibility, but ENV takes priority
+  const envApiToken = (Deno.env.get('NOTIFICAME_X_API_TOKEN') || '').trim();
+  const configApiToken = (config.api_key || '').trim();
+  const apiToken = envApiToken || configApiToken;
+
+  if (!apiToken) {
+    throw new ProviderException(
+      createProviderError('auth', 'MISSING_TOKEN', 
+        'Token NotificaMe não configurado no servidor. Configure NOTIFICAME_X_API_TOKEN.')
+    );
+  }
+
+  if (apiToken.startsWith('{') || apiToken.startsWith('[')) {
     throw new ProviderException(
       createProviderError('auth', 'INVALID_TOKEN_FORMAT', 'Token inválido. Cole apenas o token puro, sem JSON.')
     );
   }
-  headers['X-API-Token'] = apiTokenHeaderValue;
+  headers['X-API-Token'] = apiToken;
 
   // Timeout handling
   const timeout = options.timeout_ms || config.timeout_ms || DEFAULT_TIMEOUT_MS;
@@ -498,40 +509,26 @@ export const notificameProvider: Provider = {
     const config = channel.provider_config;
     
     // NotificaMe Hub API format:
-    // - api_key: Token de autenticação (header X-API-Token)
+    // - Token: Use server-side ENV: NOTIFICAME_X_API_TOKEN (falls back to config.api_key)
     // - subscription_id: UUID do canal no NotificaMe (campo "from")
-    const apiTokenRaw = config.api_key;
+    const envApiToken = (Deno.env.get('NOTIFICAME_X_API_TOKEN') || '').trim();
+    const configApiToken = typeof config.api_key === 'string' ? config.api_key.trim() : '';
+    const apiToken = envApiToken || configApiToken;
     const subscriptionIdRaw = config.subscription_id;
-
-    // Token da API: aceitar qualquer string não vazia (sem exigir JWT)
-    // REGRA: se vier JSON, rejeitar e pedir token puro
-    let apiToken = typeof apiTokenRaw === 'string' ? apiTokenRaw.trim() : '';
-    if (apiToken.startsWith('{') || apiToken.startsWith('[')) {
-      return {
-        success: false,
-        raw: null,
-        error: createProviderError(
-          'auth',
-          'INVALID_TOKEN_FORMAT',
-          'Token inválido. Cole apenas o token puro, sem JSON.'
-        ),
-      };
-    }
-
     const subscriptionId = typeof subscriptionIdRaw === 'string' ? subscriptionIdRaw.trim() : '';
 
     const recipientPhone = normalizePhoneNumber(to);
 
-    // Validate credentials (relaxed - just check non-empty)
-    if (!apiToken || apiToken.length < 10) {
-      console.error('[NotificaMe] Missing or too short api_key (authentication token)');
+    // Validate token
+    if (!apiToken) {
+      console.error('[NotificaMe] No API token configured (ENV or DB)');
       return {
         success: false,
         raw: null,
         error: createProviderError(
           'auth',
           'MISSING_TOKEN',
-          'Token de API não configurado ou muito curto. Vá em Configurações > Canais e atualize as credenciais.'
+          'Token NotificaMe não configurado no servidor. Configure NOTIFICAME_X_API_TOKEN.'
         ),
       };
     }
@@ -584,11 +581,12 @@ export const notificameProvider: Provider = {
     
     console.log(`[NotificaMe] Sending text to ${recipientPhone}`);
     console.log(`[NotificaMe] Using subscription_id: ${subscriptionId.substring(0, 8)}...`);
-    // SECURITY: Mask token in logs (show only first 6 and last 4 chars)
+    console.log(`[NotificaMe] Token source: ${envApiToken ? 'ENV' : 'DB'}`);
+    // SECURITY: Mask token in logs
     const maskedToken = apiToken.length > 10 
       ? `${apiToken.substring(0, 6)}...${apiToken.substring(apiToken.length - 4)}`
       : '***';
-    console.log(`[NotificaMe] API Token (masked): ${maskedToken}, length: ${apiToken.length}`);
+    console.log(`[NotificaMe] API Token (masked): ${maskedToken}`);
     console.log(`[NotificaMe] POST ${notificaMePath}`);
     console.log(`[NotificaMe] Payload:`, JSON.stringify(payload));
     
