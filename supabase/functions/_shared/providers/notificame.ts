@@ -66,21 +66,28 @@ async function notificameRequest<T = unknown>(
 ): Promise<HttpResponse<T>> {
   // =====================================================
   // SINGLE SOURCE OF TRUTH: NotificaMe API Base URL
-  // CRITICAL: Always use /v1 prefix as per official documentation
-  // Official endpoint: https://api.notificame.com.br/v1/...
+  // ENV: NOTIFICAME_API_BASE_URL (default to official)
   // =====================================================
-  const NOTIFICAME_API_BASE_URL = 'https://api.notificame.com.br/v1';
-  
-  // VALIDATION: Block any misconfigured base_url (e.g., notificame.me)
-  if (config.base_url && !config.base_url.includes('api.notificame.com.br')) {
-    console.error(`[NotificaMe] CRITICAL: Invalid base_url detected: "${config.base_url}". Blocking request. Only api.notificame.com.br is allowed.`);
+  const DEFAULT_BASE_URL = 'https://api.notificame.com.br/v1';
+  const envBase = (Deno.env.get('NOTIFICAME_API_BASE_URL') || '').trim();
+  const baseUrl = (envBase || DEFAULT_BASE_URL).replace(/\/+$/, '');
+
+  // VALIDATION: Block any non-official domain to avoid regressions
+  if (!baseUrl.startsWith('https://api.notificame.com.br')) {
+    console.error(`[NotificaMe] CRITICAL: NOTIFICAME_API_BASE_URL inválida: "${baseUrl}". Bloqueando envio.`);
     throw new ProviderException(
-      createProviderError('invalid_request', 'INVALID_BASE_URL', 
-        `URL base inválida: "${config.base_url}". Use apenas: https://api.notificame.com.br/v1`)
+      createProviderError('invalid_request', 'INVALID_BASE_URL', `URL base inválida. Use: ${DEFAULT_BASE_URL}`)
     );
   }
-  
-  const baseUrl = NOTIFICAME_API_BASE_URL;
+
+  // Legacy guard: if someone saved base_url in DB, do not allow wrong domains
+  if (config.base_url && !String(config.base_url).includes('api.notificame.com.br')) {
+    console.error(`[NotificaMe] CRITICAL: Invalid base_url detected: "${config.base_url}". Blocking request.`);
+    throw new ProviderException(
+      createProviderError('invalid_request', 'INVALID_BASE_URL', `URL base inválida no canal. Use: ${DEFAULT_BASE_URL}`)
+    );
+  }
+
   const url = `${baseUrl}${options.path}`;
   
   // Build headers
@@ -90,8 +97,15 @@ async function notificameRequest<T = unknown>(
     ...options.headers,
   };
   
-  // Auth header - NotificaMe Hub uses X-API-Token header (capital X)
-  headers['X-API-Token'] = (config.api_key || '').trim();
+  // Auth header - NotificaMe Hub uses X-API-Token header
+  const apiTokenHeaderValue = (config.api_key || '').trim();
+  if (apiTokenHeaderValue.startsWith('{') || apiTokenHeaderValue.startsWith('[')) {
+    throw new ProviderException(
+      createProviderError('auth', 'INVALID_TOKEN_FORMAT', 'Token inválido. Cole apenas o token puro, sem JSON.')
+    );
+  }
+  headers['X-API-Token'] = apiTokenHeaderValue;
+
   // Timeout handling
   const timeout = options.timeout_ms || config.timeout_ms || DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
@@ -489,21 +503,21 @@ export const notificameProvider: Provider = {
     const apiTokenRaw = config.api_key;
     const subscriptionIdRaw = config.subscription_id;
 
-    // RELAXED VALIDATION: Extract token from JSON if pasted by mistake
-    // Accept any non-empty string (NotificaMe docs don't require JWT format)
+    // Token da API: aceitar qualquer string não vazia (sem exigir JWT)
+    // REGRA: se vier JSON, rejeitar e pedir token puro
     let apiToken = typeof apiTokenRaw === 'string' ? apiTokenRaw.trim() : '';
-    if (apiToken.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(apiToken);
-        const extracted = parsed.token || parsed.api_key || parsed.apiKey || parsed.access_token;
-        if (extracted && typeof extracted === 'string') {
-          console.log('[NotificaMe] Extracted token from JSON string');
-          apiToken = extracted.trim();
-        }
-      } catch {
-        // Not valid JSON with extractable token - will fail validation below
-      }
+    if (apiToken.startsWith('{') || apiToken.startsWith('[')) {
+      return {
+        success: false,
+        raw: null,
+        error: createProviderError(
+          'auth',
+          'INVALID_TOKEN_FORMAT',
+          'Token inválido. Cole apenas o token puro, sem JSON.'
+        ),
+      };
     }
+
     const subscriptionId = typeof subscriptionIdRaw === 'string' ? subscriptionIdRaw.trim() : '';
 
     const recipientPhone = normalizePhoneNumber(to);

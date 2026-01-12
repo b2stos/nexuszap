@@ -95,26 +95,40 @@ Deno.serve(async (req) => {
 
     // =====================================================
     // SINGLE SOURCE OF TRUTH: NotificaMe API Base URL
-    // CRITICAL: Always use /v1 prefix as per official documentation
+    // ENV: NOTIFICAME_API_BASE_URL (default to official)
     // =====================================================
-    const NOTIFICAME_API_BASE_URL = 'https://api.notificame.com.br/v1';
-    
+    const DEFAULT_BASE_URL = 'https://api.notificame.com.br/v1';
+    const envBase = (Deno.env.get('NOTIFICAME_API_BASE_URL') || '').trim();
+    const baseUrl = (envBase || DEFAULT_BASE_URL).replace(/\/+$/, '');
+
+    if (!baseUrl.startsWith('https://api.notificame.com.br')) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: {
+            detail: `Configuração inválida do sistema: NOTIFICAME_API_BASE_URL="${baseUrl}".`,
+            code: 'INVALID_BASE_URL',
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     let apiToken = (config.api_key || '').trim();
     const subscriptionId = (config.subscription_id || '').trim();
 
-    // RELAXED VALIDATION: Extract token from JSON if pasted by mistake
-    // Accept any non-empty string (NotificaMe docs don't require specific format)
-    if (apiToken.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(apiToken);
-        const extracted = parsed.token || parsed.api_key || parsed.apiKey || parsed.access_token;
-        if (extracted && typeof extracted === 'string') {
-          console.log('[test-channel] Extracted token from JSON string');
-          apiToken = extracted.trim();
-        }
-      } catch {
-        // Not valid JSON with token field - will fail validation below
-      }
+    // Token must be pasted as plain string (reject JSON)
+    if (apiToken.startsWith('{') || apiToken.startsWith('[')) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: {
+            detail: 'Token inválido. Cole apenas o token puro, sem JSON.',
+            code: 'INVALID_TOKEN_FORMAT',
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     console.log(`[test-channel] Testing connection for channel ${channel_id}`);
@@ -159,7 +173,7 @@ Deno.serve(async (req) => {
 
     // Test endpoint: POST /v1/channels/whatsapp/messages with empty payload
     // Expected: 401/403 = bad token, 400/422 = token OK (payload rejected)
-    const testEndpoint = `${NOTIFICAME_API_BASE_URL}/channels/whatsapp/messages`;
+    const testEndpoint = `${baseUrl}/channels/whatsapp/messages`;
 
     console.log(`[test-channel] >>> POST ${testEndpoint}`);
     console.log(`[test-channel] >>> Header: X-API-Token: ${maskedToken}`);
