@@ -93,23 +93,27 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Test connection to NotificaMe API
-    const baseUrl = 'https://api.notificame.com.br';
+    // =====================================================
+    // SINGLE SOURCE OF TRUTH: NotificaMe API Base URL
+    // CRITICAL: Always use /v1 prefix as per official documentation
+    // =====================================================
+    const NOTIFICAME_API_BASE_URL = 'https://api.notificame.com.br/v1';
+    
     let apiToken = (config.api_key || '').trim();
     const subscriptionId = (config.subscription_id || '').trim();
 
-    // CRITICAL FIX: Extract JWT from JSON string if user pasted JSON by mistake
-    // e.g., {"token":"eyJ..."} or {"api_key":"eyJ..."}
-    if (apiToken.startsWith('{') && apiToken.includes('eyJ')) {
+    // RELAXED VALIDATION: Extract token from JSON if pasted by mistake
+    // Accept any non-empty string (NotificaMe docs don't require specific format)
+    if (apiToken.startsWith('{')) {
       try {
         const parsed = JSON.parse(apiToken);
         const extracted = parsed.token || parsed.api_key || parsed.apiKey || parsed.access_token;
-        if (extracted && typeof extracted === 'string' && extracted.startsWith('eyJ')) {
-          console.log('[test-channel] Extracted JWT from JSON string');
+        if (extracted && typeof extracted === 'string') {
+          console.log('[test-channel] Extracted token from JSON string');
           apiToken = extracted.trim();
         }
       } catch {
-        // Not valid JSON, continue with raw value
+        // Not valid JSON with token field - will fail validation below
       }
     }
 
@@ -122,15 +126,14 @@ Deno.serve(async (req) => {
     console.log(`[test-channel] API Token (masked): ${maskedToken}`);
     console.log(`[test-channel] Subscription ID: ${subscriptionId}`);
 
-    // Validate token format (should be JWT-like, starting with eyJ)
-    const isJwtFormat = apiToken.startsWith('eyJ') && apiToken.length >= 50;
-    if (!isJwtFormat) {
-      console.log(`[test-channel] Token format invalid - not a JWT`);
+    // RELAXED VALIDATION: Just check non-empty (no JWT format required)
+    if (!apiToken || apiToken.length < 10) {
+      console.log(`[test-channel] Token too short or empty`);
       return new Response(
         JSON.stringify({
           success: false,
           error: {
-            detail: `Token inválido. O Token da API deve ser um JWT longo (começa com "eyJ"). Formato recebido: "${apiToken.substring(0, 15)}..." (${apiToken.length} chars)`,
+            detail: `Token inválido. Cole o Token da API da sua conta NotificaMe. Tamanho recebido: ${apiToken.length} chars`,
             code: 'INVALID_TOKEN_FORMAT',
           },
         }),
@@ -154,14 +157,12 @@ Deno.serve(async (req) => {
       );
     }
 
-    // We intentionally send an INVALID payload to a real endpoint.
-    // Expected outcomes:
-    // - 401/403 => invalid token
-    // - 400/422 => token is accepted (payload rejected), considered OK for credential test
-    const testEndpoint = `${baseUrl}/v2/channels/whatsapp/messages`;
+    // Test endpoint: POST /v1/channels/whatsapp/messages with empty payload
+    // Expected: 401/403 = bad token, 400/422 = token OK (payload rejected)
+    const testEndpoint = `${NOTIFICAME_API_BASE_URL}/channels/whatsapp/messages`;
 
-    console.log(`[test-channel] Calling endpoint: ${testEndpoint}`);
-    console.log(`[test-channel] Header: X-API-Token: ${apiToken.substring(0, 20)}...`);
+    console.log(`[test-channel] >>> POST ${testEndpoint}`);
+    console.log(`[test-channel] >>> Header: X-API-Token: ${maskedToken}`);
 
     const testResponse = await fetch(testEndpoint, {
       method: 'POST',
