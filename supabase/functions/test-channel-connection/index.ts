@@ -95,64 +95,87 @@ Deno.serve(async (req) => {
 
     // Test connection to NotificaMe API
     const baseUrl = 'https://api.notificame.com.br';
-    
+
     console.log(`[test-channel] Testing connection for channel ${channel_id}`);
     console.log(`[test-channel] API Token length: ${config.api_key.length}`);
     console.log(`[test-channel] Subscription ID: ${config.subscription_id.substring(0, 8)}...`);
 
-    // Try a simple authenticated request
-    const testResponse = await fetch(`${baseUrl}/v2/channels/whatsapp/subscriptions/${config.subscription_id}`, {
-      method: 'GET',
+    // We intentionally send an INVALID payload to a real endpoint.
+    // Expected outcomes:
+    // - 401/403 => invalid token
+    // - 400/422 => token is accepted (payload rejected), considered OK for credential test
+    const testEndpoint = `${baseUrl}/v2/channels/whatsapp/messages`;
+
+    const testResponse = await fetch(testEndpoint, {
+      method: 'POST',
       headers: {
-        'X-API-Token': config.api_key,
+        'X-API-Token': config.api_key.trim(),
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({}),
     });
 
     const responseText = await testResponse.text();
-    console.log(`[test-channel] Response status: ${testResponse.status}`);
-    console.log(`[test-channel] Response: ${responseText.substring(0, 200)}`);
+    let responseJson: any = null;
+    try {
+      responseJson = JSON.parse(responseText);
+    } catch {
+      // ignore
+    }
 
-    if (testResponse.status === 401 || testResponse.status === 403) {
+    const providerMessage =
+      (responseJson && (responseJson.message || responseJson.error || responseJson.detail)) ||
+      responseText;
+
+    console.log(`[test-channel] Endpoint: ${testEndpoint}`);
+    console.log(`[test-channel] Response status: ${testResponse.status}`);
+    console.log(`[test-channel] Response body: ${String(providerMessage).substring(0, 200)}`);
+
+    const invalidToken =
+      testResponse.status === 401 ||
+      testResponse.status === 403 ||
+      /invalid token/i.test(String(providerMessage));
+
+    if (invalidToken) {
       return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: { detail: 'Token da API inválido ou expirado. Verifique suas credenciais no painel NotificaMe.' } 
+        JSON.stringify({
+          success: false,
+          error: {
+            detail:
+              'Token NotificaMe inválido. Vá em Configurações > Canais e atualize credenciais.',
+          },
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    if (testResponse.status === 404) {
-      // 404 might mean subscription not found, but auth worked
-      // Try a different endpoint
-      const altResponse = await fetch(`${baseUrl}/v2/channels/whatsapp/messages`, {
-        method: 'OPTIONS',
-        headers: {
-          'X-API-Token': config.api_key,
-        },
-      });
-
-      if (altResponse.status === 401 || altResponse.status === 403) {
-        return new Response(
-          JSON.stringify({ 
-            success: false, 
-            error: { detail: 'Token da API inválido.' } 
-          }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
+    // 400/422 here is expected (payload invalid) but proves auth is working
+    if (testResponse.status === 400 || testResponse.status === 422) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: 'Credenciais autenticadas com sucesso! (validação de payload esperada)',
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    // If we got here, credentials seem to work
+    if (!testResponse.ok) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: {
+            detail: `Falha ao validar credenciais (HTTP ${testResponse.status}). ${String(providerMessage).substring(0, 120)}`,
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     return new Response(
-      JSON.stringify({ 
-        success: true, 
-        message: 'Credenciais validadas com sucesso!' 
-      }),
+      JSON.stringify({ success: true, message: 'Credenciais validadas com sucesso!' }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
-
   } catch (error) {
     console.error('[test-channel] Error:', error);
     return new Response(

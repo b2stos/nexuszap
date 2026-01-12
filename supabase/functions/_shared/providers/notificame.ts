@@ -82,8 +82,7 @@ async function notificameRequest<T = unknown>(
   };
   
   // Auth header - NotificaMe Hub uses X-API-Token header (capital X)
-  headers['X-API-Token'] = config.api_key;
-  
+  headers['X-API-Token'] = (config.api_key || '').trim();
   // Timeout handling
   const timeout = options.timeout_ms || config.timeout_ms || DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
@@ -472,31 +471,55 @@ export const notificameProvider: Provider = {
     // NotificaMe Hub API format:
     // - api_key: Token de autenticação (header X-API-Token)
     // - subscription_id: UUID do canal no NotificaMe (campo "from")
-    const subscriptionId = config.subscription_id || config.api_key; // fallback para compatibilidade
-    const apiToken = config.api_key;
+    const apiTokenRaw = config.api_key;
+    const subscriptionIdRaw = config.subscription_id;
+
+    const apiToken = typeof apiTokenRaw === 'string' ? apiTokenRaw.trim() : '';
+    const subscriptionId = typeof subscriptionIdRaw === 'string' ? subscriptionIdRaw.trim() : '';
+
     const recipientPhone = normalizePhoneNumber(to);
-    
+
     // Validate credentials
     if (!apiToken) {
       console.error('[NotificaMe] Missing api_key (authentication token)');
       return {
         success: false,
         raw: null,
-        error: createProviderError('auth', 'MISSING_TOKEN', 
-          'Token de API não configurado. Vá em Configurações > Canais e atualize as credenciais.'),
+        error: createProviderError(
+          'auth',
+          'MISSING_TOKEN',
+          'Token de API não configurado. Vá em Configurações > Canais e atualize as credenciais.'
+        ),
       };
     }
-    
+
     if (!subscriptionId) {
       console.error('[NotificaMe] Missing subscription_id');
       return {
         success: false,
         raw: null,
-        error: createProviderError('invalid_request', 'MISSING_SUBSCRIPTION_ID', 
-          'Subscription ID não configurado. Vá em Configurações > Canais e atualize as credenciais.'),
+        error: createProviderError(
+          'invalid_request',
+          'MISSING_SUBSCRIPTION_ID',
+          'Subscription ID não configurado. Vá em Configurações > Canais e atualize as credenciais.'
+        ),
       };
     }
-    
+
+    // Guardrail: very common misconfig is saving Subscription ID into api_key
+    if (apiToken === subscriptionId) {
+      console.error('[NotificaMe] Misconfigured credentials: api_key equals subscription_id');
+      return {
+        success: false,
+        raw: null,
+        error: createProviderError(
+          'auth',
+          'AUTHENTICATION_ERROR',
+          'Token NotificaMe inválido. Vá em Configurações > Canais e atualize credenciais.'
+        ),
+      };
+    }
+
     // Correct endpoint: POST /v2/channels/whatsapp/messages
     const notificaMePath = '/v2/channels/whatsapp/messages';
     
