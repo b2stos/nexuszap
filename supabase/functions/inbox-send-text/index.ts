@@ -3,6 +3,8 @@
  * 
  * Endpoint para envio de mensagens de texto pelo Inbox.
  * Valida janela 24h e usa Provider Connector para enviar via BSP.
+ * 
+ * v2.1.0 - Token sanitization fix for ByteString errors
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
