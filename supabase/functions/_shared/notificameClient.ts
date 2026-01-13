@@ -464,6 +464,12 @@ export async function sendTemplate(
 
 /**
  * Testa a conexão com o NotificaMe
+ * 
+ * IMPORTANTE: O teste envia um payload vazio para verificar autenticação.
+ * Respostas esperadas:
+ * - 401/403: Token inválido
+ * - 400/422/404 com VALIDATION_ERROR: Token OK (payload inválido, mas auth passou)
+ * - 200/201: Token OK (raro, mas possível se API aceitar payload vazio)
  */
 export async function testConnection(token: string): Promise<NotificaMeResponse<unknown>> {
   if (!token) {
@@ -479,7 +485,7 @@ export async function testConnection(token: string): Promise<NotificaMeResponse<
     };
   }
 
-  // Send empty payload to test auth - expect 400/422 (auth OK, payload invalid)
+  // Send empty payload to test auth - expect 400/422/404 (auth OK, payload invalid)
   const result = await notificameRequest<{ code?: string; message?: string }>(
     'POST',
     '/channels/whatsapp/messages',
@@ -487,7 +493,7 @@ export async function testConnection(token: string): Promise<NotificaMeResponse<
     {}
   );
 
-  // 401/403 = token inválido
+  // 401/403 = token inválido (authentication failed)
   if (result.status === 401 || result.status === 403) {
     return {
       success: false,
@@ -510,7 +516,62 @@ export async function testConnection(token: string): Promise<NotificaMeResponse<
     };
   }
 
-  return result;
+  // 404 com VALIDATION_ERROR = token OK (NotificaMe retorna 404 para payload inválido)
+  // Isso é um comportamento específico da API NotificaMe
+  if (result.status === 404) {
+    const errorCode = String(result.data?.code || result.error?.code || '').toLowerCase();
+    const errorMessage = String(result.data?.message || result.error?.message || '').toLowerCase();
+    
+    // Se for VALIDATION_ERROR ou "missing required key", é sinal de que auth passou
+    if (errorCode.includes('validation') || errorMessage.includes('missing') || errorMessage.includes('required')) {
+      console.log('[NotificaMe] 404 with validation error = token authenticated successfully');
+      return {
+        success: true,
+        status: result.status,
+        data: { message: 'Token autenticado com sucesso! (404 validation = auth OK)' },
+      };
+    }
+    
+    // Outro tipo de 404 = recurso não encontrado (pode ser canal, endpoint, etc.)
+    // Ainda assim, se não houve 401/403, o token provavelmente está OK
+    console.log('[NotificaMe] 404 without auth error - assuming token is valid');
+    return {
+      success: true,
+      status: result.status,
+      data: { message: 'Token parece válido (404 sem erro de autenticação)' },
+    };
+  }
+
+  // 200/201 = sucesso direto (raro)
+  if (result.status >= 200 && result.status < 300) {
+    return {
+      success: true,
+      status: result.status,
+      data: { message: 'Token autenticado com sucesso!' },
+    };
+  }
+
+  // 5xx = erro do servidor (retryable)
+  if (result.status >= 500) {
+    return {
+      success: false,
+      status: result.status,
+      data: result.data,
+      error: {
+        code: 'SERVER_ERROR',
+        message: 'Servidor NotificaMe indisponível. Tente novamente.',
+        isRetryable: true,
+      },
+    };
+  }
+
+  // Fallback: qualquer outro código sem erro de auth = considerar OK
+  console.log(`[NotificaMe] Unexpected status ${result.status} - assuming token is valid if no auth error`);
+  return {
+    success: true,
+    status: result.status,
+    data: { message: `Token parece válido (status ${result.status})` },
+  };
 }
 
 // ===========================================
