@@ -303,6 +303,16 @@ function CreateChannelDialog({
       return;
     }
 
+    // CRITICAL: Prevent api_key === subscription_id misconfiguration
+    if (trimmedApiKey === trimmedSubscriptionId) {
+      toast({
+        title: 'Configuração incorreta',
+        description: 'O Token e o Subscription ID não podem ser iguais. O Token é o código de autenticação (Configurações → API). O Subscription ID é o UUID do canal.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     try {
       // Create the channel
       const newChannel = await createChannel.mutateAsync({
@@ -543,6 +553,9 @@ function ChannelCard({
   
   const webhookUrl = getWebhookUrl(channel.id);
   const config = channel.provider_config as ChannelProviderConfig;
+  
+  // Detect misconfiguration: api_key === subscription_id
+  const hasMisconfiguration = config?.api_key && config?.subscription_id && config.api_key === config.subscription_id;
 
   const handleSave = async () => {
     const trimmedSubscriptionId = subscriptionId.trim();
@@ -563,6 +576,18 @@ function ChannelCard({
       toast({
         title: 'Subscription ID inválido',
         description: 'Deve ser um UUID (formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // CRITICAL: Detect misconfiguration - api_key should not equal subscription_id
+    const effectiveApiKey = trimmedApiKey || config?.api_key;
+    const effectiveSubId = trimmedSubscriptionId || config?.subscription_id;
+    if (effectiveApiKey && effectiveSubId && effectiveApiKey === effectiveSubId) {
+      toast({
+        title: 'Configuração incorreta',
+        description: 'O Token e o Subscription ID não podem ser iguais. O Token é o código de autenticação da API (NotificaMe → Configurações → API). O Subscription ID é o UUID do canal específico.',
         variant: 'destructive',
       });
       return;
@@ -769,6 +794,26 @@ function ChannelCard({
               <p className="font-medium text-destructive">Subscription ID não configurado</p>
               <p className="text-muted-foreground">
                 Edite o canal para adicionar o UUID do canal NotificaMe.
+              </p>
+            </div>
+          </div>
+        )}
+        
+        {/* CRITICAL: Misconfiguration warning - api_key equals subscription_id */}
+        {hasMisconfiguration && (
+          <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-destructive mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-destructive">⚠️ Configuração incorreta detectada</p>
+              <p className="text-muted-foreground">
+                O <strong>Token</strong> e o <strong>Subscription ID</strong> são iguais. Isso é um erro:
+              </p>
+              <ul className="text-muted-foreground list-disc ml-4 mt-1 space-y-1">
+                <li><strong>Token:</strong> código de autenticação da API (NotificaMe → Configurações → API → Token)</li>
+                <li><strong>Subscription ID:</strong> UUID do canal específico (NotificaMe → Canais → WhatsApp → Detalhes)</li>
+              </ul>
+              <p className="text-muted-foreground mt-2">
+                Clique em <strong>⚙️</strong> para corrigir.
               </p>
             </div>
           </div>

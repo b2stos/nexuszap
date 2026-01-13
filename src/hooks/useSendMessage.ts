@@ -152,6 +152,14 @@ export function useSendMessage() {
           toast.error('Token não configurado', {
             description: 'Configure o token do NotificaMe no canal.',
           });
+        } else if (errorType === 'missing_subscription_id') {
+          toast.error('Subscription ID não configurado', {
+            description: 'Edite o canal e configure o ID do canal NotificaMe.',
+          });
+        } else if (errorType === 'token_misconfigured') {
+          toast.error('Configuração incorreta do canal', {
+            description: 'O Token e Subscription ID estão iguais. Corrija em Configurações → Canais.',
+          });
         } else if (errorType === 'Conversation not found') {
           toast.error('Conversa não encontrada', {
             description: 'Esta conversa foi removida ou não existe mais. Atualizando lista...',

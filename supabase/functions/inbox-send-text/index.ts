@@ -163,22 +163,49 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Resolve token from channel config (tenant-specific) or fallback to env
+    // Resolve token from channel config (tenant-specific)
     const channelConfig = conv.channel.provider_config as ChannelConfig;
     const token = resolveToken(channelConfig);
+    const subscriptionId = channelConfig?.subscription_id || '';
     
+    // Validate token exists
     if (!token) {
       console.error('[inbox-send-text] No token available for channel');
       return new Response(
         JSON.stringify({ 
           error: 'missing_token',
-          message: 'Token NotificaMe não configurado. Configure o token no canal.',
+          message: 'Token NotificaMe não configurado. Configure o token em Configurações → Canais.',
         }),
         { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    console.log(`[inbox-send-text] Token resolved: ${maskToken(token)} for tenant ${tenantUser.tenant_id}`);
+    // Validate subscription_id exists
+    if (!subscriptionId) {
+      console.error('[inbox-send-text] No subscription_id for channel');
+      return new Response(
+        JSON.stringify({ 
+          error: 'missing_subscription_id',
+          message: 'Subscription ID não configurado. Edite o canal em Configurações → Canais.',
+        }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // CRITICAL: Detect common misconfiguration where api_key == subscription_id
+    // This is a user error: they put the subscription_id in both fields
+    if (token === subscriptionId) {
+      console.error('[inbox-send-text] MISCONFIGURATION: api_key equals subscription_id! User likely pasted the same value in both fields.');
+      return new Response(
+        JSON.stringify({ 
+          error: 'token_misconfigured',
+          message: 'Configuração incorreta: O Token e o Subscription ID são iguais. O Token é seu código de autenticação da API (em Configurações → API no painel NotificaMe). O Subscription ID é o UUID do canal. Corrija em Configurações → Canais.',
+        }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    console.log(`[inbox-send-text] Token resolved: ${maskToken(token)}, subscription: ${subscriptionId.substring(0, 8)}... for tenant ${tenantUser.tenant_id}`);
 
     // Create message in database as queued
     const { data: message, error: msgError } = await supabase
@@ -207,9 +234,6 @@ Deno.serve(async (req) => {
     }
 
     console.log(`[inbox-send-text] Message created: ${message.id}`);
-
-    // Get subscription_id from channel config
-    const subscriptionId = channelConfig?.subscription_id || '';
 
     // Send via NotificaMe with resolved token
     const sendResult = await sendText(token, {
