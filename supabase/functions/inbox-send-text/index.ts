@@ -2,14 +2,11 @@
  * Edge Function: inbox-send-text
  * 
  * Endpoint para envio de mensagens de texto pelo Inbox.
- * Valida janela 24h e usa Provider Connector para enviar via BSP.
- * 
- * v2.1.0 - Token sanitization fix for ByteString errors
+ * Valida janela 24h e usa NotificaMe Client centralizado.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { notificameProvider } from '../_shared/providers/notificame.ts';
-import { Channel, ChannelProviderConfig } from '../_shared/providers/types.ts';
+import { notificame } from '../_shared/notificameClient.ts';
 
 // CORS headers
 const corsHeaders = {
@@ -22,6 +19,10 @@ interface SendTextRequest {
   conversation_id: string;
   text: string;
   reply_to_message_id?: string;
+}
+
+interface ChannelProviderConfig {
+  subscription_id?: string;
 }
 
 interface ConversationData {
@@ -194,49 +195,16 @@ Deno.serve(async (req) => {
 
     console.log(`[inbox-send-text] Message created: ${message.id}`);
 
-    // Build channel object for provider
-    const channel: Channel = {
-      id: conv.channel.id,
-      tenant_id: conv.tenant_id,
-      provider_id: '', // Not needed for sendText
-      name: '',
-      phone_number: conv.channel.phone_number,
-      status: 'connected',
-      provider_config: conv.channel.provider_config,
-    };
+    // Get subscription_id from channel config
+    const subscriptionId = conv.channel.provider_config?.subscription_id || '';
 
-    // Send via provider
-    let sendResult;
-    try {
-      sendResult = await notificameProvider.sendText({
-        channel,
-        to: conv.contact.phone,
-        text: text.trim(),
-        reply_to_provider_message_id: undefined, // TODO: lookup if reply_to_message_id
-      });
-    } catch (error) {
-      console.error('[inbox-send-text] Provider error:', error);
-      
-      // Update message as failed
-      await supabase
-        .from('mt_messages')
-        .update({
-          status: 'failed',
-          failed_at: new Date().toISOString(),
-          error_code: 'PROVIDER_ERROR',
-          error_detail: error instanceof Error ? error.message : 'Unknown error',
-        })
-        .eq('id', message.id);
-
-      return new Response(
-        JSON.stringify({ 
-          error: 'provider_error',
-          message: error instanceof Error ? error.message : 'Failed to send message',
-          data: { ...message, status: 'failed' },
-        }),
-        { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    // Send via NotificaMe client
+    const sendResult = await notificame.sendText({
+      subscriptionId,
+      to: conv.contact.phone,
+      text: text.trim(),
+      replyToMessageId: undefined, // TODO: lookup if reply_to_message_id
+    });
 
     if (!sendResult.success) {
       console.error('[inbox-send-text] Send failed:', sendResult.error);
@@ -248,7 +216,7 @@ Deno.serve(async (req) => {
           status: 'failed',
           failed_at: new Date().toISOString(),
           error_code: sendResult.error?.code || 'UNKNOWN',
-          error_detail: sendResult.error?.detail || 'Failed to send',
+          error_detail: sendResult.error?.message || 'Failed to send',
         })
         .eq('id', message.id)
         .select()
@@ -257,13 +225,16 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({ 
           error: 'send_failed',
-          message: sendResult.error?.detail || 'Failed to send message',
-          is_retryable: sendResult.error?.is_retryable ?? true,
+          message: sendResult.error?.message || 'Failed to send message',
+          is_retryable: sendResult.error?.isRetryable ?? true,
           data: failedMessage || { ...message, status: 'failed' },
         }),
         { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
+    // Extract provider message ID
+    const providerMessageId = sendResult.data.id || sendResult.data.messageId;
 
     // Update message as sent with provider_message_id
     const { data: sentMessage, error: updateError } = await supabase
@@ -271,7 +242,7 @@ Deno.serve(async (req) => {
       .update({
         status: 'sent',
         sent_at: new Date().toISOString(),
-        provider_message_id: sendResult.provider_message_id,
+        provider_message_id: providerMessageId,
       })
       .eq('id', message.id)
       .select()
@@ -290,13 +261,13 @@ Deno.serve(async (req) => {
       })
       .eq('id', conversation_id);
 
-    console.log(`[inbox-send-text] Message sent successfully: ${sendResult.provider_message_id}`);
+    console.log(`[inbox-send-text] Message sent successfully: ${providerMessageId}`);
 
     return new Response(
       JSON.stringify({ 
         success: true,
         data: sentMessage || message,
-        provider_message_id: sendResult.provider_message_id,
+        provider_message_id: providerMessageId,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
