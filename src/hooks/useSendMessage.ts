@@ -152,6 +152,12 @@ export function useSendMessage() {
           toast.error('Token não configurado', {
             description: 'Configure o token do NotificaMe no canal.',
           });
+        } else if (errorType === 'Conversation not found') {
+          toast.error('Conversa não encontrada', {
+            description: 'Esta conversa foi removida ou não existe mais. Atualizando lista...',
+          });
+          // Invalidate conversations to clear stale data
+          queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] });
         } else {
           toast.error('Erro ao enviar', { description: errorMessage });
         }
