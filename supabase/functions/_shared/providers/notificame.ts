@@ -97,22 +97,15 @@ async function notificameRequest<T = unknown>(
     ...options.headers,
   };
   
-  // Auth header - PRIORITY:
-  // 1. config.api_key (token por tenant/canal do banco)
-  // 2. ENV: NOTIFICAME_TOKEN ou NOTIFICAME_X_API_TOKEN (fallback global)
+  // Auth header - Token do canal (armazenado no banco por tenant)
+  // NOTA: Não usa variáveis de ambiente globais para tokens de cliente
   const configApiTokenRaw = config.api_key || '';
-  const envApiTokenRaw = Deno.env.get('NOTIFICAME_TOKEN') || Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
   
-  // CRITICAL: Extract and sanitize token
-  // Handles cases where user pasted:
-  // 1. The pure JWT token (correct)
-  // 2. JSON like {"token": "eyJ..."} 
-  // 3. A full curl command containing the token
-  // 4. Header format like "X-API-Token: eyJ..."
+  // Extrai e sanitiza token
   const extractToken = (raw: string): string => {
     if (!raw) return '';
     
-    // Step 1: Keep only ASCII printable characters
+    // Keep only ASCII printable characters
     let clean = '';
     for (let i = 0; i < raw.length; i++) {
       const code = raw.charCodeAt(i);
@@ -122,10 +115,10 @@ async function notificameRequest<T = unknown>(
     }
     clean = clean.replace(/\s+/g, ' ').trim();
     
-    // Pattern A: If it's a curl command, extract X-API-Token or Bearer token
-    const curlTokenMatch = clean.match(/(?:X-API-Token|Authorization)[:\s]+['"]?([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)['"]?/i);
-    if (curlTokenMatch && curlTokenMatch[1]) {
-      console.log('[NotificaMe] Extracted JWT from curl command or header');
+    // Pattern A: Extract from curl command or header format
+    const curlTokenMatch = clean.match(/(?:X-API-Token|Authorization)[:\s]+['"]?([A-Za-z0-9_.-]+)['"]?/i);
+    if (curlTokenMatch && curlTokenMatch[1] && curlTokenMatch[1].length >= 20) {
+      console.log('[NotificaMe] Extracted token from curl command or header');
       return curlTokenMatch[1];
     }
     
@@ -143,11 +136,11 @@ async function notificameRequest<T = unknown>(
       }
     }
     
-    // Pattern C: If it contains a JWT pattern, extract it
-    const jwtMatch = clean.match(/\b([A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b/);
-    if (jwtMatch && jwtMatch[1]) {
-      console.log('[NotificaMe] Extracted JWT pattern from string');
-      return jwtMatch[1];
+    // Pattern C: Extract long alphanumeric token
+    const tokenMatch = clean.match(/\b([A-Za-z0-9_.-]{40,})\b/);
+    if (tokenMatch && tokenMatch[1]) {
+      console.log('[NotificaMe] Extracted token from pattern');
+      return tokenMatch[1];
     }
     
     // Pattern D: If it starts with "Bearer ", strip it
@@ -155,14 +148,16 @@ async function notificameRequest<T = unknown>(
       return clean.substring(7).trim();
     }
     
-    // Default: return as-is (maybe it's already a clean token)
+    // Default: return as-is if long enough
+    if (clean.length >= 20 && !clean.includes(' ')) {
+      return clean;
+    }
+    
     return clean;
   };
   
-  // PRIORITY: Token do canal (por tenant) > Token global (ENV)
-  const configApiToken = extractToken(configApiTokenRaw);
-  const envApiToken = extractToken(envApiTokenRaw);
-  const apiToken = configApiToken || envApiToken;
+  // Token do canal apenas
+  const apiToken = extractToken(configApiTokenRaw);
   
   // Mask token for secure logging (only last 4 chars)
   const maskToken = (token: string): string => {
@@ -174,7 +169,7 @@ async function notificameRequest<T = unknown>(
   if (!apiToken) {
     throw new ProviderException(
       createProviderError('auth', 'MISSING_TOKEN', 
-        'Token NotificaMe não configurado. Configure o token no canal ou na variável NOTIFICAME_TOKEN.')
+        'Token NotificaMe não configurado. Configure o token no canal em Configurações → Canais.')
     );
   }
 
@@ -185,8 +180,7 @@ async function notificameRequest<T = unknown>(
   }
   
   // Log sanitized token info for debugging (masked - only last 4 chars)
-  const tokenSource = configApiToken ? 'channel config' : 'environment';
-  console.log(`[NotificaMe] Using API Token from ${tokenSource}: ${maskToken(apiToken)} (length: ${apiToken.length})`);
+  console.log(`[NotificaMe] Using API Token from channel config: ${maskToken(apiToken)} (length: ${apiToken.length})`);
   
   headers['X-API-Token'] = apiToken;
 
@@ -228,9 +222,9 @@ async function notificameRequest<T = unknown>(
       data = responseText as unknown as T;
     }
     
-    // LOG: Response with sanitized content (mask any tokens)
+    // LOG: Response with sanitized content (mask any sensitive tokens)
     const sanitizedResponse = JSON.stringify(data)
-      .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[JWT_MASKED]')
+      .replace(/\b[A-Za-z0-9_.-]{50,}\b/g, '[TOKEN_MASKED]')
       .substring(0, 500);
     console.log(`[NotificaMe] <<< Response ${response.status}: ${sanitizedResponse}`);
     
