@@ -330,6 +330,63 @@ export function useTestChannel() {
   });
 }
 
+// Validate NotificaMe token and discover channels
+export interface DiscoveredChannel {
+  id: string;
+  name?: string;
+  phone?: string;
+  type?: string;
+}
+
+export interface ValidateTokenResult {
+  success: boolean;
+  valid: boolean;
+  message: string;
+  channels: DiscoveredChannel[];
+  error?: { detail: string; code?: string };
+}
+
+export function useValidateToken() {
+  return useMutation({
+    mutationFn: async ({ token, channelId }: { token: string; channelId?: string }): Promise<ValidateTokenResult> => {
+      const { data, error } = await supabase.functions.invoke('validate-notificame-token', {
+        body: {
+          token,
+          channel_id: channelId,
+        },
+      });
+
+      if (error) throw error;
+      return data as ValidateTokenResult;
+    },
+    onSuccess: (data) => {
+      if (data.valid) {
+        const channelCount = data.channels?.length || 0;
+        toast({
+          title: 'Token válido!',
+          description: channelCount > 0 
+            ? `Encontrados ${channelCount} canal(is) automaticamente.`
+            : data.message,
+        });
+      } else {
+        toast({
+          title: 'Token inválido',
+          description: data.message || data.error?.detail || 'Verifique o token.',
+          variant: 'destructive',
+        });
+      }
+    },
+    onError: (error) => {
+      console.error('Error validating token:', error);
+      toast({
+        title: 'Erro ao validar token',
+        description: error instanceof Error ? error.message : 'Não foi possível validar o token',
+        variant: 'destructive',
+      });
+    },
+  });
+}
+
 // Get webhook URL for channel
 export function getWebhookUrl(channelId: string): string {
   const projectId = 'xaypooqwcrhytkfqyzha';
