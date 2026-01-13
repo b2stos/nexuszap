@@ -61,9 +61,11 @@ import {
   useUpdateChannel,
   useDeleteChannel,
   useTestChannel,
+  useValidateToken,
   getWebhookUrl,
   Channel,
   ChannelProviderConfig,
+  DiscoveredChannel,
 } from '@/hooks/useChannels';
 import { useOnboarding } from '@/hooks/useOnboarding';
 import { WebhookMonitorMT } from '@/components/dashboard/WebhookMonitorMT';
@@ -142,9 +144,44 @@ function CreateChannelDialog({
   const [subscriptionId, setSubscriptionId] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [isValidating, setIsValidating] = useState(false);
+  const [discoveredChannels, setDiscoveredChannels] = useState<DiscoveredChannel[]>([]);
+  const [showManualInput, setShowManualInput] = useState(false);
   
   const createChannel = useCreateChannel();
-  const testChannel = useTestChannel();
+  const validateToken = useValidateToken();
+
+  const handleValidateToken = async () => {
+    const trimmedApiKey = apiKey.trim();
+    
+    if (!trimmedApiKey) {
+      toast({
+        title: 'Token obrigatório',
+        description: 'Cole seu Token do NotificaMe.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsValidating(true);
+    try {
+      const result = await validateToken.mutateAsync({ token: trimmedApiKey });
+      
+      if (result.valid && result.channels && result.channels.length > 0) {
+        setDiscoveredChannels(result.channels);
+        // Auto-select first channel
+        setSubscriptionId(result.channels[0].id);
+        if (result.channels[0].phone) {
+          setPhoneNumber(result.channels[0].phone);
+        }
+      } else if (result.valid) {
+        // Token valid but no channels discovered
+        setShowManualInput(true);
+      }
+    } catch (error) {
+      // Error handled by mutation
+    }
+    setIsValidating(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -172,19 +209,8 @@ function CreateChannelDialog({
     
     if (!trimmedSubscriptionId) {
       toast({
-        title: 'Subscription ID obrigatório',
-        description: 'Informe o UUID do canal NotificaMe.',
-        variant: 'destructive',
-      });
-      return;
-    }
-    
-    // Validation: Subscription ID must be UUID format (36 chars)
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(trimmedSubscriptionId)) {
-      toast({
-        title: 'Subscription ID inválido',
-        description: 'Deve ser um UUID (formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).',
+        title: 'Canal não selecionado',
+        description: 'Valide o token primeiro ou informe o Subscription ID manualmente.',
         variant: 'destructive',
       });
       return;
@@ -192,7 +218,7 @@ function CreateChannelDialog({
 
     try {
       // Create the channel
-      const createdChannel = await createChannel.mutateAsync({
+      await createChannel.mutateAsync({
         tenantId,
         providerId,
         input: {
@@ -205,34 +231,31 @@ function CreateChannelDialog({
         },
       });
 
-      // Test the connection
-      setIsValidating(true);
-      try {
-        await testChannel.mutateAsync(createdChannel.id);
-      } catch (testError) {
-        // Test failed but channel was created - show warning
-        toast({
-          title: 'Canal criado, mas validação falhou',
-          description: 'Verifique se o token está correto nas configurações do canal.',
-          variant: 'destructive',
-        });
-      }
-      setIsValidating(false);
-
       setOpen(false);
       setName('');
       setPhoneNumber('');
       setSubscriptionId('');
       setApiKey('');
+      setDiscoveredChannels([]);
+      setShowManualInput(false);
       onCreated();
     } catch (error) {
-      setIsValidating(false);
       // Error toast is handled by the mutation
     }
   };
 
+  const resetForm = () => {
+    setName('');
+    setPhoneNumber('');
+    setSubscriptionId('');
+    setApiKey('');
+    setDiscoveredChannels([]);
+    setShowManualInput(false);
+    setIsValidating(false);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(isOpen) => { setOpen(isOpen); if (!isOpen) resetForm(); }}>
       <DialogTrigger asChild>
         <Button>
           <Plus className="w-4 h-4 mr-2" />
@@ -243,7 +266,7 @@ function CreateChannelDialog({
         <DialogHeader>
           <DialogTitle>Conectar WhatsApp (NotificaMe)</DialogTitle>
           <DialogDescription>
-            Configure seu canal WhatsApp utilizando a API Oficial via NotificaMe.
+            Cole apenas seu token do NotificaMe. O sistema irá descobrir automaticamente seus canais.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -258,19 +281,6 @@ function CreateChannelDialog({
             />
           </div>
           
-          <div className="space-y-2">
-            <Label htmlFor="phone">Número do WhatsApp</Label>
-            <Input
-              id="phone"
-              value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value)}
-              placeholder="+55 11 99999-9999"
-            />
-            <p className="text-xs text-muted-foreground">
-              Número conectado ao BSP (opcional)
-            </p>
-          </div>
-          
           <Separator />
           
           <div className="p-4 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
@@ -283,46 +293,122 @@ function CreateChannelDialog({
               <Label htmlFor="apiKey">
                 Token do NotificaMe *
               </Label>
-              <Input
-                id="apiKey"
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Cole seu token do NotificaMe aqui"
-                required
-                className="font-mono text-sm"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="apiKey"
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    setDiscoveredChannels([]);
+                    setShowManualInput(false);
+                  }}
+                  placeholder="Cole seu token do NotificaMe aqui"
+                  required
+                  className="font-mono text-sm flex-1"
+                />
+                <Button 
+                  type="button" 
+                  variant="secondary"
+                  onClick={handleValidateToken}
+                  disabled={isValidating || !apiKey.trim()}
+                >
+                  {isValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
-                Token de autenticação da API. Encontrado em: <span className="font-medium">NotificaMe → Configurações → API</span>
+                Encontrado em: <span className="font-medium">NotificaMe → Configurações → API</span>
               </p>
             </div>
+
+            {/* Discovered channels */}
+            {discoveredChannels.length > 0 && (
+              <div className="space-y-2">
+                <Label>Canal WhatsApp</Label>
+                <div className="space-y-2">
+                  {discoveredChannels.map((ch) => (
+                    <div
+                      key={ch.id}
+                      onClick={() => {
+                        setSubscriptionId(ch.id);
+                        if (ch.phone) setPhoneNumber(ch.phone);
+                      }}
+                      className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                        subscriptionId === ch.id
+                          ? 'border-primary bg-primary/10'
+                          : 'border-border hover:border-primary/50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Phone className="w-4 h-4 text-green-500" />
+                          <span className="font-medium">{ch.name || ch.phone || 'Canal WhatsApp'}</span>
+                        </div>
+                        {subscriptionId === ch.id && (
+                          <CheckCircle2 className="w-4 h-4 text-primary" />
+                        )}
+                      </div>
+                      {ch.phone && <p className="text-xs text-muted-foreground mt-1">{ch.phone}</p>}
+                      <p className="text-xs text-muted-foreground font-mono">{ch.id.substring(0, 8)}...</p>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => setShowManualInput(true)}
+                >
+                  Não encontrou? Informe manualmente
+                </Button>
+              </div>
+            )}
+
+            {/* Manual subscription ID input */}
+            {(showManualInput || (discoveredChannels.length === 0 && validateToken.isSuccess && validateToken.data?.valid)) && (
+              <div className="space-y-2">
+                <Label htmlFor="subscriptionId">
+                  Channel ID / Subscription ID *
+                </Label>
+                <Input
+                  id="subscriptionId"
+                  value={subscriptionId}
+                  onChange={(e) => setSubscriptionId(e.target.value)}
+                  placeholder="Ex: 066f4d91-fd0c-4726-8b1c-85325c80b75a"
+                  required
+                  className="font-mono text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  UUID do canal. Encontrado em: <span className="font-medium">NotificaMe → Canais → WhatsApp → Detalhes</span>
+                </p>
+              </div>
+            )}
             
-            <div className="space-y-2">
-              <Label htmlFor="subscriptionId">
-                Channel ID / Subscription ID *
-              </Label>
-              <Input
-                id="subscriptionId"
-                value={subscriptionId}
-                onChange={(e) => setSubscriptionId(e.target.value)}
-                placeholder="Ex: 066f4d91-fd0c-4726-8b1c-85325c80b75a"
-                required
-                className="font-mono text-sm"
-              />
-              <p className="text-xs text-muted-foreground">
-                UUID do canal. Encontrado em: <span className="font-medium">NotificaMe → Canais → WhatsApp → Detalhes</span>
-              </p>
-            </div>
+            {/* Phone number (optional) */}
+            {(discoveredChannels.length > 0 || showManualInput) && (
+              <div className="space-y-2">
+                <Label htmlFor="phone">Número do WhatsApp (opcional)</Label>
+                <Input
+                  id="phone"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  placeholder="+55 11 99999-9999"
+                />
+              </div>
+            )}
           </div>
-          
           
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={createChannel.isPending || isValidating}>
-              {(createChannel.isPending || isValidating) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              {isValidating ? 'Validando...' : 'Validar & Conectar'}
+            <Button 
+              type="submit" 
+              disabled={createChannel.isPending || !subscriptionId.trim()}
+            >
+              {createChannel.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Conectar Canal
             </Button>
           </DialogFooter>
         </form>

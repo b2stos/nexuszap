@@ -455,6 +455,215 @@ export async function testConnection(token: string): Promise<NotificaMeResponse<
   return result;
 }
 
+// ===========================================
+// VALIDAÇÃO E DESCOBERTA DE CANAIS
+// ===========================================
+
+export interface DiscoveredChannel {
+  id: string;
+  name?: string;
+  phone?: string;
+  type?: string;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  message: string;
+  channels: DiscoveredChannel[];
+}
+
+/**
+ * Valida o token e tenta descobrir automaticamente os canais/subscriptions
+ * Endpoints tentados (em ordem):
+ * 1. GET /subscriptions - lista de subscriptions
+ * 2. GET /channels - lista de canais  
+ * 3. GET /account - informações da conta
+ * 4. POST /channels/whatsapp/messages {} - teste de autenticação
+ */
+export async function validateAndDiscoverChannels(token: string): Promise<NotificaMeResponse<ValidationResult>> {
+  if (!token) {
+    return {
+      success: false,
+      status: 0,
+      data: { valid: false, message: 'Token não fornecido.', channels: [] },
+      error: {
+        code: 'MISSING_TOKEN',
+        message: 'Token não fornecido.',
+        isRetryable: false,
+      },
+    };
+  }
+
+  console.log(`[NotificaMe] Validating token and discovering channels...`);
+
+  // Try to list subscriptions (most likely endpoint based on SDK)
+  const subscriptionsResult = await notificameRequest<Array<{ id?: string; subscriptionId?: string; channel?: string; phone?: string; name?: string }> | { data?: Array<{ id?: string; subscriptionId?: string; channel?: string; phone?: string; name?: string }> }>(
+    'GET',
+    '/subscriptions',
+    token
+  );
+
+  if (subscriptionsResult.success) {
+    const rawData = subscriptionsResult.data;
+    const subscriptions = Array.isArray(rawData) ? rawData : (rawData?.data || []);
+    
+    if (subscriptions.length > 0) {
+      console.log(`[NotificaMe] Found ${subscriptions.length} subscriptions`);
+      const channels: DiscoveredChannel[] = subscriptions.map((s: { id?: string; subscriptionId?: string; channel?: string; phone?: string; name?: string }) => ({
+        id: String(s.id || s.subscriptionId || ''),
+        name: s.name || s.channel,
+        phone: s.phone,
+        type: 'subscription',
+      })).filter((c: DiscoveredChannel) => c.id);
+      
+      return {
+        success: true,
+        status: 200,
+        data: {
+          valid: true,
+          message: `Token válido! Encontrados ${channels.length} canal(is).`,
+          channels,
+        },
+      };
+    }
+  }
+
+  // Try to list channels
+  const channelsResult = await notificameRequest<Array<{ id?: string; channelId?: string; phone?: string; name?: string; displayPhone?: string }> | { data?: Array<{ id?: string; channelId?: string; phone?: string; name?: string; displayPhone?: string }> }>(
+    'GET',
+    '/channels',
+    token
+  );
+
+  if (channelsResult.success) {
+    const rawData = channelsResult.data;
+    const channelsList = Array.isArray(rawData) ? rawData : (rawData?.data || []);
+    
+    if (channelsList.length > 0) {
+      console.log(`[NotificaMe] Found ${channelsList.length} channels`);
+      const channels: DiscoveredChannel[] = channelsList.map((c: { id?: string; channelId?: string; phone?: string; name?: string; displayPhone?: string }) => ({
+        id: String(c.id || c.channelId || ''),
+        name: c.name,
+        phone: c.phone || c.displayPhone,
+        type: 'channel',
+      })).filter((c: DiscoveredChannel) => c.id);
+      
+      return {
+        success: true,
+        status: 200,
+        data: {
+          valid: true,
+          message: `Token válido! Encontrados ${channels.length} canal(is).`,
+          channels,
+        },
+      };
+    }
+  }
+
+  // Try to get WhatsApp channels specifically
+  const whatsappChannelsResult = await notificameRequest<Array<{ id?: string; subscriptionId?: string; phone?: string; name?: string }> | { data?: Array<{ id?: string; subscriptionId?: string; phone?: string; name?: string }> }>(
+    'GET',
+    '/channels/whatsapp',
+    token
+  );
+
+  if (whatsappChannelsResult.success) {
+    const rawData = whatsappChannelsResult.data;
+    const channelsList = Array.isArray(rawData) ? rawData : (rawData?.data || []);
+    
+    if (channelsList.length > 0) {
+      console.log(`[NotificaMe] Found ${channelsList.length} WhatsApp channels`);
+      const channels: DiscoveredChannel[] = channelsList.map((c: { id?: string; subscriptionId?: string; phone?: string; name?: string }) => ({
+        id: String(c.id || c.subscriptionId || ''),
+        name: c.name,
+        phone: c.phone,
+        type: 'whatsapp',
+      })).filter((c: DiscoveredChannel) => c.id);
+      
+      return {
+        success: true,
+        status: 200,
+        data: {
+          valid: true,
+          message: `Token válido! Encontrados ${channels.length} canal(is) WhatsApp.`,
+          channels,
+        },
+      };
+    }
+  }
+
+  // Try account info endpoint
+  const accountResult = await notificameRequest<{ id?: string; userId?: string; channels?: Array<{ id?: string; name?: string; phone?: string }> }>(
+    'GET',
+    '/account',
+    token
+  );
+
+  if (accountResult.success && accountResult.data) {
+    console.log(`[NotificaMe] Got account info`);
+    const channels: DiscoveredChannel[] = (accountResult.data.channels || []).map(c => ({
+      id: String(c.id || ''),
+      name: c.name,
+      phone: c.phone,
+      type: 'account',
+    })).filter(c => c.id);
+
+    // Even if no channels found, token is valid
+    return {
+      success: true,
+      status: 200,
+      data: {
+        valid: true,
+        message: channels.length > 0 
+          ? `Token válido! Encontrados ${channels.length} canal(is).`
+          : 'Token válido! Nenhum canal encontrado automaticamente.',
+        channels,
+      },
+    };
+  }
+
+  // Fallback: Test auth by sending empty message
+  const testResult = await testConnection(token);
+
+  if (testResult.success) {
+    return {
+      success: true,
+      status: 200,
+      data: {
+        valid: true,
+        message: 'Token válido! Descoberta automática de canais não disponível. Informe o Subscription ID manualmente.',
+        channels: [],
+      },
+    };
+  }
+
+  // Token is invalid
+  if (testResult.status === 401 || testResult.status === 403) {
+    return {
+      success: false,
+      status: testResult.status,
+      data: { valid: false, message: 'Token inválido ou expirado.', channels: [] },
+      error: {
+        code: 'INVALID_TOKEN',
+        message: 'O token fornecido foi rejeitado pelo NotificaMe. Verifique se você copiou corretamente.',
+        isRetryable: false,
+      },
+    };
+  }
+
+  // Unknown error
+  return {
+    success: false,
+    status: testResult.status,
+    data: { valid: false, message: testResult.error?.message || 'Erro desconhecido.', channels: [] },
+    error: testResult.error || {
+      code: 'UNKNOWN',
+      message: 'Não foi possível validar o token.',
+      isRetryable: true,
+    },
+  };
+}
+
 /**
  * Parseia eventos de webhook do NotificaMe
  */
