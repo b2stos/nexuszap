@@ -5,9 +5,11 @@
  * 
  * REGRA ÚNICA DE AUTENTICAÇÃO:
  * - 1 token por tenant/canal (armazenado em channels.provider_config.api_key)
- * - Fallback: NOTIFICAME_TOKEN ou NOTIFICAME_X_API_TOKEN (env var global)
  * - 1 header: X-API-Token
  * - 1 baseUrl: https://api.notificame.com.br/v1
+ * 
+ * IMPORTANTE: Tokens são configurados APENAS por canal.
+ * Não usar variáveis de ambiente globais para tokens de cliente.
  * 
  * SEGURANÇA:
  * - Nunca logar token completo (apenas últimos 4 caracteres)
@@ -79,8 +81,10 @@ export interface ChannelConfig {
 // ===========================================
 
 /**
- * Extrai o token JWT de várias formas possíveis de input.
+ * Extrai e sanitiza o token de várias formas possíveis de input.
  * Suporta: token puro, comando curl, JSON, header
+ * 
+ * Aceita tokens de qualquer formato (não requer formato específico).
  */
 export function extractToken(raw: string | undefined | null): string {
   if (!raw) return '';
@@ -94,8 +98,8 @@ export function extractToken(raw: string | undefined | null): string {
   clean = clean.replace(/\s+/g, ' ').trim();
   
   // Pattern A: Extract from curl command or header format
-  const headerMatch = clean.match(/(?:X-API-Token|Authorization)[\s:]+['"]?(?:Bearer\s+)?([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)['"]?/i);
-  if (headerMatch?.[1]) {
+  const headerMatch = clean.match(/(?:X-API-Token|Authorization)[\s:]+['"]?(?:Bearer\s+)?([A-Za-z0-9_.-]+)['"]?/i);
+  if (headerMatch?.[1] && headerMatch[1].length >= 20) {
     console.log('[NotificaMe] Token extracted from header/curl format');
     return headerMatch[1];
   }
@@ -114,16 +118,21 @@ export function extractToken(raw: string | undefined | null): string {
     }
   }
   
-  // Pattern C: Extract JWT pattern
-  const jwtMatch = clean.match(/\b([A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b/);
-  if (jwtMatch?.[1]) {
-    console.log('[NotificaMe] Token extracted from JWT pattern');
-    return jwtMatch[1];
+  // Pattern C: Extract long alphanumeric token (may contain dots or dashes)
+  const tokenMatch = clean.match(/\b([A-Za-z0-9_.-]{40,})\b/);
+  if (tokenMatch?.[1]) {
+    console.log('[NotificaMe] Token extracted from pattern');
+    return tokenMatch[1];
   }
   
   // Pattern D: Strip "Bearer " prefix
   if (clean.toLowerCase().startsWith('bearer ')) {
     return clean.substring(7).trim();
+  }
+  
+  // If the clean string is long enough, use it as-is
+  if (clean.length >= 20 && !clean.includes(' ')) {
+    return clean;
   }
   
   return clean;
@@ -139,17 +148,17 @@ export function maskToken(token: string): string {
 }
 
 // ===========================================
-// RESOLUÇÃO DE TOKEN POR TENANT/CANAL
+// RESOLUÇÃO DE TOKEN POR CANAL
 // ===========================================
 
 /**
  * Resolve o token de autenticação do NotificaMe.
- * Prioridade:
- * 1. Token passado explicitamente (do banco, por tenant/canal)
- * 2. Token da env var global (fallback)
+ * Apenas tokens configurados por canal são suportados.
+ * 
+ * IMPORTANTE: Não usa variáveis de ambiente globais para tokens de cliente.
  */
 export function resolveToken(channelConfig?: ChannelConfig | null): string {
-  // Prioridade 1: Token do canal (armazenado no banco por tenant)
+  // Token do canal (armazenado no banco por tenant)
   if (channelConfig?.api_key) {
     const token = extractToken(channelConfig.api_key);
     if (token) {
@@ -158,17 +167,8 @@ export function resolveToken(channelConfig?: ChannelConfig | null): string {
     }
   }
   
-  // Prioridade 2: Fallback para env var global
-  const envToken = Deno.env.get('NOTIFICAME_TOKEN') || Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
-  const token = extractToken(envToken);
-  
-  if (token) {
-    console.log(`[NotificaMe] Using global env token: ${maskToken(token)}`);
-  } else {
-    console.error('[NotificaMe] No token found in channel config or environment');
-  }
-  
-  return token;
+  console.error('[NotificaMe] No token found in channel config');
+  return '';
 }
 
 // ===========================================
@@ -245,9 +245,9 @@ export async function notificameRequest<T = unknown>(
       data = responseText as unknown as T;
     }
 
-    // Mask tokens in logs
+    // Mask sensitive tokens in logs (any long alphanumeric string)
     const sanitizedResponse = JSON.stringify(data)
-      .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[JWT]')
+      .replace(/\b[A-Za-z0-9_.-]{50,}\b/g, '[TOKEN]')
       .substring(0, 500);
     console.log(`[NotificaMe] <<< ${response.status}: ${sanitizedResponse}`);
 

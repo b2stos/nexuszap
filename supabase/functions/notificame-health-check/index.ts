@@ -3,6 +3,8 @@
  * 
  * Retorna status de saúde da integração NotificaMe para diagnóstico.
  * Apenas para Super Admins.
+ * 
+ * NOTA: Tokens são configurados por canal, não globalmente.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -61,9 +63,8 @@ Deno.serve(async (req) => {
       auth: { persistSession: false },
     });
 
-    // Check configurations
-    const apiToken = Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
-    const apiBaseUrl = Deno.env.get('NOTIFICAME_API_BASE_URL') || 'https://api.notificame.com.br/v1';
+    // Base URL for API (fixed)
+    const apiBaseUrl = 'https://api.notificame.com.br/v1';
 
     // Get recent errors from mt_webhook_events
     const { data: recentErrors } = await adminSupabase
@@ -88,9 +89,18 @@ Deno.serve(async (req) => {
       .order('created_at', { ascending: false })
       .limit(20);
 
-    // Test API connectivity
-    let apiConnectivity = { success: false, status: 0, message: '' };
-    if (apiToken) {
+    // Test API connectivity using first channel with token
+    let apiConnectivity = { success: false, status: 0, message: 'Nenhum canal com token configurado' };
+    
+    const channelWithToken = channels?.find(c => {
+      const config = c.provider_config as Record<string, unknown> | null;
+      return config?.api_key && config?.subscription_id;
+    });
+    
+    if (channelWithToken) {
+      const config = channelWithToken.provider_config as Record<string, unknown>;
+      const apiToken = config.api_key as string;
+      
       try {
         const testResponse = await fetch(`${apiBaseUrl}/channels/whatsapp/messages`, {
           method: 'POST',
@@ -121,13 +131,17 @@ Deno.serve(async (req) => {
     }
 
     // Format channel info (hide sensitive data)
-    const channelsInfo = channels?.map(c => ({
-      id: c.id,
-      name: c.name,
-      status: c.status,
-      last_connected_at: c.last_connected_at,
-      has_subscription_id: !!(c.provider_config as Record<string, unknown>)?.subscription_id,
-    }));
+    const channelsInfo = channels?.map(c => {
+      const config = c.provider_config as Record<string, unknown> | null;
+      return {
+        id: c.id,
+        name: c.name,
+        status: c.status,
+        last_connected_at: c.last_connected_at,
+        has_subscription_id: !!config?.subscription_id,
+        has_token: !!config?.api_key,
+      };
+    });
 
     // Format errors (sanitize)
     const errorsInfo = recentErrors?.map(e => ({
@@ -148,9 +162,9 @@ Deno.serve(async (req) => {
       JSON.stringify({
         timestamp: new Date().toISOString(),
         configuration: {
-          api_token_configured: !!apiToken,
-          api_token_length: apiToken.length,
           api_base_url: apiBaseUrl,
+          channels_with_token: channelsInfo?.filter(c => c.has_token).length || 0,
+          total_channels: channelsInfo?.length || 0,
         },
         api_connectivity: apiConnectivity,
         channels: channelsInfo,

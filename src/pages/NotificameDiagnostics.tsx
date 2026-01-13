@@ -185,21 +185,19 @@ export default function NotificameDiagnostics() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Token Status */}
+                  {/* Token Status - checks if at least one channel has token */}
                   <div className="p-4 rounded-lg border bg-card">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium">NOTIFICAME_X_API_TOKEN</span>
-                      {healthData.configuration.api_token_configured ? (
+                      <span className="text-sm font-medium">Token por Canal</span>
+                      {healthData.channels?.some(ch => ch.has_subscription_id) ? (
                         <Badge className="bg-green-500">Configurado</Badge>
                       ) : (
-                        <Badge variant="destructive">Não configurado</Badge>
+                        <Badge variant="secondary">Nenhum canal</Badge>
                       )}
                     </div>
-                    {healthData.configuration.api_token_configured && (
-                      <p className="text-xs text-muted-foreground">
-                        Tamanho: {healthData.configuration.api_token_length} caracteres
-                      </p>
-                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Token configurado individualmente em cada canal
+                    </p>
                   </div>
 
                   {/* API URL */}

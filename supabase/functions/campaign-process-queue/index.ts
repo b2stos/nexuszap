@@ -85,7 +85,8 @@ interface ChannelConfig {
 }
 
 /**
- * Extrai token de diversos formatos (JWT puro, Bearer prefix, etc)
+ * Extrai e sanitiza token de diversos formatos
+ * Aceita tokens de qualquer formato (não requer formato específico)
  */
 function extractToken(raw: string | undefined | null): string | null {
   if (!raw || typeof raw !== 'string') return null;
@@ -111,13 +112,8 @@ function extractToken(raw: string | undefined | null): string | null {
     } catch { /* not JSON */ }
   }
   
-  // Validate JWT format (3 parts separated by dots)
-  if (token.includes('.') && token.split('.').length === 3) {
-    return token;
-  }
-  
-  // If it's a long string without dots, might be valid
-  if (token.length > 50 && !token.includes(' ')) {
+  // If it's a long string without spaces, it's valid
+  if (token.length >= 20 && !token.includes(' ')) {
     return token;
   }
   
@@ -125,19 +121,12 @@ function extractToken(raw: string | undefined | null): string | null {
 }
 
 /**
- * Resolve token do canal (prioriza config do canal, fallback para env)
+ * Resolve token do canal (apenas config do canal, sem fallback global)
  */
 function resolveToken(channelConfig?: ChannelConfig | null): string | null {
-  // Priority 1: Channel-specific token
+  // Token do canal apenas
   if (channelConfig?.api_key) {
     const extracted = extractToken(channelConfig.api_key);
-    if (extracted) return extracted;
-  }
-  
-  // Priority 2: Environment variable
-  const envToken = Deno.env.get('NOTIFICAME_TOKEN') || Deno.env.get('NOTIFICAME_X_API_TOKEN');
-  if (envToken) {
-    const extracted = extractToken(envToken);
     if (extracted) return extracted;
   }
   
