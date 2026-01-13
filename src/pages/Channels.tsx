@@ -640,12 +640,12 @@ function ChannelCard({
         {/* Missing subscription_id warning */}
         {/* Missing token warning */}
         {!config?.api_key && (
-          <div className="p-3 rounded-lg bg-orange-500/10 border border-orange-500/30 flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-orange-500 mt-0.5" />
+          <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-destructive mt-0.5" />
             <div className="text-sm">
-              <p className="font-medium text-orange-600">Token não configurado no canal</p>
+              <p className="font-medium text-destructive">Token não configurado — envio bloqueado</p>
               <p className="text-muted-foreground">
-                Usando token global do servidor. Para maior segurança, configure o token diretamente no canal.
+                Clique em <strong>Configurações</strong> (ícone engrenagem) e adicione seu Token do NotificaMe para enviar mensagens.
               </p>
             </div>
           </div>
@@ -717,7 +717,7 @@ function ChannelCard({
                 <p className="text-xs text-muted-foreground">
                   {config?.api_key 
                     ? `✓ Token configurado (***${String(config.api_key).slice(-4)})` 
-                    : '○ Usando token do servidor (fallback)'}
+                    : '⚠️ Token OBRIGATÓRIO para envio de mensagens'}
                 </p>
               </div>
 
