@@ -129,6 +129,18 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   );
 }
 
+// Helper: check if value looks like a UUID
+function looksLikeUUID(value: string): boolean {
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return UUID_REGEX.test(value.trim());
+}
+
+// Helper: check if value looks like a valid token (not UUID, min 30 chars)
+function looksLikeToken(value: string): boolean {
+  const clean = value.trim();
+  return clean.length >= 30 && !looksLikeUUID(clean);
+}
+
 function CreateChannelDialog({
   tenantId,
   providerId,
@@ -149,6 +161,7 @@ function CreateChannelDialog({
   
   const createChannel = useCreateChannel();
   const validateToken = useValidateToken();
+  const testChannel = useTestChannel();
 
   const handleValidateToken = async () => {
     const trimmedApiKey = apiKey.trim();
@@ -157,6 +170,25 @@ function CreateChannelDialog({
       toast({
         title: 'Token obrigatório',
         description: 'Cole seu Token do NotificaMe.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Check if user accidentally pasted a UUID (subscription_id) in token field
+    if (looksLikeUUID(trimmedApiKey)) {
+      toast({
+        title: 'Isso é um UUID, não um token!',
+        description: 'Você colou um UUID (Subscription ID) no campo Token. O token do NotificaMe é uma string longa (geralmente começa com letras/números). Verifique no painel do NotificaMe.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (trimmedApiKey.length < 30) {
+      toast({
+        title: 'Token muito curto',
+        description: `O token deve ter pelo menos 30 caracteres. Você colou ${trimmedApiKey.length} caracteres.`,
         variant: 'destructive',
       });
       return;
@@ -173,9 +205,17 @@ function CreateChannelDialog({
         if (result.channels[0].phone) {
           setPhoneNumber(result.channels[0].phone);
         }
+        // Auto-fill name if empty
+        if (!name && result.channels[0].name) {
+          setName(result.channels[0].name);
+        }
       } else if (result.valid) {
         // Token valid but no channels discovered
         setShowManualInput(true);
+        toast({
+          title: 'Token válido!',
+          description: 'Não foi possível descobrir canais automaticamente. Informe o Subscription ID manualmente.',
+        });
       }
     } catch (error) {
       // Error handled by mutation
@@ -206,6 +246,25 @@ function CreateChannelDialog({
       });
       return;
     }
+
+    // Validate token is not a UUID (field inversion)
+    if (looksLikeUUID(trimmedApiKey)) {
+      toast({
+        title: 'Campo invertido!',
+        description: 'O campo "Token" contém um UUID. O token é uma string longa, não um UUID. Coloque o UUID no campo "Subscription ID".',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (trimmedApiKey.length < 30) {
+      toast({
+        title: 'Token inválido',
+        description: `Token muito curto (${trimmedApiKey.length} caracteres). Verifique se copiou corretamente.`,
+        variant: 'destructive',
+      });
+      return;
+    }
     
     if (!trimmedSubscriptionId) {
       toast({
@@ -216,9 +275,19 @@ function CreateChannelDialog({
       return;
     }
 
+    // Validate subscription_id is a UUID
+    if (!looksLikeUUID(trimmedSubscriptionId)) {
+      toast({
+        title: 'Subscription ID inválido',
+        description: 'O Subscription ID deve ser um UUID (formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     try {
       // Create the channel
-      await createChannel.mutateAsync({
+      const newChannel = await createChannel.mutateAsync({
         tenantId,
         providerId,
         input: {
@@ -231,13 +300,22 @@ function CreateChannelDialog({
         },
       });
 
+      // Auto-test after creation
+      if (newChannel?.id) {
+        try {
+          await testChannel.mutateAsync(newChannel.id);
+        } catch {
+          // Test failed, but channel was created
+          toast({
+            title: 'Canal criado',
+            description: 'Canal criado, mas a validação falhou. Verifique as credenciais.',
+            variant: 'default',
+          });
+        }
+      }
+
       setOpen(false);
-      setName('');
-      setPhoneNumber('');
-      setSubscriptionId('');
-      setApiKey('');
-      setDiscoveredChannels([]);
-      setShowManualInput(false);
+      resetForm();
       onCreated();
     } catch (error) {
       // Error toast is handled by the mutation
@@ -266,7 +344,7 @@ function CreateChannelDialog({
         <DialogHeader>
           <DialogTitle>Conectar WhatsApp (NotificaMe)</DialogTitle>
           <DialogDescription>
-            Cole apenas seu token do NotificaMe. O sistema irá descobrir automaticamente seus canais.
+            Cole seu único token do NotificaMe. O sistema irá descobrir automaticamente seus canais.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -286,9 +364,10 @@ function CreateChannelDialog({
           <div className="p-4 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
             <div className="flex items-center gap-2 text-sm font-medium text-primary">
               <Key className="w-4 h-4" />
-              Credenciais NotificaMe
+              Credenciais NotificaMe (apenas 1 token!)
             </div>
             
+            {/* Token field */}
             <div className="space-y-2">
               <Label htmlFor="apiKey">
                 Token do NotificaMe *
@@ -303,7 +382,7 @@ function CreateChannelDialog({
                     setDiscoveredChannels([]);
                     setShowManualInput(false);
                   }}
-                  placeholder="Cole seu token do NotificaMe aqui"
+                  placeholder="Cole seu token aqui (string longa, não UUID)"
                   required
                   className="font-mono text-sm flex-1"
                 />
@@ -312,19 +391,25 @@ function CreateChannelDialog({
                   variant="secondary"
                   onClick={handleValidateToken}
                   disabled={isValidating || !apiKey.trim()}
+                  title="Validar token e descobrir canais"
                 >
                   {isValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Encontrado em: <span className="font-medium">NotificaMe → Configurações → API</span>
+                Encontrado em: <span className="font-medium">NotificaMe → Configurações → API → Token</span>
               </p>
+              {apiKey && looksLikeUUID(apiKey.trim()) && (
+                <p className="text-xs text-destructive font-medium">
+                  ⚠️ Isso parece ser um UUID, não um token! O token é uma string longa.
+                </p>
+              )}
             </div>
 
             {/* Discovered channels */}
             {discoveredChannels.length > 0 && (
               <div className="space-y-2">
-                <Label>Canal WhatsApp</Label>
+                <Label>Canal WhatsApp Descoberto</Label>
                 <div className="space-y-2">
                   {discoveredChannels.map((ch) => (
                     <div
@@ -332,6 +417,7 @@ function CreateChannelDialog({
                       onClick={() => {
                         setSubscriptionId(ch.id);
                         if (ch.phone) setPhoneNumber(ch.phone);
+                        if (ch.name && !name) setName(ch.name);
                       }}
                       className={`p-3 rounded-lg border cursor-pointer transition-colors ${
                         subscriptionId === ch.id
@@ -349,7 +435,7 @@ function CreateChannelDialog({
                         )}
                       </div>
                       {ch.phone && <p className="text-xs text-muted-foreground mt-1">{ch.phone}</p>}
-                      <p className="text-xs text-muted-foreground font-mono">{ch.id.substring(0, 8)}...</p>
+                      <p className="text-xs text-muted-foreground font-mono">ID: {ch.id}</p>
                     </div>
                   ))}
                 </div>
@@ -369,7 +455,7 @@ function CreateChannelDialog({
             {(showManualInput || (discoveredChannels.length === 0 && validateToken.isSuccess && validateToken.data?.valid)) && (
               <div className="space-y-2">
                 <Label htmlFor="subscriptionId">
-                  Channel ID / Subscription ID *
+                  Subscription ID (UUID do canal) *
                 </Label>
                 <Input
                   id="subscriptionId"
@@ -380,8 +466,13 @@ function CreateChannelDialog({
                   className="font-mono text-sm"
                 />
                 <p className="text-xs text-muted-foreground">
-                  UUID do canal. Encontrado em: <span className="font-medium">NotificaMe → Canais → WhatsApp → Detalhes</span>
+                  Encontrado em: <span className="font-medium">NotificaMe → Canais → WhatsApp → Detalhes</span>
                 </p>
+                {subscriptionId && !looksLikeUUID(subscriptionId.trim()) && subscriptionId.length > 5 && (
+                  <p className="text-xs text-destructive font-medium">
+                    ⚠️ Isso não parece ser um UUID. O Subscription ID deve ter formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+                  </p>
+                )}
               </div>
             )}
             
@@ -405,7 +496,7 @@ function CreateChannelDialog({
             </Button>
             <Button 
               type="submit" 
-              disabled={createChannel.isPending || !subscriptionId.trim()}
+              disabled={createChannel.isPending || !subscriptionId.trim() || !apiKey.trim()}
             >
               {createChannel.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Conectar Canal
@@ -443,10 +534,29 @@ function ChannelCard({
   const handleSave = async () => {
     const trimmedSubscriptionId = subscriptionId.trim();
     const trimmedApiKey = apiKey.trim();
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    
+    // Validate token if provided - check for field inversion
+    if (trimmedApiKey) {
+      if (looksLikeUUID(trimmedApiKey)) {
+        toast({
+          title: 'Campo invertido!',
+          description: 'O campo "Token" contém um UUID. O token é uma string longa. Coloque o UUID no campo "Subscription ID".',
+          variant: 'destructive',
+        });
+        return;
+      }
+      if (trimmedApiKey.length < 30) {
+        toast({
+          title: 'Token muito curto',
+          description: `Token deve ter pelo menos 30 caracteres. Atual: ${trimmedApiKey.length}`,
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
     
     // Validate new subscription ID if provided
-    if (trimmedSubscriptionId && !uuidRegex.test(trimmedSubscriptionId)) {
+    if (trimmedSubscriptionId && !looksLikeUUID(trimmedSubscriptionId)) {
       toast({
         title: 'Subscription ID inválido',
         description: 'Deve ser um UUID (formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).',
@@ -479,11 +589,7 @@ function ChannelCard({
       try {
         await testChannel.mutateAsync(channel.id);
       } catch {
-        toast({
-          title: 'Configurações salvas, mas validação falhou',
-          description: 'Verifique se o token está correto.',
-          variant: 'destructive',
-        });
+        // Error handled by mutation
       }
       setIsValidating(false);
     }
@@ -631,13 +737,25 @@ function ChannelCard({
             <div className="text-sm">
               <p className="font-medium text-orange-600">Canal não conectado</p>
               <p className="text-muted-foreground">
-                Configure o webhook no BSP e verifique as credenciais.
+                Clique em "Testar" para validar as credenciais. Certifique-se de que o webhook está configurado no NotificaMe.
               </p>
             </div>
           </div>
         )}
         
-        {/* Missing subscription_id warning */}
+        {/* Field inversion warning */}
+        {config?.api_key && looksLikeUUID(String(config.api_key)) && (
+          <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-destructive mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-destructive">⚠️ Campos invertidos!</p>
+              <p className="text-muted-foreground">
+                O campo "Token" contém um UUID (Subscription ID). Edite o canal e corrija: o token é uma string longa.
+              </p>
+            </div>
+          </div>
+        )}
+        
         {/* Missing token warning */}
         {!config?.api_key && (
           <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
