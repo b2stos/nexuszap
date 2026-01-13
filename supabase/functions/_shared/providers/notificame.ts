@@ -102,25 +102,66 @@ async function notificameRequest<T = unknown>(
   const envApiTokenRaw = Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
   const configApiTokenRaw = config.api_key || '';
   
-  // CRITICAL: Sanitize token to remove ALL non-ASCII-printable characters
-  // ByteString requires only ASCII characters (codes 0-127, printable subset 32-126)
-  // This prevents "not a valid ByteString" errors in fetch headers
-  const sanitizeToken = (token: string): string => {
-    // Step 1: Keep only ASCII printable characters (space to tilde)
+  // CRITICAL: Extract and sanitize token
+  // Handles cases where user pasted:
+  // 1. The pure JWT token (correct)
+  // 2. JSON like {"token": "eyJ..."} 
+  // 3. A full curl command containing the token
+  // 4. Header format like "X-API-Token: eyJ..."
+  const extractToken = (raw: string): string => {
+    if (!raw) return '';
+    
+    // Step 1: Keep only ASCII printable characters
     let clean = '';
-    for (let i = 0; i < token.length; i++) {
-      const code = token.charCodeAt(i);
-      // Keep only printable ASCII: 32 (space) to 126 (~)
+    for (let i = 0; i < raw.length; i++) {
+      const code = raw.charCodeAt(i);
       if (code >= 32 && code <= 126) {
-        clean += token[i];
+        clean += raw[i];
       }
     }
-    // Step 2: Collapse multiple spaces and trim
-    return clean.replace(/\s+/g, ' ').trim();
+    clean = clean.replace(/\s+/g, ' ').trim();
+    
+    // Step 2: Try to extract JWT from various formats
+    
+    // Pattern A: If it's a curl command, extract X-API-Token or Bearer token
+    const curlTokenMatch = clean.match(/(?:X-API-Token|Authorization)[:\s]+['"]?([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)['"]?/i);
+    if (curlTokenMatch && curlTokenMatch[1]) {
+      console.log('[NotificaMe] Extracted JWT from curl command or header');
+      return curlTokenMatch[1];
+    }
+    
+    // Pattern B: If it looks like JSON, try to parse it
+    if (clean.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(clean);
+        const extracted = parsed.token || parsed.api_token || parsed['X-API-Token'] || parsed.access_token;
+        if (extracted) {
+          console.log('[NotificaMe] Extracted token from JSON object');
+          return String(extracted).trim();
+        }
+      } catch {
+        // Not valid JSON, continue
+      }
+    }
+    
+    // Pattern C: If it contains a JWT pattern, extract it
+    const jwtMatch = clean.match(/\b([A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b/);
+    if (jwtMatch && jwtMatch[1]) {
+      console.log('[NotificaMe] Extracted JWT pattern from string');
+      return jwtMatch[1];
+    }
+    
+    // Pattern D: If it starts with "Bearer ", strip it
+    if (clean.toLowerCase().startsWith('bearer ')) {
+      return clean.substring(7).trim();
+    }
+    
+    // Default: return as-is (maybe it's already a clean token)
+    return clean;
   };
   
-  const envApiToken = sanitizeToken(envApiTokenRaw);
-  const configApiToken = sanitizeToken(configApiTokenRaw);
+  const envApiToken = extractToken(envApiTokenRaw);
+  const configApiToken = extractToken(configApiTokenRaw);
   const apiToken = envApiToken || configApiToken;
 
   if (!apiToken) {
@@ -536,9 +577,18 @@ export const notificameProvider: Provider = {
     // NotificaMe Hub API format:
     // - Token: Use server-side ENV: NOTIFICAME_X_API_TOKEN (falls back to config.api_key)
     // - subscription_id: UUID do canal no NotificaMe (campo "from")
-    const envApiToken = (Deno.env.get('NOTIFICAME_X_API_TOKEN') || '').trim();
-    const configApiToken = typeof config.api_key === 'string' ? config.api_key.trim() : '';
-    const apiToken = envApiToken || configApiToken;
+    // Token extraction is now handled by extractToken() in notificameRequest
+    // We still need to check locally for better error messages
+    const envApiTokenRaw = Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
+    const configApiTokenRaw = typeof config.api_key === 'string' ? config.api_key : '';
+    
+    // Quick extraction for validation - full extraction happens in notificameRequest
+    const extractJwt = (raw: string): string => {
+      const jwtMatch = raw.match(/\b([A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b/);
+      return jwtMatch?.[1] || raw.trim();
+    };
+    
+    const apiToken = extractJwt(envApiTokenRaw) || extractJwt(configApiTokenRaw);
     const subscriptionIdRaw = config.subscription_id;
     const subscriptionId = typeof subscriptionIdRaw === 'string' ? subscriptionIdRaw.trim() : '';
 
@@ -606,7 +656,7 @@ export const notificameProvider: Provider = {
     
     console.log(`[NotificaMe] Sending text to ${recipientPhone}`);
     console.log(`[NotificaMe] Using subscription_id: ${subscriptionId.substring(0, 8)}...`);
-    console.log(`[NotificaMe] Token source: ${envApiToken ? 'ENV' : 'DB'}`);
+    console.log(`[NotificaMe] Token source: ${envApiTokenRaw.trim() ? 'ENV' : 'DB'}`);
     // SECURITY: Mask token in logs
     const maskedToken = apiToken.length > 10 
       ? `${apiToken.substring(0, 6)}...${apiToken.substring(apiToken.length - 4)}`
