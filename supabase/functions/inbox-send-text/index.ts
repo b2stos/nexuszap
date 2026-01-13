@@ -2,11 +2,11 @@
  * Edge Function: inbox-send-text
  * 
  * Endpoint para envio de mensagens de texto pelo Inbox.
- * Valida janela 24h e usa NotificaMe Client centralizado.
+ * Resolve token por tenant/canal do banco de dados.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { notificame } from '../_shared/notificameClient.ts';
+import { resolveToken, sendText, maskToken, ChannelConfig } from '../_shared/notificameClient.ts';
 
 // CORS headers
 const corsHeaders = {
@@ -21,10 +21,6 @@ interface SendTextRequest {
   reply_to_message_id?: string;
 }
 
-interface ChannelProviderConfig {
-  subscription_id?: string;
-}
-
 interface ConversationData {
   id: string;
   tenant_id: string;
@@ -34,7 +30,7 @@ interface ConversationData {
   status: string;
   channel: {
     id: string;
-    provider_config: ChannelProviderConfig;
+    provider_config: ChannelConfig;
     phone_number: string;
   };
   contact: {
@@ -167,6 +163,23 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Resolve token from channel config (tenant-specific) or fallback to env
+    const channelConfig = conv.channel.provider_config as ChannelConfig;
+    const token = resolveToken(channelConfig);
+    
+    if (!token) {
+      console.error('[inbox-send-text] No token available for channel');
+      return new Response(
+        JSON.stringify({ 
+          error: 'missing_token',
+          message: 'Token NotificaMe não configurado. Configure o token no canal.',
+        }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    console.log(`[inbox-send-text] Token resolved: ${maskToken(token)} for tenant ${tenantUser.tenant_id}`);
+
     // Create message in database as queued
     const { data: message, error: msgError } = await supabase
       .from('mt_messages')
@@ -196,14 +209,14 @@ Deno.serve(async (req) => {
     console.log(`[inbox-send-text] Message created: ${message.id}`);
 
     // Get subscription_id from channel config
-    const subscriptionId = conv.channel.provider_config?.subscription_id || '';
+    const subscriptionId = channelConfig?.subscription_id || '';
 
-    // Send via NotificaMe client
-    const sendResult = await notificame.sendText({
+    // Send via NotificaMe with resolved token
+    const sendResult = await sendText(token, {
       subscriptionId,
       to: conv.contact.phone,
       text: text.trim(),
-      replyToMessageId: undefined, // TODO: lookup if reply_to_message_id
+      replyToMessageId: undefined,
     });
 
     if (!sendResult.success) {
