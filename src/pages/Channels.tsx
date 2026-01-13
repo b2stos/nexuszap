@@ -140,18 +140,40 @@ function CreateChannelDialog({
   const [name, setName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [subscriptionId, setSubscriptionId] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [isValidating, setIsValidating] = useState(false);
   
   const createChannel = useCreateChannel();
+  const testChannel = useTestChannel();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     const trimmedSubscriptionId = subscriptionId.trim();
+    const trimmedApiKey = apiKey.trim();
     
-    if (!name.trim() || !trimmedSubscriptionId) {
+    if (!name.trim()) {
       toast({
-        title: 'Campos obrigatórios',
-        description: 'Preencha o nome e Subscription ID.',
+        title: 'Nome obrigatório',
+        description: 'Preencha o nome do canal.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    if (!trimmedApiKey) {
+      toast({
+        title: 'Token obrigatório',
+        description: 'Informe o Token do NotificaMe para conectar o canal.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    if (!trimmedSubscriptionId) {
+      toast({
+        title: 'Subscription ID obrigatório',
+        description: 'Informe o UUID do canal NotificaMe.',
         variant: 'destructive',
       });
       return;
@@ -168,23 +190,45 @@ function CreateChannelDialog({
       return;
     }
 
-    await createChannel.mutateAsync({
-      tenantId,
-      providerId,
-      input: {
-        name: name.trim(),
-        phone_number: phoneNumber.trim() || undefined,
-        provider_config: {
-          subscription_id: subscriptionId.trim(),
+    try {
+      // Create the channel
+      const createdChannel = await createChannel.mutateAsync({
+        tenantId,
+        providerId,
+        input: {
+          name: name.trim(),
+          phone_number: phoneNumber.trim() || undefined,
+          provider_config: {
+            subscription_id: trimmedSubscriptionId,
+            api_key: trimmedApiKey,
+          },
         },
-      },
-    });
+      });
 
-    setOpen(false);
-    setName('');
-    setPhoneNumber('');
-    setSubscriptionId('');
-    onCreated();
+      // Test the connection
+      setIsValidating(true);
+      try {
+        await testChannel.mutateAsync(createdChannel.id);
+      } catch (testError) {
+        // Test failed but channel was created - show warning
+        toast({
+          title: 'Canal criado, mas validação falhou',
+          description: 'Verifique se o token está correto nas configurações do canal.',
+          variant: 'destructive',
+        });
+      }
+      setIsValidating(false);
+
+      setOpen(false);
+      setName('');
+      setPhoneNumber('');
+      setSubscriptionId('');
+      setApiKey('');
+      onCreated();
+    } catch (error) {
+      setIsValidating(false);
+      // Error toast is handled by the mutation
+    }
   };
 
   return (
@@ -192,15 +236,14 @@ function CreateChannelDialog({
       <DialogTrigger asChild>
         <Button>
           <Plus className="w-4 h-4 mr-2" />
-          Novo Canal
+          Conectar WhatsApp
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Criar Canal WhatsApp</DialogTitle>
+          <DialogTitle>Conectar WhatsApp (NotificaMe)</DialogTitle>
           <DialogDescription>
-            Configure um novo canal para enviar e receber mensagens via API Oficial (NotificaMe BSP).
-            O Token da API é configurado no servidor pelo administrador.
+            Configure seu canal WhatsApp utilizando a API Oficial via NotificaMe.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -224,21 +267,39 @@ function CreateChannelDialog({
               placeholder="+55 11 99999-9999"
             />
             <p className="text-xs text-muted-foreground">
-              Número conectado ao BSP (será preenchido automaticamente após configuração)
+              Número conectado ao BSP (opcional)
             </p>
           </div>
           
           <Separator />
           
-          <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
+          <div className="p-4 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
             <div className="flex items-center gap-2 text-sm font-medium text-primary">
               <Key className="w-4 h-4" />
-              Identificação do Canal NotificaMe
+              Credenciais NotificaMe
+            </div>
+            
+            <div className="space-y-2">
+              <Label htmlFor="apiKey">
+                Token do NotificaMe *
+              </Label>
+              <Input
+                id="apiKey"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="Cole seu token do NotificaMe aqui"
+                required
+                className="font-mono text-sm"
+              />
+              <p className="text-xs text-muted-foreground">
+                Token de autenticação da API. Encontrado em: <span className="font-medium">NotificaMe → Configurações → API</span>
+              </p>
             </div>
             
             <div className="space-y-2">
               <Label htmlFor="subscriptionId">
-                Subscription ID (UUID do canal) *
+                Channel ID / Subscription ID *
               </Label>
               <Input
                 id="subscriptionId"
@@ -259,9 +320,9 @@ function CreateChannelDialog({
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={createChannel.isPending}>
-              {createChannel.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Criar Canal
+            <Button type="submit" disabled={createChannel.isPending || isValidating}>
+              {(createChannel.isPending || isValidating) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {isValidating ? 'Validando...' : 'Validar & Conectar'}
             </Button>
           </DialogFooter>
         </form>
@@ -283,6 +344,8 @@ function ChannelCard({
   const [name, setName] = useState(channel.name);
   const [phoneNumber, setPhoneNumber] = useState(channel.phone_number || '');
   const [subscriptionId, setSubscriptionId] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [isValidating, setIsValidating] = useState(false);
   
   const updateChannel = useUpdateChannel();
   const deleteChannel = useDeleteChannel();
@@ -293,6 +356,7 @@ function ChannelCard({
 
   const handleSave = async () => {
     const trimmedSubscriptionId = subscriptionId.trim();
+    const trimmedApiKey = apiKey.trim();
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     
     // Validate new subscription ID if provided
@@ -312,6 +376,7 @@ function ChannelCard({
     
     const providerConfigUpdates: Record<string, unknown> = {};
     if (trimmedSubscriptionId) providerConfigUpdates.subscription_id = trimmedSubscriptionId;
+    if (trimmedApiKey) providerConfigUpdates.api_key = trimmedApiKey;
     
     if (Object.keys(providerConfigUpdates).length > 0) {
       input.provider_config = providerConfigUpdates;
@@ -322,8 +387,24 @@ function ChannelCard({
       input: input as Parameters<typeof updateChannel.mutateAsync>[0]['input'],
     });
     
+    // Test connection if token was updated
+    if (trimmedApiKey) {
+      setIsValidating(true);
+      try {
+        await testChannel.mutateAsync(channel.id);
+      } catch {
+        toast({
+          title: 'Configurações salvas, mas validação falhou',
+          description: 'Verifique se o token está correto.',
+          variant: 'destructive',
+        });
+      }
+      setIsValidating(false);
+    }
+    
     setEditOpen(false);
     setSubscriptionId('');
+    setApiKey('');
     onUpdate();
   };
 
@@ -418,18 +499,32 @@ function ChannelCard({
           </div>
         </div>
         
-        {/* Subscription ID info */}
-        {config?.subscription_id && (
+        {/* Token & Subscription ID info */}
+        <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground flex items-center gap-1">
               <Key className="w-3 h-3" />
-              Subscription ID
+              Token
             </Label>
             <div className="font-mono text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1">
-              {config.subscription_id.substring(0, 8)}...{config.subscription_id.substring(config.subscription_id.length - 4)}
+              {config?.api_key 
+                ? `***${String(config.api_key).slice(-4)}` 
+                : 'Usando fallback do servidor'}
             </div>
           </div>
-        )}
+          
+          {config?.subscription_id && (
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                <Key className="w-3 h-3" />
+                Subscription ID
+              </Label>
+              <div className="font-mono text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1">
+                {config.subscription_id.substring(0, 8)}...{config.subscription_id.substring(config.subscription_id.length - 4)}
+              </div>
+            </div>
+          )}
+        </div>
         
         {/* Config info */}
         <div className="grid grid-cols-2 gap-4 text-sm">
@@ -457,6 +552,20 @@ function ChannelCard({
         )}
         
         {/* Missing subscription_id warning */}
+        {/* Missing token warning */}
+        {!config?.api_key && (
+          <div className="p-3 rounded-lg bg-orange-500/10 border border-orange-500/30 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-orange-500 mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-orange-600">Token não configurado no canal</p>
+              <p className="text-muted-foreground">
+                Usando token global do servidor. Para maior segurança, configure o token diretamente no canal.
+              </p>
+            </div>
+          </div>
+        )}
+        
+        {/* Missing subscription_id warning */}
         {!config?.subscription_id && (
           <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-destructive mt-0.5" />
@@ -477,7 +586,6 @@ function ChannelCard({
             <DialogTitle>Editar Canal</DialogTitle>
             <DialogDescription>
               Atualize as configurações do canal WhatsApp.
-              O Token da API é configurado no servidor pelo administrador.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -502,15 +610,34 @@ function ChannelCard({
             
             <Separator />
             
-            <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
+            <div className="p-4 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
               <div className="flex items-center gap-2 text-sm font-medium text-primary">
                 <Key className="w-4 h-4" />
-                Identificação do Canal NotificaMe
+                Credenciais NotificaMe
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit-apiKey">
+                  Token do NotificaMe
+                </Label>
+                <Input
+                  id="edit-apiKey"
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Deixe vazio para manter o atual"
+                  className="font-mono text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {config?.api_key 
+                    ? `✓ Token configurado (***${String(config.api_key).slice(-4)})` 
+                    : '○ Usando token do servidor (fallback)'}
+                </p>
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="edit-subscriptionId">
-                  Subscription ID (UUID do canal)
+                  Channel ID / Subscription ID
                 </Label>
                 <Input
                   id="edit-subscriptionId"
@@ -531,9 +658,9 @@ function ChannelCard({
             <Button variant="outline" onClick={() => setEditOpen(false)}>
               Cancelar
             </Button>
-            <Button onClick={handleSave} disabled={updateChannel.isPending}>
-              {updateChannel.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Salvar
+            <Button onClick={handleSave} disabled={updateChannel.isPending || isValidating}>
+              {(updateChannel.isPending || isValidating) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {isValidating ? 'Validando...' : 'Salvar & Validar'}
             </Button>
           </DialogFooter>
         </DialogContent>
