@@ -6,9 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/hooks/use-toast";
-import { Loader2, MessageSquare } from "lucide-react";
+import { Loader2, MessageSquare, Eye, EyeOff } from "lucide-react";
 import { z } from "zod";
+
+const REMEMBERED_EMAIL_KEY = "nexuszap_remembered_email";
 
 const authSchema = z.object({
   email: z.string().trim().email({ message: "Email inválido" }).max(255, { message: "Email muito longo" }),
@@ -23,6 +26,22 @@ export default function Auth() {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [resetMode, setResetMode] = useState(false);
+  
+  // Password visibility state
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showSignupPassword, setShowSignupPassword] = useState(false);
+  
+  // Remember email state
+  const [rememberEmail, setRememberEmail] = useState(false);
+
+  useEffect(() => {
+    // Load remembered email on mount
+    const savedEmail = localStorage.getItem(REMEMBERED_EMAIL_KEY);
+    if (savedEmail) {
+      setEmail(savedEmail);
+      setRememberEmail(true);
+    }
+  }, []);
 
   useEffect(() => {
     const checkUser = async () => {
@@ -41,6 +60,21 @@ export default function Auth() {
     };
     checkUser();
   }, [navigate]);
+
+  const handleRememberEmailChange = (checked: boolean) => {
+    setRememberEmail(checked);
+    if (!checked) {
+      localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+    }
+  };
+
+  const saveEmailIfRemembered = () => {
+    if (rememberEmail && email) {
+      localStorage.setItem(REMEMBERED_EMAIL_KEY, email);
+    } else {
+      localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+    }
+  };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,6 +144,9 @@ export default function Auth() {
         return;
       }
 
+      // Save email if "remember" is checked
+      saveEmailIfRemembered();
+
       const { error } = await supabase.auth.signInWithPassword({
         email: validation.data.email,
         password: validation.data.password,
@@ -151,21 +188,49 @@ export default function Auth() {
 
       if (error) throw error;
 
+      // Security: Generic success message (don't reveal if email exists)
       toast({
-        title: "Email enviado!",
-        description: "Verifique sua caixa de entrada para redefinir sua senha.",
+        title: "Solicitação recebida",
+        description: "Se este email estiver cadastrado, você receberá um link para redefinir sua senha.",
       });
       setResetMode(false);
     } catch (error: any) {
+      // Security: Don't reveal specific errors about email existence
       toast({
-        title: "Erro ao enviar email",
-        description: error.message,
-        variant: "destructive",
+        title: "Solicitação recebida",
+        description: "Se este email estiver cadastrado, você receberá um link para redefinir sua senha.",
       });
+      setResetMode(false);
     } finally {
       setLoading(false);
     }
   };
+
+  // Password visibility toggle component
+  const PasswordToggleButton = ({ 
+    show, 
+    onToggle, 
+    id 
+  }: { 
+    show: boolean; 
+    onToggle: () => void; 
+    id: string;
+  }) => (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-sm"
+      aria-label={show ? "Ocultar senha" : "Mostrar senha"}
+      aria-controls={id}
+      tabIndex={-1}
+    >
+      {show ? (
+        <EyeOff className="h-4 w-4" />
+      ) : (
+        <Eye className="h-4 w-4" />
+      )}
+    </button>
+  );
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 p-4">
@@ -200,8 +265,12 @@ export default function Auth() {
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={loading}
                       required
+                      autoComplete="email"
                     />
                   </div>
+                  <p className="text-sm text-muted-foreground">
+                    Digite seu email cadastrado. Se a conta existir, enviaremos um link seguro para redefinir sua senha.
+                  </p>
                   <Button type="submit" className="w-full" disabled={loading}>
                     {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Enviar link de recuperação
@@ -226,19 +295,45 @@ export default function Auth() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       required
+                      autoComplete="email"
                     />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="login-password">Senha</Label>
-                    <Input
-                      id="login-password"
-                      type="password"
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                    />
+                    <div className="relative">
+                      <Input
+                        id="login-password"
+                        type={showLoginPassword ? "text" : "password"}
+                        placeholder="••••••••"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        required
+                        autoComplete="current-password"
+                        className="pr-10"
+                      />
+                      <PasswordToggleButton
+                        show={showLoginPassword}
+                        onToggle={() => setShowLoginPassword(!showLoginPassword)}
+                        id="login-password"
+                      />
+                    </div>
                   </div>
+                  
+                  {/* Remember email checkbox */}
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="remember-email"
+                      checked={rememberEmail}
+                      onCheckedChange={(checked) => handleRememberEmailChange(checked === true)}
+                    />
+                    <label
+                      htmlFor="remember-email"
+                      className="text-sm text-muted-foreground cursor-pointer select-none"
+                    >
+                      Lembrar meu e-mail
+                    </label>
+                  </div>
+                  
                   <Button type="submit" className="w-full" disabled={loading}>
                     {loading ? (
                       <>
@@ -272,6 +367,7 @@ export default function Auth() {
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     required
+                    autoComplete="name"
                   />
                 </div>
                 <div className="space-y-2">
@@ -283,19 +379,32 @@ export default function Auth() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
+                    autoComplete="email"
                   />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="signup-password">Senha</Label>
-                  <Input
-                    id="signup-password"
-                    type="password"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    minLength={6}
-                  />
+                  <div className="relative">
+                    <Input
+                      id="signup-password"
+                      type={showSignupPassword ? "text" : "password"}
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      minLength={8}
+                      autoComplete="new-password"
+                      className="pr-10"
+                    />
+                    <PasswordToggleButton
+                      show={showSignupPassword}
+                      onToggle={() => setShowSignupPassword(!showSignupPassword)}
+                      id="signup-password"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Mínimo de 8 caracteres
+                  </p>
                 </div>
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? (
