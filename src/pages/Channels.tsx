@@ -98,6 +98,41 @@ function ChannelStatusBadge({ status }: { status: Channel['status'] }) {
   }
 }
 
+// Indicador de saúde do canal baseado em last_connected_at
+function ChannelHealthIndicator({ lastConnectedAt }: { lastConnectedAt: string | null }) {
+  if (!lastConnectedAt) {
+    return <span className="text-muted-foreground">Nunca conectado</span>;
+  }
+  
+  const lastConnected = new Date(lastConnectedAt);
+  const now = new Date();
+  const minutesSince = Math.floor((now.getTime() - lastConnected.getTime()) / (1000 * 60));
+  
+  if (minutesSince < 10) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-green-600 font-medium">
+        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+        Ativo
+      </span>
+    );
+  } else if (minutesSince < 60) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-orange-600 font-medium">
+        <span className="w-2 h-2 rounded-full bg-orange-500" />
+        Aguardando ({minutesSince}min)
+      </span>
+    );
+  } else {
+    const hours = Math.floor(minutesSince / 60);
+    return (
+      <span className="inline-flex items-center gap-1.5 text-muted-foreground font-medium">
+        <span className="w-2 h-2 rounded-full bg-gray-400" />
+        Sem atividade ({hours}h)
+      </span>
+    );
+  }
+}
+
 function ChannelStatusIcon({ status }: { status: Channel['status'] }) {
   switch (status) {
     case 'connected':
@@ -693,8 +728,10 @@ function ChannelCard({
             <span className="ml-2 font-medium">{channel.provider?.display_name || 'NotificaMe'}</span>
           </div>
           <div>
-            <span className="text-muted-foreground">Qualidade:</span>
-            <span className="ml-2 font-medium">{channel.quality_rating || 'N/A'}</span>
+            <span className="text-muted-foreground">Status:</span>
+            <span className="ml-2">
+              <ChannelHealthIndicator lastConnectedAt={channel.last_connected_at} />
+            </span>
           </div>
         </div>
         
