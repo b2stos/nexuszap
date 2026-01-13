@@ -553,6 +553,75 @@ function sanitizeHeaders(req: Request): Record<string, string> {
 }
 
 // ============================================
+// WEBHOOK SIGNATURE VALIDATION (HMAC-SHA256)
+// ============================================
+
+/**
+ * Valida assinatura HMAC-SHA256 do webhook (se configurada)
+ * - Usa webhook_secret do provider_config ou WEBHOOK_SECRET do servidor
+ * - NÃO usa token do cliente - é um segredo separado do servidor
+ * - Retorna true se não há segredo configurado (modo permissivo)
+ */
+async function validateWebhookSignature(
+  rawBody: string,
+  req: Request,
+  channelConfig: Record<string, unknown> | null,
+  ctx: LogContext
+): Promise<{ valid: boolean; reason?: string }> {
+  // Buscar segredo: prioridade para config do canal, depois env var global
+  const webhookSecret = (channelConfig?.webhook_secret as string) || 
+    Deno.env.get('WEBHOOK_SECRET');
+  
+  // Se não há segredo configurado, aceita tudo (modo permissivo para dev)
+  if (!webhookSecret) {
+    return { valid: true };
+  }
+  
+  // Buscar assinatura do header (Meta usa x-hub-signature-256, NotificaMe pode usar x-notificame-signature)
+  const signature = req.headers.get('x-hub-signature-256') || 
+    req.headers.get('x-notificame-signature') ||
+    req.headers.get('x-signature');
+  
+  if (!signature) {
+    log('warn', 'Webhook signature required but not provided', ctx);
+    return { valid: false, reason: 'Missing signature header' };
+  }
+  
+  try {
+    // Calcular HMAC-SHA256
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(webhookSecret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    
+    const signatureBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(rawBody));
+    const expectedSignature = 'sha256=' + Array.from(new Uint8Array(signatureBuffer))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+    
+    // Comparação segura (timing-safe não disponível em Deno, mas ok para este uso)
+    if (signature === expectedSignature) {
+      log('info', 'Webhook signature validated', ctx);
+      return { valid: true };
+    }
+    
+    log('warn', 'Webhook signature mismatch', ctx, { 
+      expected_prefix: expectedSignature.substring(0, 20),
+      received_prefix: signature.substring(0, 20),
+    });
+    return { valid: false, reason: 'Signature mismatch' };
+    
+  } catch (error) {
+    log('error', 'Signature validation error', ctx, { error: String(error) });
+    return { valid: false, reason: 'Validation error' };
+  }
+}
+
+// ============================================
 // BODY PARSER - Multi-format support
 // ============================================
 
@@ -877,6 +946,27 @@ async function handleWebhook(req: Request): Promise<Response> {
     rawBody = await req.text();
   } catch (e) {
     log('warn', 'Could not read body', ctx, { error: String(e) });
+  }
+  
+  // Validate webhook signature (if configured)
+  // IMPORTANT: Usa webhook_secret do servidor, NÃO o token do cliente
+  const signatureValidation = await validateWebhookSignature(
+    rawBody, 
+    req, 
+    typedChannel.provider_config as unknown as Record<string, unknown> | null, 
+    ctx
+  );
+  
+  if (!signatureValidation.valid) {
+    log('warn', 'Webhook signature validation failed', ctx, { reason: signatureValidation.reason });
+    await saveWebhookEvent(supabase, tenantId, channelId, 'signature_invalid', { reason: signatureValidation.reason }, ctx, {
+      isInvalid: true, invalidReason: signatureValidation.reason, ipAddress: clientIP
+    });
+    // Return 200 anyway to prevent retries, but log as invalid
+    return new Response(
+      JSON.stringify({ ok: true, warning: 'Signature validation failed', request_id: requestId }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
   
   // Parse body with multi-format support
