@@ -222,14 +222,36 @@ Deno.serve(async (req) => {
     if (!sendResult.success) {
       console.error('[inbox-send-text] Send failed:', sendResult.error);
       
+      // Map error code for frontend handling
+      let userFriendlyError = sendResult.error?.message || 'Falha ao enviar mensagem';
+      let errorCategory = 'send_failed';
+      
+      // Categorize error for frontend
+      const errorCode = sendResult.error?.code || '';
+      const httpStatus = sendResult.status;
+      
+      if (httpStatus === 401 || httpStatus === 403 || /auth|token|unauthorized/i.test(errorCode)) {
+        errorCategory = 'authentication_error';
+        userFriendlyError = 'Token inválido ou expirado. Reconecte o NotificaMe em Configurações → Canais.';
+      } else if (httpStatus === 404 || /not_found|channel/i.test(errorCode)) {
+        errorCategory = 'channel_not_found';
+        userFriendlyError = 'Canal não encontrado. Verifique as configurações.';
+      } else if (httpStatus === 429 || /rate_limit/i.test(errorCode)) {
+        errorCategory = 'rate_limited';
+        userFriendlyError = 'Limite de envio atingido. Tente novamente em instantes.';
+      } else if (httpStatus >= 500) {
+        errorCategory = 'provider_error';
+        userFriendlyError = 'Instabilidade no provedor. Tentaremos novamente.';
+      }
+      
       // Update message as failed
       const { data: failedMessage } = await supabase
         .from('mt_messages')
         .update({
           status: 'failed',
           failed_at: new Date().toISOString(),
-          error_code: sendResult.error?.code || 'UNKNOWN',
-          error_detail: sendResult.error?.message || 'Failed to send',
+          error_code: errorCategory.toUpperCase(),
+          error_detail: userFriendlyError,
         })
         .eq('id', message.id)
         .select()
@@ -237,10 +259,14 @@ Deno.serve(async (req) => {
 
       return new Response(
         JSON.stringify({ 
-          error: 'send_failed',
-          message: sendResult.error?.message || 'Failed to send message',
-          is_retryable: sendResult.error?.isRetryable ?? true,
+          error: errorCategory,
+          message: userFriendlyError,
+          is_retryable: sendResult.error?.isRetryable ?? (httpStatus >= 500 || httpStatus === 429),
           data: failedMessage || { ...message, status: 'failed' },
+          debug: {
+            original_code: errorCode,
+            http_status: httpStatus,
+          },
         }),
         { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );

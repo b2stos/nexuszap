@@ -126,15 +126,31 @@ export function useSendMessage() {
       } else {
         // Handle API-level errors
         const errorMessage = data.message || data.error || 'Falha ao enviar mensagem';
-        const errorCode = data.data?.error_code;
+        const errorType = data.error;
 
-        if (data.error === 'window_closed') {
+        if (errorType === 'window_closed') {
           toast.error('Janela de 24h fechada', {
             description: 'Use um template para retomar a conversa.',
           });
-        } else if (errorCode === 'AUTHENTICATION_ERROR' || /invalid token/i.test(errorMessage)) {
+        } else if (errorType === 'authentication_error') {
           toast.error('Token NotificaMe inválido', {
-            description: 'Vá em Configurações > Canais e atualize credenciais.',
+            description: 'Vá em Configurações → Canais e reconecte.',
+          });
+        } else if (errorType === 'channel_not_found') {
+          toast.error('Canal não encontrado', {
+            description: 'Verifique as configurações do canal.',
+          });
+        } else if (errorType === 'rate_limited') {
+          toast.error('Limite de envio atingido', {
+            description: 'Aguarde alguns minutos e tente novamente.',
+          });
+        } else if (errorType === 'provider_error') {
+          toast.error('Erro no provedor', {
+            description: 'O NotificaMe está instável. Tentaremos novamente.',
+          });
+        } else if (errorType === 'missing_token') {
+          toast.error('Token não configurado', {
+            description: 'Configure o token do NotificaMe no canal.',
           });
         } else {
           toast.error('Erro ao enviar', { description: errorMessage });
