@@ -1065,42 +1065,46 @@ async function handleWebhook(req: Request): Promise<Response> {
     }
   );
   
-  // ACK FAST - Respond immediately with 200
-  const ackResponse = new Response(
+  log('info', 'Starting webhook processing', ctx, { 
+    webhookEventId,
+    body_type: typeof body,
+    has_message: !!(body as Record<string, unknown>)?.message,
+    has_direction: !!(body as Record<string, unknown>)?.direction,
+  });
+  
+  // CRITICAL FIX: Process webhook SYNCHRONOUSLY to ensure messages are saved
+  // EdgeRuntime.waitUntil was not reliably processing messages
+  // We have time before Supabase times out (~30s), and we need to ensure persistence
+  try {
+    await processWebhookAsync(
+      supabase,
+      tenantId,
+      channelId,
+      typedChannel,
+      body,
+      rawBody,
+      webhookEventId,
+      ctx
+    );
+    log('info', 'Webhook processing completed successfully', ctx);
+  } catch (processingError) {
+    log('error', 'Webhook processing failed', ctx, { error: String(processingError) });
+    // Still return 200 to avoid retries from BSP
+  }
+  
+  // ACK response - after processing is complete
+  const finalLatency = Date.now() - startTime;
+  return new Response(
     JSON.stringify({ 
       ok: true, 
       request_id: requestId,
       accepted: true,
-      latency_ms: latency,
+      processed: true,
+      latency_ms: finalLatency,
       timestamp: new Date().toISOString(),
     }),
     { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
-  
-  // ASYNC PROCESSING - Use EdgeRuntime.waitUntil() if available
-  const asyncTask = processWebhookAsync(
-    supabase,
-    tenantId,
-    channelId,
-    typedChannel,
-    body,
-    rawBody,
-    webhookEventId,
-    ctx
-  );
-  
-  // Use EdgeRuntime.waitUntil if available (Supabase Edge Functions)
-  // @ts-ignore - EdgeRuntime is a global in Supabase Edge Functions
-  if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
-    // @ts-ignore
-    EdgeRuntime.waitUntil(asyncTask);
-    log('info', 'Background processing started', ctx);
-  } else {
-    // Fallback: wait for processing (not ideal but works)
-    await asyncTask;
-  }
-  
-  return ackResponse;
 }
 
 // ============================================
