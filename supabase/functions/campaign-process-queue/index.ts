@@ -3,17 +3,19 @@
  * 
  * Edge function para processar fila de campanhas em massa.
  * Envia templates para recipients em lotes respeitando rate limits.
+ * Usa o notificameClient centralizado para envio.
+ * 
+ * Features:
+ * - Rate limiting com backoff exponencial para 429
+ * - Retry automático para falhas temporárias
+ * - Logs detalhados por campanha
+ * - Contadores em tempo real
  * 
  * Endpoints:
  * - POST /campaign-process-queue → Processa próximo batch da campanha
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { 
-  getProvider,
-  SendTemplateRequest,
-  Channel,
-} from '../_shared/providers/index.ts';
 
 // ============================================
 // CORS HEADERS
@@ -38,6 +40,11 @@ const SPEED_CONFIG = {
 // Max execution time safety margin
 const MAX_EXECUTION_TIME_MS = 140000; // 140s (function has 150s limit)
 
+// Retry configuration
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 2000;
+const MAX_BACKOFF_MS = 60000;
+
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ============================================
@@ -51,6 +58,281 @@ function getSupabaseAdmin() {
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false },
   });
+}
+
+// ============================================
+// NOTIFICAME CLIENT (inline for edge function)
+// ============================================
+
+const NOTIFICAME_BASE_URL = 'https://api.notificame.com.br/v1';
+const AUTH_HEADER = 'X-API-Token';
+const REQUEST_TIMEOUT = 30000;
+
+interface SendResult {
+  success: boolean;
+  provider_message_id?: string;
+  error?: {
+    code: string;
+    message: string;
+    http_status?: number;
+    is_retryable: boolean;
+  };
+}
+
+interface ChannelConfig {
+  api_key?: string;
+  subscription_id?: string;
+}
+
+/**
+ * Extrai token de diversos formatos (JWT puro, Bearer prefix, etc)
+ */
+function extractToken(raw: string | undefined | null): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  let token = raw.trim();
+  
+  // Remove Bearer prefix
+  if (token.toLowerCase().startsWith('bearer ')) {
+    token = token.slice(7).trim();
+  }
+  
+  // Remove X-API-Token: prefix
+  if (token.toLowerCase().startsWith('x-api-token:')) {
+    token = token.slice(12).trim();
+  }
+  
+  // Try to extract from JSON
+  if (token.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(token);
+      if (parsed.token) token = parsed.token;
+      else if (parsed.api_key) token = parsed.api_key;
+      else if (parsed.apiKey) token = parsed.apiKey;
+    } catch { /* not JSON */ }
+  }
+  
+  // Validate JWT format (3 parts separated by dots)
+  if (token.includes('.') && token.split('.').length === 3) {
+    return token;
+  }
+  
+  // If it's a long string without dots, might be valid
+  if (token.length > 50 && !token.includes(' ')) {
+    return token;
+  }
+  
+  return null;
+}
+
+/**
+ * Resolve token do canal (prioriza config do canal, fallback para env)
+ */
+function resolveToken(channelConfig?: ChannelConfig | null): string | null {
+  // Priority 1: Channel-specific token
+  if (channelConfig?.api_key) {
+    const extracted = extractToken(channelConfig.api_key);
+    if (extracted) return extracted;
+  }
+  
+  // Priority 2: Environment variable
+  const envToken = Deno.env.get('NOTIFICAME_TOKEN') || Deno.env.get('NOTIFICAME_X_API_TOKEN');
+  if (envToken) {
+    const extracted = extractToken(envToken);
+    if (extracted) return extracted;
+  }
+  
+  return null;
+}
+
+/**
+ * Mapeia erros para mensagens amigáveis
+ */
+function mapErrorToFriendly(status: number, code: string, originalMessage: string): string {
+  switch (status) {
+    case 401:
+    case 403:
+      return 'Token inválido ou expirado. Reconecte o NotificaMe em Configurações → Canais.';
+    case 404:
+      return 'Canal não encontrado. Reconecte para sincronizar o canal automaticamente.';
+    case 429:
+      return 'Limite de envio atingido. Aguardando para retry.';
+    default:
+      if (status >= 500) {
+        return 'Instabilidade no provedor. Tentaremos novamente.';
+      }
+  }
+  
+  // Code-based mappings
+  const codeLC = code.toLowerCase();
+  if (codeLC.includes('invalid_phone') || codeLC.includes('phone')) {
+    return 'Número de telefone inválido ou não cadastrado no WhatsApp.';
+  }
+  if (codeLC.includes('template') && codeLC.includes('not_approved')) {
+    return 'Template não aprovado. Verifique o status na Meta.';
+  }
+  if (codeLC.includes('window') || codeLC.includes('24h')) {
+    return 'Janela de 24h fechada. Use um template aprovado.';
+  }
+  
+  return originalMessage || 'Erro ao enviar mensagem.';
+}
+
+/**
+ * Determina se o erro é retryable
+ */
+function isRetryable(status: number, code: string): boolean {
+  // Rate limit - always retry with backoff
+  if (status === 429) return true;
+  
+  // Server errors - usually temporary
+  if (status >= 500) return true;
+  
+  // Network/timeout errors
+  if (code.includes('timeout') || code.includes('network')) return true;
+  
+  // Auth errors - not retryable (need reconfiguration)
+  if (status === 401 || status === 403) return false;
+  
+  // Invalid phone - not retryable
+  if (code.includes('phone') || code.includes('invalid')) return false;
+  
+  return false;
+}
+
+/**
+ * Calcula delay de backoff exponencial com jitter
+ */
+function calculateBackoff(attempt: number): number {
+  const exponentialDelay = Math.min(BASE_BACKOFF_MS * Math.pow(2, attempt), MAX_BACKOFF_MS);
+  const jitter = Math.random() * 0.3 * exponentialDelay;
+  return Math.floor(exponentialDelay + jitter);
+}
+
+/**
+ * Envia template via NotificaMe API
+ */
+async function sendTemplate(
+  token: string,
+  subscriptionId: string,
+  to: string,
+  templateName: string,
+  language: string,
+  variables: Record<string, unknown>
+): Promise<SendResult> {
+  const url = `${NOTIFICAME_BASE_URL}/subscriptions/${subscriptionId}/send-template`;
+  
+  const body = {
+    to,
+    template: {
+      name: templateName,
+      language: { code: language },
+      components: buildComponents(variables),
+    },
+  };
+  
+  console.log(`[NotificaMe] Sending template ${templateName} to ${to}`);
+  
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        [AUTH_HEADER]: token,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    
+    clearTimeout(timeout);
+    
+    const responseText = await response.text();
+    // deno-lint-ignore no-explicit-any
+    let responseData: any = {};
+    
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      responseData = { raw: responseText };
+    }
+    
+    if (response.ok) {
+      const messageId = responseData.message_id || 
+        responseData.messageId || 
+        responseData.id || 
+        (responseData.messages as Array<{id: string}>)?.[0]?.id;
+      
+      console.log(`[NotificaMe] ✅ Sent, message_id: ${messageId}`);
+      
+      return {
+        success: true,
+        provider_message_id: messageId as string,
+      };
+    }
+    
+    const errorCode = (responseData.error?.code || responseData.code || `HTTP_${response.status}`) as string;
+    const errorMessage = (responseData.error?.message || responseData.message || response.statusText) as string;
+    
+    console.log(`[NotificaMe] ❌ Failed: ${response.status} - ${errorCode}: ${errorMessage}`);
+    
+    return {
+      success: false,
+      error: {
+        code: errorCode,
+        message: mapErrorToFriendly(response.status, errorCode, errorMessage),
+        http_status: response.status,
+        is_retryable: isRetryable(response.status, errorCode),
+      },
+    };
+    
+  } catch (err) {
+    clearTimeout(timeout);
+    const errorCode = err instanceof Error && err.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR';
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    
+    console.error(`[NotificaMe] Exception:`, err);
+    
+    return {
+      success: false,
+      error: {
+        code: errorCode,
+        message: 'Erro de conexão. Tentaremos novamente.',
+        http_status: 0,
+        is_retryable: true,
+      },
+    };
+  }
+}
+
+/**
+ * Constrói components para API do WhatsApp
+ */
+function buildComponents(variables: Record<string, unknown>): Array<{type: string; parameters: Array<{type: string; text: string}>}> {
+  const components: Array<{type: string; parameters: Array<{type: string; text: string}>}> = [];
+  
+  if (variables.body && Array.isArray(variables.body)) {
+    components.push({
+      type: 'body',
+      parameters: variables.body.map((v: {type?: string; value: string}) => ({
+        type: v.type || 'text',
+        text: v.value || '',
+      })),
+    });
+  }
+  
+  if (variables.header && Array.isArray(variables.header)) {
+    components.push({
+      type: 'header',
+      parameters: variables.header.map((v: {type?: string; value: string}) => ({
+        type: v.type || 'text',
+        text: v.value || '',
+      })),
+    });
+  }
+  
+  return components;
 }
 
 // ============================================
@@ -77,7 +359,14 @@ interface CampaignData {
     status: string;
     variables_schema: unknown;
   };
-  channel: Channel & {
+  channel: {
+    id: string;
+    tenant_id: string;
+    name: string;
+    phone_number: string | null;
+    status: string;
+    provider_config: ChannelConfig | null;
+    provider_phone_id: string | null;
     provider: { name: string };
   };
 }
@@ -87,6 +376,7 @@ interface RecipientData {
   contact_id: string;
   campaign_id: string;
   status: string;
+  attempts: number;
   variables: Record<string, string> | null;
   contact: {
     id: string;
@@ -113,13 +403,11 @@ function normalizePhone(phone: string): string {
 interface TemplateVariable {
   type: 'text' | 'currency' | 'date_time' | 'image' | 'document' | 'video';
   value: string;
-  currency_code?: string;
-  amount_1000?: number;
-  fallback_value?: string;
 }
 
 function buildTemplateVariables(
-  variablesSchema: Record<string, unknown[]> | null,
+  // deno-lint-ignore no-explicit-any
+  variablesSchema: Record<string, any[]> | null,
   recipientVars: Record<string, string> | null,
   campaignVars: Record<string, string> | null,
   contactName: string | null
@@ -138,13 +426,50 @@ function buildTemplateVariables(
   
   // Build body variables
   if (Array.isArray(variablesSchema.body)) {
-    result.body = variablesSchema.body.map((v: any, idx: number) => ({
+    result.body = variablesSchema.body.map((v: {type?: string; key?: string}, idx: number) => ({
       type: (v.type || 'text') as TemplateVariable['type'],
       value: mergedVars[v.key as string] || mergedVars[`${idx + 1}`] || `{{${idx + 1}}}`,
     }));
   }
   
   return result;
+}
+
+// ============================================
+// CAMPAIGN STATS LOGGER
+// ============================================
+
+interface CampaignStats {
+  processed: number;
+  success: number;
+  failed: number;
+  skipped: number;
+  retryScheduled: number;
+  rateLimited: boolean;
+  errors: Array<{phone: string; error: string; code: string}>;
+}
+
+function logCampaignStats(campaignName: string, stats: CampaignStats) {
+  console.log(`
+╔═══════════════════════════════════════════════════════════════╗
+║ CAMPAIGN BATCH SUMMARY: ${campaignName.padEnd(37)}║
+╠═══════════════════════════════════════════════════════════════╣
+║ Processed:      ${String(stats.processed).padStart(5)}                                      ║
+║ Success:        ${String(stats.success).padStart(5)} ✅                                     ║
+║ Failed:         ${String(stats.failed).padStart(5)} ❌                                     ║
+║ Retry Scheduled:${String(stats.retryScheduled).padStart(5)} 🔄                                     ║
+║ Rate Limited:   ${(stats.rateLimited ? 'YES' : 'NO').padStart(5)}                                      ║
+╚═══════════════════════════════════════════════════════════════╝`);
+  
+  if (stats.errors.length > 0) {
+    console.log(`[Campaign] Errors:`);
+    stats.errors.slice(0, 10).forEach(e => {
+      console.log(`  - ${e.phone}: [${e.code}] ${e.error}`);
+    });
+    if (stats.errors.length > 10) {
+      console.log(`  ... and ${stats.errors.length - 10} more errors`);
+    }
+  }
 }
 
 // ============================================
@@ -159,41 +484,89 @@ async function processCampaignBatch(
   processed: number;
   success: number;
   failed: number;
+  retryScheduled: number;
   finished: boolean;
-  errors: string[];
+  rateLimited: boolean;
+  errors: Array<{phone: string; error: string; code: string}>;
 }> {
   const startTime = Date.now();
   const config = SPEED_CONFIG[speed];
-  const errors: string[] = [];
-  let processed = 0;
-  let success = 0;
-  let failed = 0;
+  const stats: CampaignStats = {
+    processed: 0,
+    success: 0,
+    failed: 0,
+    skipped: 0,
+    retryScheduled: 0,
+    rateLimited: false,
+    errors: [],
+  };
   
-  console.log(`[Campaign] Processing batch for ${campaign.name}, speed: ${speed}`);
+  console.log(`[Campaign] Starting batch for "${campaign.name}", speed: ${speed}`);
   console.log(`[Campaign] Batch size: ${config.batchSize}, delay: ${config.delayMs}ms`);
   
-  // Get provider
-  const providerName = campaign.channel.provider?.name || 'notificame';
-  const provider = getProvider(providerName);
+  // Resolve token from channel config
+  const token = resolveToken(campaign.channel.provider_config);
   
-  if (!provider) {
-    console.error(`[Campaign] Provider ${providerName} not found`);
-    return { processed: 0, success: 0, failed: 0, finished: false, errors: [`Provider ${providerName} not found`] };
+  if (!token) {
+    console.error(`[Campaign] No valid token found for channel ${campaign.channel_id}`);
+    return { 
+      processed: 0, 
+      success: 0, 
+      failed: 0, 
+      retryScheduled: 0,
+      finished: false, 
+      rateLimited: false,
+      errors: [{ phone: 'N/A', error: 'Token not configured', code: 'NO_TOKEN' }] 
+    };
+  }
+  
+  // Get subscription_id from channel config
+  const subscriptionId = campaign.channel.provider_config?.subscription_id || 
+    campaign.channel.provider_phone_id;
+  
+  if (!subscriptionId) {
+    console.error(`[Campaign] No subscription_id found for channel ${campaign.channel_id}`);
+    return { 
+      processed: 0, 
+      success: 0, 
+      failed: 0, 
+      retryScheduled: 0,
+      finished: false, 
+      rateLimited: false,
+      errors: [{ phone: 'N/A', error: 'Subscription ID not configured', code: 'NO_SUBSCRIPTION' }] 
+    };
   }
   
   // Validate channel status
   if (campaign.channel.status !== 'connected') {
     console.error(`[Campaign] Channel ${campaign.channel_id} not connected`);
-    return { processed: 0, success: 0, failed: 0, finished: false, errors: ['Channel not connected'] };
+    return { 
+      processed: 0, 
+      success: 0, 
+      failed: 0, 
+      retryScheduled: 0,
+      finished: false, 
+      rateLimited: false,
+      errors: [{ phone: 'N/A', error: 'Channel not connected', code: 'CHANNEL_DISCONNECTED' }] 
+    };
   }
   
   // Validate template status
   if (campaign.template.status !== 'approved') {
     console.error(`[Campaign] Template ${campaign.template_id} not approved`);
-    return { processed: 0, success: 0, failed: 0, finished: false, errors: ['Template not approved'] };
+    return { 
+      processed: 0, 
+      success: 0, 
+      failed: 0, 
+      retryScheduled: 0,
+      finished: false, 
+      rateLimited: false,
+      errors: [{ phone: 'N/A', error: 'Template not approved', code: 'TEMPLATE_NOT_APPROVED' }] 
+    };
   }
   
-  // Fetch queued recipients (batch size)
+  // Fetch queued recipients (also include those scheduled for retry)
+  const now = new Date().toISOString();
   const { data: recipients, error: recipientsError } = await supabase
     .from('campaign_recipients')
     .select(`
@@ -201,24 +574,45 @@ async function processCampaignBatch(
       contact_id,
       campaign_id,
       status,
+      attempts,
       variables,
       contact:mt_contacts!inner(id, phone, name)
     `)
     .eq('campaign_id', campaign.id)
-    .eq('status', 'queued')
+    .or(`status.eq.queued,and(status.eq.failed,next_retry_at.lte.${now},attempts.lt.${MAX_RETRIES})`)
+    .order('created_at', { ascending: true })
     .limit(config.batchSize);
   
   if (recipientsError) {
     console.error(`[Campaign] Failed to fetch recipients:`, recipientsError);
-    return { processed: 0, success: 0, failed: 0, finished: false, errors: [recipientsError.message] };
+    return { 
+      processed: 0, 
+      success: 0, 
+      failed: 0, 
+      retryScheduled: 0,
+      finished: false, 
+      rateLimited: false,
+      errors: [{ phone: 'N/A', error: recipientsError.message, code: 'DB_ERROR' }] 
+    };
   }
   
   if (!recipients || recipients.length === 0) {
     console.log(`[Campaign] No more queued recipients, campaign done`);
-    return { processed: 0, success: 0, failed: 0, finished: true, errors: [] };
+    return { 
+      processed: 0, 
+      success: 0, 
+      failed: 0, 
+      retryScheduled: 0,
+      finished: true, 
+      rateLimited: false,
+      errors: [] 
+    };
   }
   
   console.log(`[Campaign] Processing ${recipients.length} recipients`);
+  
+  // Current backoff delay (increases on rate limit)
+  let currentBackoff = 0;
   
   // Process each recipient
   for (const recipient of recipients as unknown as RecipientData[]) {
@@ -228,8 +622,8 @@ async function processCampaignBatch(
       break;
     }
     
-    // Check campaign status (might have been paused/cancelled)
-    if (processed > 0 && processed % 10 === 0) {
+    // Check campaign status periodically (might have been paused/cancelled)
+    if (stats.processed > 0 && stats.processed % 10 === 0) {
       const { data: currentCampaign } = await supabase
         .from('mt_campaigns')
         .select('status')
@@ -243,10 +637,18 @@ async function processCampaignBatch(
     }
     
     const phone = normalizePhone(recipient.contact.phone);
-    console.log(`[Campaign] Sending to ${phone} (recipient: ${recipient.id})`);
+    const isRetry = recipient.attempts > 0;
+    console.log(`[Campaign] ${isRetry ? '🔄 Retrying' : 'Sending to'} ${phone} (attempt: ${recipient.attempts + 1})`);
+    
+    // Apply backoff if we hit rate limit
+    if (currentBackoff > 0) {
+      console.log(`[Campaign] Backoff delay: ${currentBackoff}ms`);
+      await sleep(currentBackoff);
+      currentBackoff = 0; // Reset after applying
+    }
     
     try {
-      // Build template request
+      // Build template variables
       const templateVars = buildTemplateVariables(
         campaign.template.variables_schema as Record<string, unknown[]>,
         recipient.variables,
@@ -254,16 +656,15 @@ async function processCampaignBatch(
         recipient.contact.name
       );
       
-      const sendRequest: SendTemplateRequest = {
-        channel: campaign.channel as Channel,
-        to: phone,
-        template_name: campaign.template.name,
-        language: campaign.template.language || 'pt_BR',
-        variables: templateVars,
-      };
-      
       // Send template
-      const result = await provider.sendTemplate(sendRequest);
+      const result = await sendTemplate(
+        token,
+        subscriptionId,
+        phone,
+        campaign.template.name,
+        campaign.template.language || 'pt_BR',
+        templateVars
+      );
       
       if (result.success) {
         // Update recipient as sent
@@ -274,51 +675,102 @@ async function processCampaignBatch(
             provider_message_id: result.provider_message_id,
             sent_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
+            last_error: null,
+            next_retry_at: null,
           })
           .eq('id', recipient.id);
         
-        success++;
+        stats.success++;
         console.log(`[Campaign] ✅ Sent to ${phone}, message_id: ${result.provider_message_id}`);
       } else {
-        // Update recipient as failed
-        const errorReason = result.error?.detail || 'Unknown error';
+        // Check if rate limited
+        if (result.error?.http_status === 429) {
+          stats.rateLimited = true;
+          currentBackoff = calculateBackoff(recipient.attempts);
+          console.log(`[Campaign] ⏳ Rate limited, backoff: ${currentBackoff}ms`);
+        }
+        
+        // Check if should retry
+        if (result.error?.is_retryable && recipient.attempts < MAX_RETRIES - 1) {
+          const nextRetryAt = new Date(Date.now() + calculateBackoff(recipient.attempts + 1));
+          
+          await supabase
+            .from('campaign_recipients')
+            .update({
+              status: 'failed', // Keep as failed, will be picked up by next batch
+              attempts: recipient.attempts + 1,
+              last_error: result.error.message,
+              next_retry_at: nextRetryAt.toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', recipient.id);
+          
+          stats.retryScheduled++;
+          console.log(`[Campaign] 🔄 Scheduled retry for ${phone} at ${nextRetryAt.toISOString()}`);
+        } else {
+          // Permanent failure
+          await supabase
+            .from('campaign_recipients')
+            .update({
+              status: 'failed',
+              attempts: recipient.attempts + 1,
+              last_error: result.error?.message || 'Unknown error',
+              next_retry_at: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', recipient.id);
+          
+          stats.failed++;
+          stats.errors.push({
+            phone,
+            error: result.error?.message || 'Unknown error',
+            code: result.error?.code || 'UNKNOWN',
+          });
+          console.log(`[Campaign] ❌ Failed permanently for ${phone}: ${result.error?.message}`);
+        }
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      
+      // Unexpected error - schedule retry
+      if (recipient.attempts < MAX_RETRIES - 1) {
+        const nextRetryAt = new Date(Date.now() + calculateBackoff(recipient.attempts + 1));
         
         await supabase
           .from('campaign_recipients')
           .update({
             status: 'failed',
-            last_error: errorReason,
-            attempts: 1,
+            attempts: recipient.attempts + 1,
+            last_error: errorMsg,
+            next_retry_at: nextRetryAt.toISOString(),
             updated_at: new Date().toISOString(),
           })
           .eq('id', recipient.id);
         
-        failed++;
-        errors.push(`${phone}: ${errorReason}`);
-        console.log(`[Campaign] ❌ Failed for ${phone}: ${errorReason}`);
+        stats.retryScheduled++;
+      } else {
+        await supabase
+          .from('campaign_recipients')
+          .update({
+            status: 'failed',
+            attempts: recipient.attempts + 1,
+            last_error: errorMsg,
+            next_retry_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', recipient.id);
+        
+        stats.failed++;
+        stats.errors.push({ phone, error: errorMsg, code: 'EXCEPTION' });
       }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       
-      await supabase
-        .from('campaign_recipients')
-        .update({
-          status: 'failed',
-          last_error: errorMsg,
-          attempts: 1,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', recipient.id);
-      
-      failed++;
-      errors.push(`${phone}: ${errorMsg}`);
       console.error(`[Campaign] Exception for ${phone}:`, err);
     }
     
-    processed++;
+    stats.processed++;
     
-    // Rate limit delay
-    if (processed < recipients.length) {
+    // Rate limit delay between messages
+    if (stats.processed < recipients.length && !stats.rateLimited) {
       await sleep(config.delayMs);
     }
   }
@@ -330,11 +782,19 @@ async function processCampaignBatch(
     .eq('campaign_id', campaign.id);
   
   if (counts) {
-    const sentCount = counts.filter((r: any) => r.status === 'sent').length;
-    const deliveredCount = counts.filter((r: any) => r.status === 'delivered').length;
-    const readCount = counts.filter((r: any) => r.status === 'read').length;
-    const failedCount = counts.filter((r: any) => r.status === 'failed').length;
-    const queuedCount = counts.filter((r: any) => r.status === 'queued').length;
+    const sentCount = counts.filter((r: {status: string}) => r.status === 'sent').length;
+    const deliveredCount = counts.filter((r: {status: string}) => r.status === 'delivered').length;
+    const readCount = counts.filter((r: {status: string}) => r.status === 'read').length;
+    const failedCount = counts.filter((r: {status: string}) => 
+      r.status === 'failed' && 
+      !counts.some((c: {status: string}) => c.status === 'queued')
+    ).length;
+    const queuedCount = counts.filter((r: {status: string}) => r.status === 'queued').length;
+    
+    // Count pending retries
+    const pendingRetries = counts.filter((r: {status: string}) => r.status === 'failed').length - failedCount;
+    
+    const isFinished = queuedCount === 0 && pendingRetries === 0;
     
     await supabase
       .from('mt_campaigns')
@@ -344,15 +804,15 @@ async function processCampaignBatch(
         read_count: readCount,
         failed_count: failedCount,
         updated_at: new Date().toISOString(),
-        // If no more queued, mark as done
-        ...(queuedCount === 0 && {
+        // If no more queued and no pending retries, mark as done
+        ...(isFinished && {
           status: 'done',
           completed_at: new Date().toISOString(),
         }),
       })
       .eq('id', campaign.id);
     
-    console.log(`[Campaign] Updated counters: sent=${sentCount}, delivered=${deliveredCount}, read=${readCount}, failed=${failedCount}, queued=${queuedCount}`);
+    console.log(`[Campaign] Counters: sent=${sentCount}, delivered=${deliveredCount}, read=${readCount}, failed=${failedCount}, queued=${queuedCount}, pendingRetries=${pendingRetries}`);
   }
   
   // Check if finished
@@ -360,11 +820,22 @@ async function processCampaignBatch(
     .from('campaign_recipients')
     .select('*', { count: 'exact', head: true })
     .eq('campaign_id', campaign.id)
-    .eq('status', 'queued');
+    .or('status.eq.queued,and(status.eq.failed,next_retry_at.not.is.null)');
   
   const finished = (remainingCount || 0) === 0;
   
-  return { processed, success, failed, finished, errors };
+  // Log summary
+  logCampaignStats(campaign.name, stats);
+  
+  return { 
+    processed: stats.processed, 
+    success: stats.success, 
+    failed: stats.failed, 
+    retryScheduled: stats.retryScheduled,
+    finished, 
+    rateLimited: stats.rateLimited,
+    errors: stats.errors 
+  };
 }
 
 // ============================================
@@ -395,7 +866,10 @@ Deno.serve(async (req) => {
       );
     }
     
-    console.log(`[Campaign] Processing campaign: ${campaign_id}, speed: ${speed}`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`[Campaign] Processing: ${campaign_id}`);
+    console.log(`[Campaign] Speed: ${speed}`);
+    console.log(`${'='.repeat(60)}\n`);
     
     const supabase = getSupabaseAdmin();
     
@@ -452,7 +926,13 @@ Deno.serve(async (req) => {
       speed
     );
     
-    console.log(`[Campaign] Batch complete: processed=${result.processed}, success=${result.success}, failed=${result.failed}, finished=${result.finished}`);
+    console.log(`\n[Campaign] Batch complete:`);
+    console.log(`  - Processed: ${result.processed}`);
+    console.log(`  - Success: ${result.success}`);
+    console.log(`  - Failed: ${result.failed}`);
+    console.log(`  - Retry Scheduled: ${result.retryScheduled}`);
+    console.log(`  - Finished: ${result.finished}`);
+    console.log(`  - Rate Limited: ${result.rateLimited}\n`);
     
     return new Response(
       JSON.stringify({
