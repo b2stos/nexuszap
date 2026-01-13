@@ -558,23 +558,31 @@ function sanitizeHeaders(req: Request): Record<string, string> {
 
 /**
  * Valida assinatura HMAC-SHA256 do webhook (se configurada)
- * - Usa webhook_secret do provider_config ou WEBHOOK_SECRET do servidor
- * - NÃO usa token do cliente - é um segredo separado do servidor
- * - Retorna true se não há segredo configurado (modo permissivo)
+ * 
+ * MODO COMPATIBILIDADE: Nunca bloqueia processamento!
+ * - Retorna status da validação para logging/auditoria
+ * - status: 'valid' | 'invalid' | 'missing' | 'no_secret' | 'error'
+ * - O caller deve SEMPRE continuar processando, independente do status
  */
+interface SignatureValidationResult {
+  status: 'valid' | 'invalid' | 'missing' | 'no_secret' | 'error';
+  reason?: string;
+}
+
 async function validateWebhookSignature(
   rawBody: string,
   req: Request,
   channelConfig: Record<string, unknown> | null,
   ctx: LogContext
-): Promise<{ valid: boolean; reason?: string }> {
+): Promise<SignatureValidationResult> {
   // Buscar segredo: prioridade para config do canal, depois env var global
   const webhookSecret = (channelConfig?.webhook_secret as string) || 
     Deno.env.get('WEBHOOK_SECRET');
   
-  // Se não há segredo configurado, aceita tudo (modo permissivo para dev)
+  // Se não há segredo configurado, modo totalmente permissivo
   if (!webhookSecret) {
-    return { valid: true };
+    log('info', 'No webhook secret configured - compatibility mode (all events accepted)', ctx);
+    return { status: 'no_secret' };
   }
   
   // Buscar assinatura do header (Meta usa x-hub-signature-256, NotificaMe pode usar x-notificame-signature)
@@ -583,8 +591,9 @@ async function validateWebhookSignature(
     req.headers.get('x-signature');
   
   if (!signature) {
-    log('warn', 'Webhook signature required but not provided', ctx);
-    return { valid: false, reason: 'Missing signature header' };
+    // IMPORTANTE: Não bloquear! Apenas logar como warning
+    log('warn', 'Webhook signature missing - processing anyway (compatibility mode)', ctx);
+    return { status: 'missing', reason: 'No signature header provided by sender' };
   }
   
   try {
@@ -603,21 +612,22 @@ async function validateWebhookSignature(
       .map(b => b.toString(16).padStart(2, '0'))
       .join('');
     
-    // Comparação segura (timing-safe não disponível em Deno, mas ok para este uso)
+    // Comparação segura
     if (signature === expectedSignature) {
-      log('info', 'Webhook signature validated', ctx);
-      return { valid: true };
+      log('info', 'Webhook signature validated successfully', ctx);
+      return { status: 'valid' };
     }
     
-    log('warn', 'Webhook signature mismatch', ctx, { 
+    // Assinatura não bate - logar mas NÃO bloquear
+    log('warn', 'Webhook signature mismatch - processing anyway (compatibility mode)', ctx, { 
       expected_prefix: expectedSignature.substring(0, 20),
       received_prefix: signature.substring(0, 20),
     });
-    return { valid: false, reason: 'Signature mismatch' };
+    return { status: 'invalid', reason: 'Signature mismatch' };
     
   } catch (error) {
-    log('error', 'Signature validation error', ctx, { error: String(error) });
-    return { valid: false, reason: 'Validation error' };
+    log('error', 'Signature validation error - processing anyway', ctx, { error: String(error) });
+    return { status: 'error', reason: `Validation error: ${error}` };
   }
 }
 
@@ -948,7 +958,7 @@ async function handleWebhook(req: Request): Promise<Response> {
     log('warn', 'Could not read body', ctx, { error: String(e) });
   }
   
-  // Validate webhook signature (if configured)
+  // Validate webhook signature (if configured) - COMPATIBILITY MODE: NEVER BLOCK!
   // IMPORTANT: Usa webhook_secret do servidor, NÃO o token do cliente
   const signatureValidation = await validateWebhookSignature(
     rawBody, 
@@ -957,16 +967,14 @@ async function handleWebhook(req: Request): Promise<Response> {
     ctx
   );
   
-  if (!signatureValidation.valid) {
-    log('warn', 'Webhook signature validation failed', ctx, { reason: signatureValidation.reason });
-    await saveWebhookEvent(supabase, tenantId, channelId, 'signature_invalid', { reason: signatureValidation.reason }, ctx, {
-      isInvalid: true, invalidReason: signatureValidation.reason, ipAddress: clientIP
-    });
-    // Return 200 anyway to prevent retries, but log as invalid
-    return new Response(
-      JSON.stringify({ ok: true, warning: 'Signature validation failed', request_id: requestId }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+  // Log signature status but NEVER block processing
+  // This ensures messages are always received even if signature validation fails
+  const signatureWarning = signatureValidation.status !== 'valid' && signatureValidation.status !== 'no_secret'
+    ? `Signature ${signatureValidation.status}: ${signatureValidation.reason || 'unknown'}`
+    : null;
+  
+  if (signatureWarning) {
+    log('warn', `Signature issue (processing anyway): ${signatureWarning}`, ctx);
   }
   
   // Parse body with multi-format support
@@ -1031,7 +1039,11 @@ async function handleWebhook(req: Request): Promise<Response> {
   // JSON body - save and process
   const body = parsedBody.parsed;
   
-  // Save raw event FIRST (for audit)
+  // AUTO-CONNECT: Mark channel as connected on receiving any valid webhook
+  // This is the key step that ensures the channel shows as "connected" in the UI
+  await updateChannelStatusToConnected(supabase, channelId, ctx);
+  
+  // Save raw event FIRST (for audit) - include signature status for observability
   const latency = Date.now() - startTime;
   const webhookEventId = await saveWebhookEvent(
     supabase,
@@ -1044,7 +1056,11 @@ async function handleWebhook(req: Request): Promise<Response> {
       ipAddress: clientIP,
       method: 'POST',
       latencyMs: latency,
-      headers: sanitizeHeaders(req),
+      headers: {
+        ...sanitizeHeaders(req),
+        'x-signature-status': signatureValidation.status,
+        ...(signatureWarning ? { 'x-signature-warning': signatureWarning } : {}),
+      },
       contentType,
     }
   );

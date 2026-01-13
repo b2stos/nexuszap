@@ -54,8 +54,17 @@ interface WebhookEvent {
   rate_limited?: boolean | null;
 }
 
-function EventTypeBadge({ type }: { type: string }) {
-  if (type.includes('inbound') || type.includes('message')) {
+function EventTypeBadge({ type, isInvalid }: { type: string; isInvalid?: boolean | null }) {
+  // Signature issues are now treated as warnings, not blocking errors
+  if (type === 'signature_invalid' || isInvalid) {
+    return (
+      <Badge variant="outline" className="text-xs border-orange-500 text-orange-600">
+        <AlertTriangle className="w-3 h-3 mr-1" />
+        Assinatura
+      </Badge>
+    );
+  }
+  if (type.includes('inbound') || type.includes('message') || type === 'webhook_received') {
     return (
       <Badge variant="secondary" className="text-xs">
         <MessageCircle className="w-3 h-3 mr-1" />
@@ -71,15 +80,44 @@ function EventTypeBadge({ type }: { type: string }) {
       </Badge>
     );
   }
+  if (type === 'test_ping' || type.includes('test')) {
+    return (
+      <Badge variant="outline" className="text-xs">
+        <Webhook className="w-3 h-3 mr-1" />
+        Teste
+      </Badge>
+    );
+  }
   return <Badge variant="secondary" className="text-xs">{type}</Badge>;
 }
 
-function StatusBadge({ processed, error }: { processed: boolean; error: string | null }) {
+function StatusBadge({ processed, error, isInvalid, invalidReason }: { 
+  processed: boolean; 
+  error: string | null;
+  isInvalid?: boolean | null;
+  invalidReason?: string | null;
+}) {
   if (error) {
     return <Badge variant="destructive" className="text-xs">Erro</Badge>;
   }
   if (processed) {
+    // Check if it was processed despite signature issues
+    if (isInvalid || invalidReason?.includes('signature')) {
+      return (
+        <Badge className="bg-orange-500 text-xs" title="Processado com aviso de assinatura">
+          Processado ⚠️
+        </Badge>
+      );
+    }
     return <Badge className="bg-green-500 text-xs">Processado</Badge>;
+  }
+  // Pending but with signature issue = will be processed in compatibility mode
+  if (isInvalid || invalidReason?.includes('signature') || invalidReason?.includes('Signature')) {
+    return (
+      <Badge variant="outline" className="text-xs border-orange-500 text-orange-600" title="Modo compatibilidade ativo">
+        Compatibilidade
+      </Badge>
+    );
   }
   return <Badge variant="secondary" className="text-xs">Pendente</Badge>;
 }
@@ -103,11 +141,16 @@ function EventRow({ event, expanded, onToggle }: {
           ) : (
             <Clock className="w-4 h-4 text-muted-foreground flex-shrink-0" />
           )}
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <EventTypeBadge type={event.event_type} />
-              <StatusBadge processed={event.processed} error={event.processing_error} />
-            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <EventTypeBadge type={event.event_type} isInvalid={event.is_invalid} />
+                <StatusBadge 
+                  processed={event.processed} 
+                  error={event.processing_error} 
+                  isInvalid={event.is_invalid}
+                  invalidReason={event.invalid_reason}
+                />
+              </div>
             <p className="text-xs text-muted-foreground mt-1">
               {formatDistanceToNow(new Date(event.received_at), { addSuffix: true, locale: ptBR })}
             </p>
@@ -152,7 +195,10 @@ function EventRow({ event, expanded, onToggle }: {
           
           {event.invalid_reason && (
             <div className="p-2 bg-orange-500/10 rounded text-sm text-orange-700">
-              <strong>Inválido:</strong> {event.invalid_reason}
+              <strong>⚠️ Modo Compatibilidade:</strong> {event.invalid_reason}
+              <p className="text-xs mt-1 opacity-80">
+                O evento será processado mesmo sem assinatura válida. Configure WEBHOOK_SECRET no servidor se desejar validação.
+              </p>
             </div>
           )}
           
