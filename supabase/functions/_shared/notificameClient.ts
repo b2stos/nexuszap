@@ -84,7 +84,8 @@ export interface ChannelConfig {
  * Extrai e sanitiza o token de várias formas possíveis de input.
  * Suporta: token puro, comando curl, JSON, header
  * 
- * Aceita tokens de qualquer formato (não requer formato específico).
+ * IMPORTANTE: Aceita tokens de QUALQUER formato (UUID, JWT, string longa).
+ * O token oficial do NotificaMe É um UUID!
  */
 export function extractToken(raw: string | undefined | null): string {
   if (!raw) return '';
@@ -99,7 +100,7 @@ export function extractToken(raw: string | undefined | null): string {
   
   // Pattern A: Extract from curl command or header format
   const headerMatch = clean.match(/(?:X-API-Token|Authorization)[\s:]+['"]?(?:Bearer\s+)?([A-Za-z0-9_.-]+)['"]?/i);
-  if (headerMatch?.[1] && headerMatch[1].length >= 20) {
+  if (headerMatch?.[1] && headerMatch[1].length >= 10) {
     console.log('[NotificaMe] Token extracted from header/curl format');
     return headerMatch[1];
   }
@@ -118,20 +119,27 @@ export function extractToken(raw: string | undefined | null): string {
     }
   }
   
-  // Pattern C: Extract long alphanumeric token (may contain dots or dashes)
-  const tokenMatch = clean.match(/\b([A-Za-z0-9_.-]{40,})\b/);
+  // Pattern C: UUID format (this IS the official NotificaMe token format!)
+  const uuidMatch = clean.match(/\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i);
+  if (uuidMatch?.[1]) {
+    console.log('[NotificaMe] Token extracted as UUID');
+    return uuidMatch[1];
+  }
+  
+  // Pattern D: Extract long alphanumeric token (may contain dots or dashes)
+  const tokenMatch = clean.match(/\b([A-Za-z0-9_.-]{20,})\b/);
   if (tokenMatch?.[1]) {
     console.log('[NotificaMe] Token extracted from pattern');
     return tokenMatch[1];
   }
   
-  // Pattern D: Strip "Bearer " prefix
+  // Pattern E: Strip "Bearer " prefix
   if (clean.toLowerCase().startsWith('bearer ')) {
     return clean.substring(7).trim();
   }
   
-  // If the clean string is long enough, use it as-is
-  if (clean.length >= 20 && !clean.includes(' ')) {
+  // If the clean string is at least 10 chars and has no spaces, use it as-is
+  if (clean.length >= 10 && !clean.includes(' ')) {
     return clean;
   }
   

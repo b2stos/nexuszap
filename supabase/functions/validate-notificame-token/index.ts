@@ -4,7 +4,9 @@
  * Valida um token do NotificaMe e tenta descobrir automaticamente
  * os canais/subscriptions disponíveis.
  * 
- * Aceita: apenas o token do usuário
+ * IMPORTANTE: O token do NotificaMe É um UUID! Não rejeitar UUIDs.
+ * 
+ * Aceita: apenas o token do usuário (qualquer formato)
  * Retorna: token válido/inválido + lista de canais descobertos
  */
 
@@ -67,14 +69,14 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Extract clean token
+    // Extract clean token - UUID format is valid!
     const token = extractToken(rawToken);
     
-    if (!token) {
+    if (!token || token.length < 10) {
       return new Response(
         JSON.stringify({ 
           success: false, 
-          error: { detail: 'Token inválido. Verifique se você copiou corretamente.' } 
+          error: { detail: `Token inválido ou muito curto (${token.length} caracteres). Verifique se você copiou corretamente.` } 
         }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );

@@ -135,10 +135,11 @@ function looksLikeUUID(value: string): boolean {
   return UUID_REGEX.test(value.trim());
 }
 
-// Helper: check if value looks like a valid token (not UUID, min 30 chars)
-function looksLikeToken(value: string): boolean {
+// Helper: check if token is valid (any string >= 10 chars after trim)
+// NotificaMe tokens CAN be UUIDs - this is their official format
+function isValidToken(value: string): boolean {
   const clean = value.trim();
-  return clean.length >= 30 && !looksLikeUUID(clean);
+  return clean.length >= 10;
 }
 
 function CreateChannelDialog({
@@ -175,20 +176,11 @@ function CreateChannelDialog({
       return;
     }
 
-    // Check if user accidentally pasted a UUID (subscription_id) in token field
-    if (looksLikeUUID(trimmedApiKey)) {
-      toast({
-        title: 'Isso é um UUID, não um token!',
-        description: 'Você colou um UUID (Subscription ID) no campo Token. O token do NotificaMe é uma string longa (geralmente começa com letras/números). Verifique no painel do NotificaMe.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    if (trimmedApiKey.length < 30) {
+    // Validate minimum token length (10 chars)
+    if (trimmedApiKey.length < 10) {
       toast({
         title: 'Token muito curto',
-        description: `O token deve ter pelo menos 30 caracteres. Você colou ${trimmedApiKey.length} caracteres.`,
+        description: `O token deve ter pelo menos 10 caracteres. Você colou ${trimmedApiKey.length} caracteres.`,
         variant: 'destructive',
       });
       return;
@@ -247,20 +239,11 @@ function CreateChannelDialog({
       return;
     }
 
-    // Validate token is not a UUID (field inversion)
-    if (looksLikeUUID(trimmedApiKey)) {
+    // Validate minimum token length
+    if (trimmedApiKey.length < 10) {
       toast({
-        title: 'Campo invertido!',
-        description: 'O campo "Token" contém um UUID. O token é uma string longa, não um UUID. Coloque o UUID no campo "Subscription ID".',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    if (trimmedApiKey.length < 30) {
-      toast({
-        title: 'Token inválido',
-        description: `Token muito curto (${trimmedApiKey.length} caracteres). Verifique se copiou corretamente.`,
+        title: 'Token muito curto',
+        description: `Token deve ter pelo menos 10 caracteres. Atual: ${trimmedApiKey.length}`,
         variant: 'destructive',
       });
       return;
@@ -382,7 +365,7 @@ function CreateChannelDialog({
                     setDiscoveredChannels([]);
                     setShowManualInput(false);
                   }}
-                  placeholder="Cole seu token aqui (string longa, não UUID)"
+                  placeholder="Cole seu token aqui"
                   required
                   className="font-mono text-sm flex-1"
                 />
@@ -397,13 +380,8 @@ function CreateChannelDialog({
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Encontrado em: <span className="font-medium">NotificaMe → Configurações → API → Token</span>
+                Cole aqui o token oficial do NotificaMe (Configurações → API → Token).
               </p>
-              {apiKey && looksLikeUUID(apiKey.trim()) && (
-                <p className="text-xs text-destructive font-medium">
-                  ⚠️ Isso parece ser um UUID, não um token! O token é uma string longa.
-                </p>
-              )}
             </div>
 
             {/* Discovered channels */}
@@ -535,24 +513,14 @@ function ChannelCard({
     const trimmedSubscriptionId = subscriptionId.trim();
     const trimmedApiKey = apiKey.trim();
     
-    // Validate token if provided - check for field inversion
-    if (trimmedApiKey) {
-      if (looksLikeUUID(trimmedApiKey)) {
-        toast({
-          title: 'Campo invertido!',
-          description: 'O campo "Token" contém um UUID. O token é uma string longa. Coloque o UUID no campo "Subscription ID".',
-          variant: 'destructive',
-        });
-        return;
-      }
-      if (trimmedApiKey.length < 30) {
-        toast({
-          title: 'Token muito curto',
-          description: `Token deve ter pelo menos 30 caracteres. Atual: ${trimmedApiKey.length}`,
-          variant: 'destructive',
-        });
-        return;
-      }
+    // Validate token if provided - minimum length only (UUID format is valid)
+    if (trimmedApiKey && trimmedApiKey.length < 10) {
+      toast({
+        title: 'Token muito curto',
+        description: `Token deve ter pelo menos 10 caracteres. Atual: ${trimmedApiKey.length}`,
+        variant: 'destructive',
+      });
+      return;
     }
     
     // Validate new subscription ID if provided
@@ -738,19 +706,6 @@ function ChannelCard({
               <p className="font-medium text-orange-600">Canal não conectado</p>
               <p className="text-muted-foreground">
                 Clique em "Testar" para validar as credenciais. Certifique-se de que o webhook está configurado no NotificaMe.
-              </p>
-            </div>
-          </div>
-        )}
-        
-        {/* Field inversion warning */}
-        {config?.api_key && looksLikeUUID(String(config.api_key)) && (
-          <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-destructive mt-0.5" />
-            <div className="text-sm">
-              <p className="font-medium text-destructive">⚠️ Campos invertidos!</p>
-              <p className="text-muted-foreground">
-                O campo "Token" contém um UUID (Subscription ID). Edite o canal e corrija: o token é uma string longa.
               </p>
             </div>
           </div>
