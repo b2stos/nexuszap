@@ -84,10 +84,41 @@ Deno.serve(async (req) => {
     // API TOKEN: CENTRALIZADO NO SERVIDOR (ENV)
     // Não mais vem do banco de dados por canal
     // =====================================================
-    const apiToken = (Deno.env.get('NOTIFICAME_X_API_TOKEN') || '').trim();
+    const apiTokenRaw = Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
+    
+    // Extract JWT from various formats (curl command, JSON, header)
+    const extractToken = (raw: string): string => {
+      if (!raw) return '';
+      
+      // Keep only ASCII printable
+      let clean = '';
+      for (let i = 0; i < raw.length; i++) {
+        const code = raw.charCodeAt(i);
+        if (code >= 32 && code <= 126) clean += raw[i];
+      }
+      clean = clean.replace(/\s+/g, ' ').trim();
+      
+      // Try to extract JWT from curl command or header
+      const curlMatch = clean.match(/(?:X-API-Token|Authorization)[:\s]+['"]?([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)['"]?/i);
+      if (curlMatch?.[1]) {
+        console.log(`[test-channel][${requestId}] Extracted JWT from curl command`);
+        return curlMatch[1];
+      }
+      
+      // Try to find JWT pattern
+      const jwtMatch = clean.match(/\b([A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b/);
+      if (jwtMatch?.[1]) {
+        console.log(`[test-channel][${requestId}] Extracted JWT pattern`);
+        return jwtMatch[1];
+      }
+      
+      return clean;
+    };
+    
+    const apiToken = extractToken(apiTokenRaw);
     
     if (!apiToken) {
-      console.log(`[test-channel][${requestId}] NOTIFICAME_X_API_TOKEN not configured`);
+      console.log(`[test-channel][${requestId}] NOTIFICAME_X_API_TOKEN not configured or empty after extraction`);
       return new Response(
         JSON.stringify({
           success: false,
