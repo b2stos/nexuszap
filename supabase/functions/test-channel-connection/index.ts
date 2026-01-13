@@ -5,10 +5,12 @@
  * 
  * FLUXO DE VALIDAÇÃO:
  * 1. Verifica se canal interno existe no banco
- * 2. Valida formato do token (não pode ser UUID - seria inversão de campos)
+ * 2. Valida se token está configurado (aceita qualquer formato, incluindo UUID)
  * 3. Valida formato do subscription_id (deve ser UUID)
  * 4. Testa autenticação com NotificaMe
  * 5. Atualiza status para "connected" se tudo OK
+ * 
+ * IMPORTANTE: O token do NotificaMe PODE ser um UUID. Não rejeitar UUIDs!
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -23,20 +25,19 @@ const corsHeaders = {
 // UUID regex for validation
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Helper: detect if a string looks like a UUID (used to catch field inversion)
+// Helper: detect if a string looks like a UUID
 function looksLikeUUID(value: string): boolean {
   if (!value) return false;
   const clean = value.trim();
   return UUID_REGEX.test(clean);
 }
 
-// Helper: detect if a string looks like a valid NotificaMe token
-// NotificaMe tokens are typically long alphanumeric strings (JWT or API key format)
-function looksLikeToken(value: string): boolean {
+// Helper: detect if token is valid (any non-empty string >= 10 chars)
+// NotificaMe tokens CAN be UUIDs - this is their official format!
+function isValidToken(value: string): boolean {
   if (!value) return false;
   const clean = extractToken(value);
-  // Token should be at least 30 chars and NOT be a UUID
-  return clean.length >= 30 && !looksLikeUUID(clean);
+  return clean.length >= 10;
 }
 
 Deno.serve(async (req) => {
@@ -141,7 +142,8 @@ Deno.serve(async (req) => {
     const subscriptionId = (channelConfig?.subscription_id || '').trim();
 
     // ====================================================
-    // CHECK B: Token está configurado e não é UUID invertido?
+    // CHECK B: Token está configurado?
+    // NotificaMe tokens CAN be UUIDs - do NOT reject UUIDs!
     // ====================================================
     if (!rawApiKey) {
       console.log(`[test-channel][${requestId}] Token not configured`);
@@ -157,30 +159,16 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Detect field inversion: api_key looks like UUID (should be subscription_id)
-    if (looksLikeUUID(rawApiKey)) {
-      console.log(`[test-channel][${requestId}] FIELD INVERSION DETECTED: api_key is UUID`);
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: {
-            detail: 'Os campos parecem invertidos! O campo "Token" contém um UUID (que deveria ser o Subscription ID). Corrija editando o canal: coloque o token longo no campo "Token" e o UUID no campo "Subscription ID".',
-            code: 'FIELD_INVERSION',
-          },
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
     const token = extractToken(rawApiKey);
     
-    if (!token || token.length < 30) {
+    // Only check minimum length - UUID format is valid!
+    if (!token || token.length < 10) {
       console.log(`[test-channel][${requestId}] Token too short: ${token.length} chars`);
       return new Response(
         JSON.stringify({
           success: false,
           error: {
-            detail: `Token muito curto (${token.length} caracteres). O token do NotificaMe deve ter pelo menos 30 caracteres. Verifique se copiou corretamente.`,
+            detail: `Token muito curto (${token.length} caracteres). O token do NotificaMe deve ter pelo menos 10 caracteres.`,
             code: 'TOKEN_TOO_SHORT',
           },
         }),
