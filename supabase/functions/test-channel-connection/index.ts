@@ -1,22 +1,21 @@
 /**
  * Edge Function: test-channel-connection
  * 
- * Testa a conexão com o BSP NotificaMe usando o cliente centralizado.
+ * Testa a conexão do canal com o NotificaMe.
+ * Resolve token por tenant/canal do banco de dados.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { notificame } from '../_shared/notificameClient.ts';
+import { resolveToken, testConnection, maskToken, ChannelConfig } from '../_shared/notificameClient.ts';
 
+// CORS headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-interface ChannelConfig {
-  subscription_id?: string;
-}
-
 Deno.serve(async (req) => {
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -25,6 +24,7 @@ Deno.serve(async (req) => {
   console.log(`[test-channel][${requestId}] Starting test`);
 
   try {
+    // Get authorization header
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
       return new Response(
@@ -33,6 +33,7 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Create Supabase client with user's auth
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     
@@ -40,6 +41,7 @@ Deno.serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
 
+    // Get current user
     const { data: { user }, error: userError } = await supabase.auth.getUser();
     if (userError || !user) {
       return new Response(
@@ -48,6 +50,7 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Parse request body
     const body = await req.json();
     const { channel_id } = body;
 
@@ -58,11 +61,30 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Get channel
+    console.log(`[test-channel][${requestId}] User ${user.id} testing channel ${channel_id}`);
+
+    // Get user's tenant
+    const { data: tenantUser, error: tenantError } = await supabase
+      .from('tenant_users')
+      .select('tenant_id, role')
+      .eq('user_id', user.id)
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
+
+    if (tenantError || !tenantUser) {
+      return new Response(
+        JSON.stringify({ success: false, error: { detail: 'Tenant não encontrado' } }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Get channel (with tenant validation)
     const { data: channel, error: channelError } = await supabase
       .from('channels')
-      .select('id, provider_config')
+      .select('id, name, provider_config, status, tenant_id')
       .eq('id', channel_id)
+      .eq('tenant_id', tenantUser.tenant_id)
       .single();
 
     if (channelError || !channel) {
@@ -72,25 +94,28 @@ Deno.serve(async (req) => {
       );
     }
 
-    const config = channel.provider_config as ChannelConfig;
-
-    // Check if client has token
-    if (!notificame.hasToken()) {
+    // Resolve token from channel config (tenant-specific) or fallback to env
+    const channelConfig = channel.provider_config as ChannelConfig;
+    const token = resolveToken(channelConfig);
+    
+    if (!token) {
       console.log(`[test-channel][${requestId}] Token not configured`);
       return new Response(
         JSON.stringify({
           success: false,
           error: {
-            detail: 'Token NotificaMe não configurado no servidor. Entre em contato com o administrador para configurar NOTIFICAME_TOKEN.',
-            code: 'MISSING_SERVER_TOKEN',
+            detail: 'Token NotificaMe não configurado. Configure o token no canal.',
+            code: 'MISSING_TOKEN',
           },
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    console.log(`[test-channel][${requestId}] Token resolved: ${maskToken(token)}`);
+
     // Check subscription_id
-    const subscriptionId = (config?.subscription_id || '').trim();
+    const subscriptionId = (channelConfig?.subscription_id || '').trim();
 
     if (!subscriptionId) {
       return new Response(
@@ -121,18 +146,17 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`[test-channel][${requestId}] Testing connection for channel ${channel_id}`);
-    console.log(`[test-channel][${requestId}] Subscription ID: ${subscriptionId.substring(0, 8)}...`);
+    console.log(`[test-channel][${requestId}] Testing connection with subscription ${subscriptionId.substring(0, 8)}...`);
 
-    // Test connection using centralized client
-    const result = await notificame.testConnection(subscriptionId);
+    // Test connection with resolved token
+    const result = await testConnection(token);
 
     if (!result.success && result.error?.code === 'INVALID_TOKEN') {
       return new Response(
         JSON.stringify({
           success: false,
           error: {
-            detail: `Credenciais rejeitadas pelo NotificaMe (HTTP ${result.status}). O Token da API no servidor pode estar incorreto.`,
+            detail: `Credenciais rejeitadas pelo NotificaMe (HTTP ${result.status}). Verifique o token configurado no canal.`,
             code: `HTTP_${result.status}`,
             http_status: result.status,
           },
@@ -160,7 +184,7 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({
           success: true,
-          message: `✅ Token autenticado com sucesso! Credenciais válidas.`,
+          message: '✅ Token autenticado com sucesso! Credenciais válidas.',
           http_status: result.status,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

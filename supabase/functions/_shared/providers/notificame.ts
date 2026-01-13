@@ -97,10 +97,11 @@ async function notificameRequest<T = unknown>(
     ...options.headers,
   };
   
-  // Auth header - Use server-side ENV: NOTIFICAME_X_API_TOKEN
-  // Falls back to config.api_key for backwards compatibility, but ENV takes priority
-  const envApiTokenRaw = Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
+  // Auth header - PRIORITY:
+  // 1. config.api_key (token por tenant/canal do banco)
+  // 2. ENV: NOTIFICAME_TOKEN ou NOTIFICAME_X_API_TOKEN (fallback global)
   const configApiTokenRaw = config.api_key || '';
+  const envApiTokenRaw = Deno.env.get('NOTIFICAME_TOKEN') || Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
   
   // CRITICAL: Extract and sanitize token
   // Handles cases where user pasted:
@@ -121,8 +122,6 @@ async function notificameRequest<T = unknown>(
     }
     clean = clean.replace(/\s+/g, ' ').trim();
     
-    // Step 2: Try to extract JWT from various formats
-    
     // Pattern A: If it's a curl command, extract X-API-Token or Bearer token
     const curlTokenMatch = clean.match(/(?:X-API-Token|Authorization)[:\s]+['"]?([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)['"]?/i);
     if (curlTokenMatch && curlTokenMatch[1]) {
@@ -134,7 +133,7 @@ async function notificameRequest<T = unknown>(
     if (clean.startsWith('{')) {
       try {
         const parsed = JSON.parse(clean);
-        const extracted = parsed.token || parsed.api_token || parsed['X-API-Token'] || parsed.access_token;
+        const extracted = parsed.token || parsed.api_token || parsed['X-API-Token'] || parsed.access_token || parsed.api_key;
         if (extracted) {
           console.log('[NotificaMe] Extracted token from JSON object');
           return String(extracted).trim();
@@ -160,14 +159,22 @@ async function notificameRequest<T = unknown>(
     return clean;
   };
   
-  const envApiToken = extractToken(envApiTokenRaw);
+  // PRIORITY: Token do canal (por tenant) > Token global (ENV)
   const configApiToken = extractToken(configApiTokenRaw);
-  const apiToken = envApiToken || configApiToken;
+  const envApiToken = extractToken(envApiTokenRaw);
+  const apiToken = configApiToken || envApiToken;
+  
+  // Mask token for secure logging (only last 4 chars)
+  const maskToken = (token: string): string => {
+    if (!token) return '[EMPTY]';
+    if (token.length <= 8) return '[SHORT]';
+    return `***${token.substring(token.length - 4)}`;
+  };
 
   if (!apiToken) {
     throw new ProviderException(
       createProviderError('auth', 'MISSING_TOKEN', 
-        'Token NotificaMe não configurado no servidor. Configure NOTIFICAME_X_API_TOKEN.')
+        'Token NotificaMe não configurado. Configure o token no canal ou na variável NOTIFICAME_TOKEN.')
     );
   }
 
@@ -177,9 +184,9 @@ async function notificameRequest<T = unknown>(
     );
   }
   
-  // Log sanitized token info for debugging (masked)
-  const tokenPreview = apiToken.length > 10 ? `${apiToken.substring(0, 8)}...${apiToken.substring(apiToken.length - 4)}` : '[SHORT]';
-  console.log(`[NotificaMe] Using API Token: ${tokenPreview} (length: ${apiToken.length})`);
+  // Log sanitized token info for debugging (masked - only last 4 chars)
+  const tokenSource = configApiToken ? 'channel config' : 'environment';
+  console.log(`[NotificaMe] Using API Token from ${tokenSource}: ${maskToken(apiToken)} (length: ${apiToken.length})`);
   
   headers['X-API-Token'] = apiToken;
 
