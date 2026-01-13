@@ -296,11 +296,61 @@ export async function notificameRequest<T = unknown>(
 // HELPERS
 // ===========================================
 
+/**
+ * Mapeia erros da API NotificaMe para mensagens amigáveis
+ */
+function mapErrorToFriendlyMessage(status: number, code: string, originalMessage: string): string {
+  // Mapeamento por código HTTP
+  switch (status) {
+    case 401:
+    case 403:
+      return 'Token inválido ou expirado. Reconecte o NotificaMe em Configurações → Canais.';
+    case 404:
+      return 'Canal não encontrado. Reconecte para sincronizar o canal automaticamente.';
+    case 429:
+      return 'Limite de envio atingido. Tente novamente em instantes.';
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+      return 'Instabilidade no provedor. Tentaremos novamente.';
+  }
+  
+  // Mapeamento por código de erro
+  const lowerCode = code.toLowerCase();
+  if (lowerCode.includes('authentication') || lowerCode.includes('unauthorized')) {
+    return 'Token inválido ou expirado. Reconecte o NotificaMe em Configurações → Canais.';
+  }
+  if (lowerCode.includes('rate_limit') || lowerCode.includes('too_many')) {
+    return 'Limite de envio atingido. Tente novamente em instantes.';
+  }
+  if (lowerCode.includes('not_found') || lowerCode.includes('channel')) {
+    return 'Canal não encontrado. Verifique as configurações do canal.';
+  }
+  if (lowerCode.includes('invalid_phone') || lowerCode.includes('recipient')) {
+    return 'Número de telefone inválido ou não existe no WhatsApp.';
+  }
+  if (lowerCode.includes('template')) {
+    return 'Template não aprovado ou não encontrado. Verifique o status do template.';
+  }
+  if (lowerCode.includes('window') || lowerCode.includes('24h')) {
+    return 'Janela de 24h fechada. Use um template para iniciar a conversa.';
+  }
+  
+  // Fallback: retorna mensagem original se for curta, senão genérica
+  if (originalMessage && originalMessage.length < 100) {
+    return originalMessage;
+  }
+  
+  return 'Erro ao enviar mensagem. Tente novamente.';
+}
+
 function parseError(status: number, data: Record<string, unknown>): { code: string; message: string; isRetryable: boolean } {
-  const code = String(data.code || data.error || `HTTP_${status}`);
-  const message = String(data.message || data.detail || data.error || 'Erro desconhecido');
+  const code = String(data.code || data.error || data.error_code || `HTTP_${status}`);
+  const rawMessage = String(data.message || data.detail || data.error || data.error_message || 'Erro desconhecido');
+  const friendlyMessage = mapErrorToFriendlyMessage(status, code, rawMessage);
   const isRetryable = status >= 500 || status === 429;
-  return { code, message, isRetryable };
+  return { code, message: friendlyMessage, isRetryable };
 }
 
 function normalizePhone(phone: string): string {
