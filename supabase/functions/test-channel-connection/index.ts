@@ -1,14 +1,11 @@
 /**
  * Edge Function: test-channel-connection
  * 
- * Testa a conexão com o BSP NotificaMe verificando se as credenciais estão corretas.
- * 
- * CREDENCIAIS:
- * - API Token: CENTRALIZADO no servidor via ENV: NOTIFICAME_X_API_TOKEN
- * - Subscription ID: Configurado por canal no banco de dados
+ * Testa a conexão com o BSP NotificaMe usando o cliente centralizado.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { notificame } from '../_shared/notificameClient.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -17,9 +14,6 @@ const corsHeaders = {
 
 interface ChannelConfig {
   subscription_id?: string;
-  base_url?: string;
-  // api_key is DEPRECATED - now comes from ENV: NOTIFICAME_X_API_TOKEN
-  api_key?: string;
 }
 
 Deno.serve(async (req) => {
@@ -80,50 +74,14 @@ Deno.serve(async (req) => {
 
     const config = channel.provider_config as ChannelConfig;
 
-    // =====================================================
-    // API TOKEN: CENTRALIZADO NO SERVIDOR (ENV)
-    // Não mais vem do banco de dados por canal
-    // =====================================================
-    const apiTokenRaw = Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
-    
-    // Extract JWT from various formats (curl command, JSON, header)
-    const extractToken = (raw: string): string => {
-      if (!raw) return '';
-      
-      // Keep only ASCII printable
-      let clean = '';
-      for (let i = 0; i < raw.length; i++) {
-        const code = raw.charCodeAt(i);
-        if (code >= 32 && code <= 126) clean += raw[i];
-      }
-      clean = clean.replace(/\s+/g, ' ').trim();
-      
-      // Try to extract JWT from curl command or header
-      const curlMatch = clean.match(/(?:X-API-Token|Authorization)[:\s]+['"]?([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)['"]?/i);
-      if (curlMatch?.[1]) {
-        console.log(`[test-channel][${requestId}] Extracted JWT from curl command`);
-        return curlMatch[1];
-      }
-      
-      // Try to find JWT pattern
-      const jwtMatch = clean.match(/\b([A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b/);
-      if (jwtMatch?.[1]) {
-        console.log(`[test-channel][${requestId}] Extracted JWT pattern`);
-        return jwtMatch[1];
-      }
-      
-      return clean;
-    };
-    
-    const apiToken = extractToken(apiTokenRaw);
-    
-    if (!apiToken) {
-      console.log(`[test-channel][${requestId}] NOTIFICAME_X_API_TOKEN not configured or empty after extraction`);
+    // Check if client has token
+    if (!notificame.hasToken()) {
+      console.log(`[test-channel][${requestId}] Token not configured`);
       return new Response(
         JSON.stringify({
           success: false,
           error: {
-            detail: 'Token NotificaMe não configurado no servidor. Entre em contato com o administrador para configurar NOTIFICAME_X_API_TOKEN.',
+            detail: 'Token NotificaMe não configurado no servidor. Entre em contato com o administrador para configurar NOTIFICAME_TOKEN.',
             code: 'MISSING_SERVER_TOKEN',
           },
         }),
@@ -131,24 +89,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Validate token is not JSON (common mistake)
-    if (apiToken.startsWith('{') || apiToken.startsWith('[')) {
-      console.log(`[test-channel][${requestId}] Token appears to be JSON, not a valid token`);
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: {
-            detail: 'Token do servidor está em formato inválido (JSON). Configure apenas o token puro.',
-            code: 'INVALID_TOKEN_FORMAT',
-          },
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // =====================================================
-    // SUBSCRIPTION ID: CONFIGURADO POR CANAL
-    // =====================================================
+    // Check subscription_id
     const subscriptionId = (config?.subscription_id || '').trim();
 
     if (!subscriptionId) {
@@ -167,12 +108,12 @@ Deno.serve(async (req) => {
     // Validate subscription_id is a UUID
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(subscriptionId)) {
-      console.log(`[test-channel][${requestId}] Subscription ID format invalid - not a UUID`);
+      console.log(`[test-channel][${requestId}] Subscription ID format invalid`);
       return new Response(
         JSON.stringify({
           success: false,
           error: {
-            detail: `Subscription ID inválido. Deve ser um UUID (ex: 066f4d91-fd0c-4726-8b1c-...). Valor recebido: "${subscriptionId.substring(0, 20)}"`,
+            detail: `Subscription ID inválido. Deve ser um UUID. Valor: "${subscriptionId.substring(0, 20)}..."`,
             code: 'INVALID_SUBSCRIPTION_ID_FORMAT',
           },
         }),
@@ -180,79 +121,27 @@ Deno.serve(async (req) => {
       );
     }
 
-    // =====================================================
-    // BASE URL: CENTRALIZADO
-    // =====================================================
-    const DEFAULT_BASE_URL = 'https://api.notificame.com.br/v1';
-    const baseUrl = DEFAULT_BASE_URL;
-
     console.log(`[test-channel][${requestId}] Testing connection for channel ${channel_id}`);
-    console.log(`[test-channel][${requestId}] API Token length: ${apiToken.length}`);
-    // SECURITY: Mask token in logs (show only first 6 and last 4 chars)
-    const maskedToken = apiToken.length > 10 
-      ? `${apiToken.substring(0, 6)}...${apiToken.substring(apiToken.length - 4)}`
-      : '***';
-    console.log(`[test-channel][${requestId}] API Token (masked): ${maskedToken}`);
     console.log(`[test-channel][${requestId}] Subscription ID: ${subscriptionId.substring(0, 8)}...`);
 
-    // Test endpoint: POST /v1/channels/whatsapp/messages with empty payload
-    // Expected: 401/403 = bad token, 400/422 = token OK (payload rejected)
-    const testEndpoint = `${baseUrl}/channels/whatsapp/messages`;
+    // Test connection using centralized client
+    const result = await notificame.testConnection(subscriptionId);
 
-    console.log(`[test-channel][${requestId}] >>> POST ${testEndpoint}`);
-
-    const testResponse = await fetch(testEndpoint, {
-      method: 'POST',
-      headers: {
-        'X-API-Token': apiToken,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({}),
-    });
-
-    const responseText = await testResponse.text();
-    let responseJson: Record<string, unknown> | null = null;
-    try {
-      responseJson = JSON.parse(responseText);
-    } catch {
-      // ignore
-    }
-
-    const providerMessage =
-      (responseJson && (responseJson.message || responseJson.error || responseJson.detail)) ||
-      responseText;
-
-    console.log(`[test-channel][${requestId}] Response status: ${testResponse.status}`);
-    // SECURITY: Mask any tokens that might appear in error response
-    const sanitizedProviderMessage = String(providerMessage)
-      .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[JWT_MASKED]')
-      .substring(0, 300);
-    console.log(`[test-channel][${requestId}] Response body: ${sanitizedProviderMessage}`);
-
-    // Analyze response
-    const invalidToken =
-      testResponse.status === 401 ||
-      testResponse.status === 403 ||
-      /invalid token/i.test(String(providerMessage)) ||
-      /unauthorized/i.test(String(providerMessage)) ||
-      /não autorizado/i.test(String(providerMessage));
-
-    if (invalidToken) {
+    if (!result.success && result.error?.code === 'INVALID_TOKEN') {
       return new Response(
         JSON.stringify({
           success: false,
           error: {
-            detail: `Credenciais rejeitadas pelo NotificaMe (HTTP ${testResponse.status}). O Token da API no servidor pode estar incorreto. Contate o administrador.`,
-            code: `HTTP_${testResponse.status}`,
-            http_status: testResponse.status,
+            detail: `Credenciais rejeitadas pelo NotificaMe (HTTP ${result.status}). O Token da API no servidor pode estar incorreto.`,
+            code: `HTTP_${result.status}`,
+            http_status: result.status,
           },
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 400/422 here is expected (payload invalid) but proves auth is working
-    if (testResponse.status === 400 || testResponse.status === 422) {
+    if (result.success) {
       // Update channel status to connected
       const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
       const adminSupabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -272,34 +161,23 @@ Deno.serve(async (req) => {
         JSON.stringify({
           success: true,
           message: `✅ Token autenticado com sucesso! Credenciais válidas.`,
-          http_status: testResponse.status,
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    if (!testResponse.ok) {
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: {
-            detail: `Erro inesperado do NotificaMe (HTTP ${testResponse.status}). Resposta: ${String(providerMessage).substring(0, 150)}`,
-            code: `HTTP_${testResponse.status}`,
-            http_status: testResponse.status,
-          },
+          http_status: result.status,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     return new Response(
-      JSON.stringify({ 
-        success: true, 
-        message: `✅ Credenciais validadas com sucesso! (HTTP ${testResponse.status})`,
-        http_status: testResponse.status,
+      JSON.stringify({
+        success: false,
+        error: {
+          detail: result.error?.message || 'Erro ao testar conexão',
+          code: result.error?.code || 'UNKNOWN',
+        },
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
+
   } catch (error) {
     console.error(`[test-channel][${requestId}] Error:`, error);
     return new Response(
