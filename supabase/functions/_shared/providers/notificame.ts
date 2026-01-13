@@ -102,13 +102,21 @@ async function notificameRequest<T = unknown>(
   const envApiTokenRaw = Deno.env.get('NOTIFICAME_X_API_TOKEN') || '';
   const configApiTokenRaw = config.api_key || '';
   
-  // CRITICAL: Sanitize token to remove newlines, carriage returns, and extra whitespace
+  // CRITICAL: Sanitize token to remove ALL non-ASCII-printable characters
+  // ByteString requires only ASCII characters (codes 0-127, printable subset 32-126)
   // This prevents "not a valid ByteString" errors in fetch headers
   const sanitizeToken = (token: string): string => {
-    return token
-      .replace(/[\r\n\t]/g, '') // Remove CR, LF, tabs
-      .replace(/\s+/g, ' ')     // Collapse multiple spaces
-      .trim();                   // Trim edges
+    // Step 1: Keep only ASCII printable characters (space to tilde)
+    let clean = '';
+    for (let i = 0; i < token.length; i++) {
+      const code = token.charCodeAt(i);
+      // Keep only printable ASCII: 32 (space) to 126 (~)
+      if (code >= 32 && code <= 126) {
+        clean += token[i];
+      }
+    }
+    // Step 2: Collapse multiple spaces and trim
+    return clean.replace(/\s+/g, ' ').trim();
   };
   
   const envApiToken = sanitizeToken(envApiTokenRaw);
