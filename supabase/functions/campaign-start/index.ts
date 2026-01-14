@@ -17,6 +17,63 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// ============================================
+// TRACE ID & STANDARDIZED RESPONSE HELPERS
+// ============================================
+
+function generateTraceId(): string {
+  return crypto.randomUUID();
+}
+
+interface StandardResponse {
+  ok: boolean;
+  traceId: string;
+  success?: boolean; // Legacy compatibility
+  data?: unknown;
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+  // Legacy fields for compatibility
+  campaign_id?: string;
+  enqueued?: number;
+}
+
+function createSuccessResponse(traceId: string, data: Record<string, unknown>, status = 200): Response {
+  const body: StandardResponse = {
+    ok: true,
+    success: true, // Legacy
+    traceId,
+    ...data,
+  };
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json', 'x-trace-id': traceId },
+  });
+}
+
+function createErrorResponse(
+  traceId: string,
+  code: string,
+  message: string,
+  status: number,
+  details?: unknown,
+  extraFields: Record<string, unknown> = {}
+): Response {
+  const body: StandardResponse = {
+    ok: false,
+    success: false, // Legacy
+    traceId,
+    error: { code, message, details },
+    ...extraFields,
+  };
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json', 'x-trace-id': traceId },
+  });
+}
+
 const NOTIFICAME_BASE_URL = 'https://api.notificame.com.br/v1';
 
 interface ContactData {
@@ -177,12 +234,14 @@ async function validateChannelConnection(
 }
 
 Deno.serve(async (req) => {
+  const traceId = generateTraceId();
+  
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { headers: { ...corsHeaders, 'x-trace-id': traceId } });
   }
 
-  console.log('[campaign-start] ====== START ======');
+  console.log(`[campaign-start][${traceId}] ====== START ======`);
   
   try {
     // Get Supabase client with service role for bypassing RLS
@@ -191,32 +250,33 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Parse request body
-    const body: RequestBody = await req.json();
+    let body: RequestBody;
+    try {
+      body = await req.json();
+    } catch (parseError) {
+      console.error(`[campaign-start][${traceId}] Invalid JSON:`, parseError);
+      return createErrorResponse(traceId, 'INVALID_JSON', 'Corpo da requisição inválido', 400);
+    }
+    
     const { campaign_id, contacts, speed = 'normal' } = body;
 
-    console.log('[campaign-start] campaign_id:', campaign_id);
-    console.log('[campaign-start] contacts count:', contacts?.length || 0);
-    console.log('[campaign-start] speed:', speed);
+    console.log(`[campaign-start][${traceId}] campaign_id:`, campaign_id);
+    console.log(`[campaign-start][${traceId}] contacts count:`, contacts?.length || 0);
+    console.log(`[campaign-start][${traceId}] speed:`, speed);
 
     // Validate required fields
     if (!campaign_id) {
-      console.error('[campaign-start] Missing campaign_id');
-      return new Response(
-        JSON.stringify({ success: false, error: 'campaign_id is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      console.error(`[campaign-start][${traceId}] Missing campaign_id`);
+      return createErrorResponse(traceId, 'MISSING_CAMPAIGN_ID', 'campaign_id é obrigatório', 400, undefined, { enqueued: 0 });
     }
 
     if (!contacts || contacts.length === 0) {
-      console.error('[campaign-start] No contacts provided');
-      return new Response(
-        JSON.stringify({ success: false, error: 'No contacts provided', enqueued: 0 }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      console.error(`[campaign-start][${traceId}] No contacts provided`);
+      return createErrorResponse(traceId, 'NO_CONTACTS', 'Nenhum contato fornecido', 400, undefined, { enqueued: 0 });
     }
 
     // 1. Fetch campaign WITH channel details for validation
-    console.log('[campaign-start] Fetching campaign with channel...');
+    console.log(`[campaign-start][${traceId}] Fetching campaign with channel...`);
     const { data: campaign, error: campaignError } = await supabase
       .from('mt_campaigns')
       .select(`
@@ -229,21 +289,22 @@ Deno.serve(async (req) => {
       .single();
 
     if (campaignError || !campaign) {
-      console.error('[campaign-start] Campaign not found:', campaignError);
-      return new Response(
-        JSON.stringify({ success: false, error: 'Campaign not found', details: campaignError?.message }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      console.error(`[campaign-start][${traceId}] Campaign not found:`, campaignError);
+      return createErrorResponse(
+        traceId,
+        'CAMPAIGN_NOT_FOUND',
+        'Campanha não encontrada',
+        404,
+        { db_error: campaignError?.message },
+        { enqueued: 0 }
       );
     }
 
-    console.log('[campaign-start] Campaign found:', campaign.name, 'status:', campaign.status);
+    console.log(`[campaign-start][${traceId}] Campaign found:`, campaign.name, 'status:', campaign.status);
 
     if (campaign.status === 'running') {
-      console.warn('[campaign-start] Campaign already running');
-      return new Response(
-        JSON.stringify({ success: false, error: 'Campaign is already running' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      console.warn(`[campaign-start][${traceId}] Campaign already running`);
+      return createErrorResponse(traceId, 'ALREADY_RUNNING', 'Campanha já está em execução', 400, undefined, { enqueued: 0 });
     }
 
     // 2. **NEW: Validate channel connection BEFORE proceeding**
@@ -257,20 +318,18 @@ Deno.serve(async (req) => {
       provider_phone_id: channelData.provider_phone_id as string | null,
     };
     
-    console.log('[campaign-start] Channel status:', channel.status);
+    console.log(`[campaign-start][${traceId}] Channel status:`, channel.status);
     
     // Check channel status first
     if (channel.status !== 'connected') {
-      console.error('[campaign-start] Channel not connected:', channel.status);
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'Canal desconectado',
-          error_code: 'CHANNEL_DISCONNECTED',
-          details: `O canal "${channel.name}" não está conectado. Reconecte em Configurações → Canais.`,
-          enqueued: 0 
-        }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      console.error(`[campaign-start][${traceId}] Channel not connected:`, channel.status);
+      return createErrorResponse(
+        traceId,
+        'CHANNEL_DISCONNECTED',
+        `O canal "${channel.name}" não está conectado`,
+        400,
+        'Reconecte em Configurações → Canais.',
+        { enqueued: 0 }
       );
     }
     
@@ -279,26 +338,24 @@ Deno.serve(async (req) => {
     const validation = await validateChannelConnection(channel.provider_config, subscriptionId);
     
     if (!validation.ok) {
-      console.error('[campaign-start] Channel validation failed:', validation.reason);
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: validation.reason,
-          error_code: validation.code,
-          details: 'Verifique a configuração do canal em Configurações → Canais.',
-          enqueued: 0 
-        }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      console.error(`[campaign-start][${traceId}] Channel validation failed:`, validation.reason);
+      return createErrorResponse(
+        traceId,
+        validation.code || 'CHANNEL_VALIDATION_ERROR',
+        validation.reason || 'Falha ao validar canal',
+        400,
+        'Verifique a configuração do canal em Configurações → Canais.',
+        { enqueued: 0 }
       );
     }
     
-    console.log('[campaign-start] Channel validation passed ✓');
+    console.log(`[campaign-start][${traceId}] Channel validation passed ✓`);
 
     const tenantId = campaign.tenant_id;
-    console.log('[campaign-start] Tenant ID:', tenantId);
+    console.log(`[campaign-start][${traceId}] Tenant ID:`, tenantId);
 
     // 2. Normalize phone numbers and prepare contacts for upsert
-    console.log('[campaign-start] Normalizing phones and preparing upsert...');
+    console.log(`[campaign-start][${traceId}] Normalizing phones and preparing upsert...`);
     const normalizePhone = (phone: string): string => {
       // Remove all non-numeric characters
       let normalized = phone.replace(/\D/g, '');
@@ -330,14 +387,11 @@ Deno.serve(async (req) => {
     }
 
     const uniqueContacts = Array.from(contactsByPhone.values());
-    console.log('[campaign-start] Unique contacts after normalization:', uniqueContacts.length);
+    console.log(`[campaign-start][${traceId}] Unique contacts after normalization:`, uniqueContacts.length);
 
     if (uniqueContacts.length === 0) {
-      console.error('[campaign-start] No valid contacts after normalization');
-      return new Response(
-        JSON.stringify({ success: false, error: 'No valid phone numbers found', enqueued: 0 }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      console.error(`[campaign-start][${traceId}] No valid contacts after normalization`);
+      return createErrorResponse(traceId, 'NO_VALID_PHONES', 'Nenhum número de telefone válido encontrado', 400, undefined, { enqueued: 0 });
     }
 
     // 3. Upsert contacts to mt_contacts (uses unique constraint on tenant_id + phone)
@@ -368,43 +422,42 @@ Deno.serve(async (req) => {
         .select('id, phone');
 
       if (upsertError) {
-        console.error('[campaign-start] Upsert batch error:', upsertError);
+        console.error(`[campaign-start][${traceId}] Upsert batch error:`, upsertError);
         upsertErrors.push(`Batch ${Math.floor(i/BATCH_SIZE) + 1}: ${upsertError.message}`);
       } else if (upsertedBatch) {
         upsertedBatch.forEach(c => upsertedContactIds.push(c.id));
-        console.log(`[campaign-start] Upserted batch ${Math.floor(i/BATCH_SIZE) + 1}: ${upsertedBatch.length} contacts`);
+        console.log(`[campaign-start][${traceId}] Upserted batch ${Math.floor(i/BATCH_SIZE) + 1}: ${upsertedBatch.length} contacts`);
       }
     }
 
     // If we couldn't upsert any contacts, fail
     if (upsertedContactIds.length === 0) {
-      console.error('[campaign-start] No contacts upserted');
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'Failed to upsert contacts to mt_contacts', 
-          details: upsertErrors.join('; '),
-          enqueued: 0 
-        }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      console.error(`[campaign-start][${traceId}] No contacts upserted`);
+      return createErrorResponse(
+        traceId,
+        'UPSERT_FAILED',
+        'Falha ao salvar contatos no banco',
+        500,
+        upsertErrors.join('; '),
+        { enqueued: 0 }
       );
     }
 
-    console.log('[campaign-start] Total contacts upserted:', upsertedContactIds.length);
+    console.log(`[campaign-start][${traceId}] Total contacts upserted:`, upsertedContactIds.length);
 
     // 4. Delete any existing recipients for this campaign (in case of restart)
-    console.log('[campaign-start] Cleaning existing recipients...');
+    console.log(`[campaign-start][${traceId}] Cleaning existing recipients...`);
     const { error: deleteError } = await supabase
       .from('campaign_recipients')
       .delete()
       .eq('campaign_id', campaign_id);
 
     if (deleteError) {
-      console.warn('[campaign-start] Failed to delete existing recipients:', deleteError);
+      console.warn(`[campaign-start][${traceId}] Failed to delete existing recipients:`, deleteError);
     }
 
     // 5. Insert campaign_recipients with valid mt_contacts IDs
-    console.log('[campaign-start] Inserting campaign recipients...');
+    console.log(`[campaign-start][${traceId}] Inserting campaign recipients...`);
     
     const recipientsToInsert = upsertedContactIds.map(contactId => ({
       campaign_id: campaign_id,
@@ -426,32 +479,31 @@ Deno.serve(async (req) => {
         .select('id');
 
       if (insertError) {
-        console.error('[campaign-start] Insert recipients batch error:', insertError);
+        console.error(`[campaign-start][${traceId}] Insert recipients batch error:`, insertError);
         insertErrors.push(`Batch ${Math.floor(i/BATCH_SIZE) + 1}: ${insertError.message}`);
       } else if (insertedBatch) {
         insertedCount += insertedBatch.length;
-        console.log(`[campaign-start] Inserted recipients batch ${Math.floor(i/BATCH_SIZE) + 1}: ${insertedBatch.length}`);
+        console.log(`[campaign-start][${traceId}] Inserted recipients batch ${Math.floor(i/BATCH_SIZE) + 1}: ${insertedBatch.length}`);
       }
     }
 
-    console.log('[campaign-start] Total recipients inserted:', insertedCount);
+    console.log(`[campaign-start][${traceId}] Total recipients inserted:`, insertedCount);
 
     // If we couldn't insert any recipients, fail
     if (insertedCount === 0) {
-      console.error('[campaign-start] No recipients inserted');
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'Failed to insert campaign recipients', 
-          details: insertErrors.join('; '),
-          enqueued: 0 
-        }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      console.error(`[campaign-start][${traceId}] No recipients inserted`);
+      return createErrorResponse(
+        traceId,
+        'INSERT_RECIPIENTS_FAILED',
+        'Falha ao criar destinatários da campanha',
+        500,
+        insertErrors.join('; '),
+        { enqueued: 0 }
       );
     }
 
     // 6. Update campaign status to running
-    console.log('[campaign-start] Updating campaign status to running...');
+    console.log(`[campaign-start][${traceId}] Updating campaign status to running...`);
     const { error: updateError } = await supabase
       .from('mt_campaigns')
       .update({
@@ -463,22 +515,21 @@ Deno.serve(async (req) => {
       .eq('id', campaign_id);
 
     if (updateError) {
-      console.error('[campaign-start] Failed to update campaign status:', updateError);
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'Failed to update campaign status', 
-          details: updateError.message,
-          enqueued: insertedCount 
-        }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      console.error(`[campaign-start][${traceId}] Failed to update campaign status:`, updateError);
+      return createErrorResponse(
+        traceId,
+        'UPDATE_STATUS_FAILED',
+        'Falha ao atualizar status da campanha',
+        500,
+        updateError.message,
+        { enqueued: insertedCount }
       );
     }
 
-    console.log('[campaign-start] Campaign status updated to running');
+    console.log(`[campaign-start][${traceId}] Campaign status updated to running`);
 
     // 7. Trigger first batch processing (fire and forget)
-    console.log('[campaign-start] Triggering first batch processing...');
+    console.log(`[campaign-start][${traceId}] Triggering first batch processing...`);
     try {
       const processUrl = `${supabaseUrl}/functions/v1/campaign-process-queue`;
       fetch(processUrl, {
@@ -488,42 +539,38 @@ Deno.serve(async (req) => {
           'Authorization': `Bearer ${supabaseServiceKey}`,
         },
         body: JSON.stringify({ campaign_id, speed }),
-      }).catch(e => console.warn('[campaign-start] Process trigger failed:', e));
+      }).catch(e => console.warn(`[campaign-start][${traceId}] Process trigger failed:`, e));
     } catch (e) {
-      console.warn('[campaign-start] Failed to trigger processing:', e);
+      console.warn(`[campaign-start][${traceId}] Failed to trigger processing:`, e);
     }
 
     // Success response
-    const result = {
-      success: true,
+    console.log(`[campaign-start][${traceId}] ====== SUCCESS ======`);
+    
+    return createSuccessResponse(traceId, {
       campaign_id,
       enqueued: insertedCount,
       total_contacts_received: contacts.length,
       unique_valid_phones: uniqueContacts.length,
       upsert_errors: upsertErrors.length > 0 ? upsertErrors : undefined,
       insert_errors: insertErrors.length > 0 ? insertErrors : undefined,
-    };
-
-    console.log('[campaign-start] ====== SUCCESS ======');
-    console.log('[campaign-start] Result:', JSON.stringify(result));
-
-    return new Response(
-      JSON.stringify(result),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    });
 
   } catch (error) {
-    console.error('[campaign-start] ====== UNEXPECTED ERROR ======');
-    console.error('[campaign-start] Error:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
     
-    return new Response(
-      JSON.stringify({ 
-        success: false, 
-        error: 'Internal server error', 
-        details: error instanceof Error ? error.message : String(error),
-        enqueued: 0 
-      }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    console.error(`[campaign-start][${traceId}] ====== UNEXPECTED ERROR ======`);
+    console.error(`[campaign-start][${traceId}] Error:`, errorMessage);
+    console.error(`[campaign-start][${traceId}] Stack:`, errorStack);
+    
+    return createErrorResponse(
+      traceId,
+      'INTERNAL_ERROR',
+      errorMessage,
+      500,
+      { stack: errorStack?.substring(0, 500) },
+      { enqueued: 0 }
     );
   }
 });

@@ -298,6 +298,29 @@ export function useStartCampaign() {
           throw new Error(error.message || 'Erro ao iniciar campanha');
         }
         
+        // Handle standardized error response
+        if (data && typeof data === 'object') {
+          const response = data as Record<string, unknown>;
+          const traceId = response.traceId as string | undefined;
+          
+          if (response.ok === false && response.error) {
+            const err = response.error as Record<string, unknown>;
+            const errorMsg = String(err.message || 'Erro desconhecido');
+            const errorWithTrace = traceId ? `${errorMsg} (Trace: ${traceId})` : errorMsg;
+            console.error('[useStartCampaign] API error:', err);
+            throw new Error(errorWithTrace);
+          }
+          
+          // Legacy format
+          if (!response.success && response.error) {
+            const errorMsg = String(response.error);
+            const details = response.details ? ` (${response.details})` : '';
+            const errorWithTrace = traceId ? `${errorMsg}${details} (Trace: ${traceId})` : `${errorMsg}${details}`;
+            console.error('[useStartCampaign] Start failed:', errorMsg, details);
+            throw new Error(errorWithTrace);
+          }
+        }
+        
         if (!data?.success) {
           const errorMsg = data?.error || 'Falha ao enfileirar destinatários';
           const details = data?.details ? ` (${data.details})` : '';
@@ -313,6 +336,7 @@ export function useStartCampaign() {
           campaign_id: campaignId,
           id: campaignId,
           enqueued: data.enqueued,
+          traceId: data.traceId,
           ...data,
         };
       }
@@ -549,6 +573,50 @@ export function useRetryFailedRecipients() {
   });
 }
 
+// Helper to extract error details from response
+function extractErrorDetails(data: unknown): { code: string; message: string; traceId?: string; details?: unknown } {
+  if (!data || typeof data !== 'object') {
+    return { code: 'UNKNOWN', message: 'Erro desconhecido' };
+  }
+  
+  const response = data as Record<string, unknown>;
+  const traceId = response.traceId as string | undefined;
+  
+  // Standardized format: { ok: false, traceId, error: { code, message, details } }
+  if (response.ok === false && response.error && typeof response.error === 'object') {
+    const err = response.error as Record<string, unknown>;
+    return {
+      code: String(err.code || 'UNKNOWN'),
+      message: String(err.message || 'Erro no servidor'),
+      traceId,
+      details: err.details,
+    };
+  }
+  
+  // Legacy format: { error: string }
+  if (typeof response.error === 'string') {
+    return {
+      code: 'LEGACY_ERROR',
+      message: response.error,
+      traceId,
+      details: response.details || response.status,
+    };
+  }
+  
+  // Errors array format
+  if (Array.isArray(response.errors) && response.errors.length > 0) {
+    const firstError = response.errors[0] as Record<string, unknown>;
+    return {
+      code: String(firstError.code || 'BATCH_ERROR'),
+      message: String(firstError.error || firstError.message || 'Erro no processamento'),
+      traceId,
+      details: response.errors,
+    };
+  }
+  
+  return { code: 'UNKNOWN', message: 'Erro desconhecido', traceId };
+}
+
 // Process next batch (called from polling)
 export function useProcessCampaignBatch() {
   const queryClient = useQueryClient();
@@ -559,13 +627,45 @@ export function useProcessCampaignBatch() {
         body: { campaign_id: campaignId, speed },
       });
       
-      if (error) throw error;
-      return data;
+      // Handle Supabase invoke error
+      if (error) {
+        console.error('[useProcessCampaignBatch] Invoke error:', error);
+        throw new Error(error.message || 'Erro ao processar campanha');
+      }
+      
+      // Check for standardized error response
+      if (data && typeof data === 'object' && (data as Record<string, unknown>).ok === false) {
+        const errorDetails = extractErrorDetails(data);
+        console.error('[useProcessCampaignBatch] API error:', errorDetails);
+        
+        // Don't throw for "not running" - it's expected when campaign finishes
+        if (errorDetails.code === 'CAMPAIGN_NOT_RUNNING') {
+          console.log('[useProcessCampaignBatch] Campaign finished, not an error');
+          return { ...data, campaign_id: campaignId, finished: true };
+        }
+        
+        const errorWithTrace = errorDetails.traceId 
+          ? `${errorDetails.message} (Trace: ${errorDetails.traceId})`
+          : errorDetails.message;
+        throw new Error(errorWithTrace);
+      }
+      
+      return { ...data, campaign_id: campaignId };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['mt-campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['mt-campaign', data?.campaign_id] });
       queryClient.invalidateQueries({ queryKey: ['campaign-recipients', data?.campaign_id] });
+    },
+    onError: (error) => {
+      // Only show toast for unexpected errors
+      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+      if (!errorMessage.includes('não está em execução')) {
+        console.error('[useProcessCampaignBatch] Error:', errorMessage);
+        toast.error('Erro ao processar lote', {
+          description: errorMessage,
+        });
+      }
     },
   });
 }
