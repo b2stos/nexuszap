@@ -99,19 +99,22 @@ async function validateChannelConnection(
     return { ok: false, reason: 'Subscription ID não configurado', code: 'NO_SUBSCRIPTION' };
   }
   
-  // Test the API with a lightweight call
+  // Test the API with a more reliable endpoint - send a test with empty body
+  // This will return 400 "no destinations" if auth is valid, or 401/403 if not
   try {
     console.log('[campaign-start] Testing NotificaMe connection...');
-    const response = await fetch(`${NOTIFICAME_BASE_URL}/subscriptions/${subscriptionId}`, {
-      method: 'GET',
+    const response = await fetch(`${NOTIFICAME_BASE_URL}/subscriptions/${subscriptionId}/send-template`, {
+      method: 'POST',
       headers: {
         'X-API-Token': token,
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({}), // Empty body - will fail with 400 if auth works
     });
     
     console.log('[campaign-start] NotificaMe validation response:', response.status);
     
+    // 401/403 = definitely invalid token
     if (response.status === 401 || response.status === 403) {
       return { 
         ok: false, 
@@ -120,19 +123,33 @@ async function validateChannelConnection(
       };
     }
     
-    if (response.status === 404) {
-      // 404 can mean subscription not found, but also means auth worked
-      // For safety, treat as potentially valid but log warning
-      console.warn('[campaign-start] Subscription not found (404), but auth may be valid');
-      return { ok: true }; // Continue - the send will fail if truly invalid
-    }
-    
-    if (response.ok || response.status < 400) {
+    // 400 = auth worked but request was invalid (expected - we sent empty body)
+    // 404 = subscription not found but auth may have worked
+    // 200-299 = success (unlikely with empty body but accept it)
+    if (response.status === 400 || response.status === 404 || response.ok) {
+      console.log('[campaign-start] Auth validated successfully (status:', response.status, ')');
       return { ok: true };
     }
     
     // 5xx errors often indicate malformed token or server issues
     if (response.status >= 500) {
+      // Check response body for more details
+      let errorDetail = '';
+      try {
+        const body = await response.json();
+        errorDetail = body?.message || body?.error || '';
+        console.error('[campaign-start] Server error body:', body);
+      } catch { /* ignore */ }
+      
+      // If it mentions auth/token, treat as invalid
+      if (errorDetail.toLowerCase().includes('token') || errorDetail.toLowerCase().includes('auth')) {
+        return { 
+          ok: false, 
+          reason: 'Token inválido ou mal-formado. Verifique a configuração do canal.',
+          code: 'TOKEN_INVALID'
+        };
+      }
+      
       console.error('[campaign-start] Server error during validation:', response.status);
       return { 
         ok: false, 
