@@ -1,14 +1,15 @@
 /**
- * Campaign Process Queue
+ * Campaign Process Queue - PRODUCTION GRADE
  * 
  * Edge function para processar fila de campanhas em massa.
  * Envia templates para recipients em lotes respeitando rate limits.
- * Usa o notificameClient centralizado para envio.
  * 
  * Features:
  * - Rate limiting com backoff exponencial para 429
  * - Retry automático para falhas temporárias
- * - Logs detalhados por campanha
+ * - Logs DETALHADOS para diagnóstico (request/response completo)
+ * - SENT só com provider_message_id confirmado
+ * - Criação de mensagem no Inbox após SENT
  * - Contadores em tempo real
  * 
  * Endpoints:
@@ -71,11 +72,13 @@ const REQUEST_TIMEOUT = 30000;
 interface SendResult {
   success: boolean;
   provider_message_id?: string;
+  raw_response?: unknown; // Para diagnóstico
   error?: {
     code: string;
     message: string;
     http_status?: number;
     is_retryable: boolean;
+    raw_response?: unknown;
   };
 }
 
@@ -198,104 +201,6 @@ function calculateBackoff(attempt: number): number {
 }
 
 /**
- * Envia template via NotificaMe API
- */
-async function sendTemplate(
-  token: string,
-  subscriptionId: string,
-  to: string,
-  templateName: string,
-  language: string,
-  variables: Record<string, unknown>
-): Promise<SendResult> {
-  const url = `${NOTIFICAME_BASE_URL}/subscriptions/${subscriptionId}/send-template`;
-  
-  const body = {
-    to,
-    template: {
-      name: templateName,
-      language: { code: language },
-      components: buildComponents(variables),
-    },
-  };
-  
-  console.log(`[NotificaMe] Sending template ${templateName} to ${to}`);
-  
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-  
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        [AUTH_HEADER]: token,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    
-    clearTimeout(timeout);
-    
-    const responseText = await response.text();
-    // deno-lint-ignore no-explicit-any
-    let responseData: any = {};
-    
-    try {
-      responseData = JSON.parse(responseText);
-    } catch {
-      responseData = { raw: responseText };
-    }
-    
-    if (response.ok) {
-      const messageId = responseData.message_id || 
-        responseData.messageId || 
-        responseData.id || 
-        (responseData.messages as Array<{id: string}>)?.[0]?.id;
-      
-      console.log(`[NotificaMe] ✅ Sent, message_id: ${messageId}`);
-      
-      return {
-        success: true,
-        provider_message_id: messageId as string,
-      };
-    }
-    
-    const errorCode = (responseData.error?.code || responseData.code || `HTTP_${response.status}`) as string;
-    const errorMessage = (responseData.error?.message || responseData.message || response.statusText) as string;
-    
-    console.log(`[NotificaMe] ❌ Failed: ${response.status} - ${errorCode}: ${errorMessage}`);
-    
-    return {
-      success: false,
-      error: {
-        code: errorCode,
-        message: mapErrorToFriendly(response.status, errorCode, errorMessage),
-        http_status: response.status,
-        is_retryable: isRetryable(response.status, errorCode),
-      },
-    };
-    
-  } catch (err) {
-    clearTimeout(timeout);
-    const errorCode = err instanceof Error && err.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR';
-    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    
-    console.error(`[NotificaMe] Exception:`, err);
-    
-    return {
-      success: false,
-      error: {
-        code: errorCode,
-        message: 'Erro de conexão. Tentaremos novamente.',
-        http_status: 0,
-        is_retryable: true,
-      },
-    };
-  }
-}
-
-/**
  * Constrói components para API do WhatsApp
  */
 function buildComponents(variables: Record<string, unknown>): Array<{type: string; parameters: Array<{type: string; text: string}>}> {
@@ -324,6 +229,210 @@ function buildComponents(variables: Record<string, unknown>): Array<{type: strin
   return components;
 }
 
+/**
+ * EXTRAI MESSAGE_ID da resposta do provedor
+ * Tenta múltiplos formatos conhecidos
+ */
+function extractMessageId(responseData: unknown): string | null {
+  if (!responseData || typeof responseData !== 'object') {
+    return null;
+  }
+  
+  const data = responseData as Record<string, unknown>;
+  
+  // Formato 1: { message_id: "xxx" }
+  if (data.message_id && typeof data.message_id === 'string') {
+    return data.message_id;
+  }
+  
+  // Formato 2: { messageId: "xxx" }
+  if (data.messageId && typeof data.messageId === 'string') {
+    return data.messageId;
+  }
+  
+  // Formato 3: { id: "xxx" }
+  if (data.id && typeof data.id === 'string') {
+    return data.id;
+  }
+  
+  // Formato 4: { messages: [{ id: "xxx" }] } (WhatsApp Cloud API)
+  if (Array.isArray(data.messages) && data.messages.length > 0) {
+    const firstMsg = data.messages[0];
+    if (firstMsg && typeof firstMsg === 'object') {
+      const msg = firstMsg as Record<string, unknown>;
+      if (msg.id && typeof msg.id === 'string') {
+        return msg.id;
+      }
+    }
+  }
+  
+  // Formato 5: { data: { id: "xxx" } }
+  if (data.data && typeof data.data === 'object') {
+    const inner = data.data as Record<string, unknown>;
+    if (inner.id && typeof inner.id === 'string') {
+      return inner.id;
+    }
+    if (inner.message_id && typeof inner.message_id === 'string') {
+      return inner.message_id;
+    }
+  }
+  
+  // Formato 6: { result: { id: "xxx" } }
+  if (data.result && typeof data.result === 'object') {
+    const inner = data.result as Record<string, unknown>;
+    if (inner.id && typeof inner.id === 'string') {
+      return inner.id;
+    }
+  }
+  
+  console.log('[extractMessageId] Could not find message_id in response structure:', JSON.stringify(data).substring(0, 500));
+  return null;
+}
+
+/**
+ * Envia template via NotificaMe API
+ * COM LOGS DETALHADOS PARA DIAGNÓSTICO
+ */
+async function sendTemplate(
+  token: string,
+  subscriptionId: string,
+  to: string,
+  templateName: string,
+  language: string,
+  variables: Record<string, unknown>
+): Promise<SendResult> {
+  const url = `${NOTIFICAME_BASE_URL}/subscriptions/${subscriptionId}/send-template`;
+  
+  const body = {
+    to,
+    template: {
+      name: templateName,
+      language: { code: language },
+      components: buildComponents(variables),
+    },
+  };
+  
+  // LOG ESTRUTURADO: REQUEST
+  console.log(`
+╔════════════════════════════════════════════════════════════════╗
+║ OUTBOUND REQUEST                                               ║
+╠════════════════════════════════════════════════════════════════╣
+║ URL: ${url}
+║ Method: POST
+║ To: ${to}
+║ Template: ${templateName}
+║ Language: ${language}
+║ Token (last 4): ***${token.slice(-4)}
+║ Body: ${JSON.stringify(body).substring(0, 300)}...
+╚════════════════════════════════════════════════════════════════╝`);
+  
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  
+  try {
+    const startTime = Date.now();
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        [AUTH_HEADER]: token,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    
+    clearTimeout(timeout);
+    
+    const latencyMs = Date.now() - startTime;
+    const responseText = await response.text();
+    // deno-lint-ignore no-explicit-any
+    let responseData: any = {};
+    
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      responseData = { raw: responseText };
+    }
+    
+    // LOG ESTRUTURADO: RESPONSE
+    console.log(`
+╔════════════════════════════════════════════════════════════════╗
+║ OUTBOUND RESPONSE                                              ║
+╠════════════════════════════════════════════════════════════════╣
+║ Status: ${response.status} ${response.statusText}
+║ Latency: ${latencyMs}ms
+║ Body: ${JSON.stringify(responseData).substring(0, 500)}
+╚════════════════════════════════════════════════════════════════╝`);
+    
+    if (response.ok) {
+      // EXTRAIR message_id COM FUNÇÃO ROBUSTA
+      const messageId = extractMessageId(responseData);
+      
+      if (!messageId) {
+        // RESPOSTA 200 MAS SEM MESSAGE_ID = FALHA
+        console.error(`[sendTemplate] ⚠️ API returned 200 but NO message_id found!`);
+        console.error(`[sendTemplate] Full response:`, JSON.stringify(responseData));
+        
+        return {
+          success: false,
+          raw_response: responseData,
+          error: {
+            code: 'NO_MESSAGE_ID',
+            message: 'API retornou sucesso mas sem ID da mensagem. Possível problema no payload.',
+            http_status: response.status,
+            is_retryable: false,
+            raw_response: responseData,
+          },
+        };
+      }
+      
+      console.log(`[sendTemplate] ✅ CONFIRMED SENT, message_id: ${messageId}`);
+      
+      return {
+        success: true,
+        provider_message_id: messageId,
+        raw_response: responseData,
+      };
+    }
+    
+    // ERRO HTTP
+    const errorCode = (responseData.error?.code || responseData.code || `HTTP_${response.status}`) as string;
+    const errorMessage = (responseData.error?.message || responseData.message || response.statusText) as string;
+    
+    console.log(`[sendTemplate] ❌ Failed: ${response.status} - ${errorCode}: ${errorMessage}`);
+    
+    return {
+      success: false,
+      raw_response: responseData,
+      error: {
+        code: errorCode,
+        message: mapErrorToFriendly(response.status, errorCode, errorMessage),
+        http_status: response.status,
+        is_retryable: isRetryable(response.status, errorCode),
+        raw_response: responseData,
+      },
+    };
+    
+  } catch (err) {
+    clearTimeout(timeout);
+    const errorCode = err instanceof Error && err.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR';
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    
+    console.error(`[sendTemplate] Exception:`, err);
+    
+    return {
+      success: false,
+      error: {
+        code: errorCode,
+        message: 'Erro de conexão. Tentaremos novamente.',
+        http_status: 0,
+        is_retryable: true,
+      },
+    };
+  }
+}
+
 // ============================================
 // TYPES
 // ============================================
@@ -347,6 +456,7 @@ interface CampaignData {
     language: string;
     status: string;
     variables_schema: unknown;
+    components?: unknown;
   };
   channel: {
     id: string;
@@ -424,6 +534,19 @@ function buildTemplateVariables(
   return result;
 }
 
+/**
+ * Renderiza conteúdo do template para preview no Inbox
+ */
+function renderTemplatePreview(
+  templateName: string,
+  variables: Record<string, TemplateVariable[]>
+): string {
+  // Gera uma prévia básica do template
+  const bodyVars = variables.body || [];
+  const values = bodyVars.map((v, i) => `{{${i + 1}}}=${v.value}`).join(', ');
+  return `[Template: ${templateName}] ${values}`.substring(0, 200);
+}
+
 // ============================================
 // CAMPAIGN STATS LOGGER
 // ============================================
@@ -462,6 +585,106 @@ function logCampaignStats(campaignName: string, stats: CampaignStats) {
 }
 
 // ============================================
+// INBOX INTEGRATION - Criar mensagem outbound
+// ============================================
+
+async function createOutboundMessageInInbox(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  tenantId: string,
+  channelId: string,
+  contactId: string,
+  templateName: string,
+  templateVars: Record<string, TemplateVariable[]>,
+  providerMessageId: string,
+  sentByUserId: string | null
+): Promise<{ conversationId: string | null; messageId: string | null }> {
+  try {
+    // 1. Buscar ou criar conversa
+    let conversationId: string | null = null;
+    
+    const { data: existingConv } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('tenant_id', tenantId)
+      .eq('channel_id', channelId)
+      .eq('contact_id', contactId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (existingConv) {
+      conversationId = existingConv.id;
+    } else {
+      // Criar nova conversa
+      const { data: newConv, error: convError } = await supabase
+        .from('conversations')
+        .insert({
+          tenant_id: tenantId,
+          channel_id: channelId,
+          contact_id: contactId,
+          status: 'open',
+          unread_count: 0,
+          is_pinned: false,
+          last_message_at: new Date().toISOString(),
+        })
+        .select('id')
+        .single();
+      
+      if (convError) {
+        console.error('[Inbox] Failed to create conversation:', convError);
+        return { conversationId: null, messageId: null };
+      }
+      conversationId = newConv.id;
+    }
+    
+    // 2. Criar mensagem outbound
+    const preview = renderTemplatePreview(templateName, templateVars);
+    
+    const { data: message, error: msgError } = await supabase
+      .from('mt_messages')
+      .insert({
+        tenant_id: tenantId,
+        conversation_id: conversationId,
+        channel_id: channelId,
+        contact_id: contactId,
+        direction: 'outbound',
+        type: 'template',
+        content: preview,
+        template_name: templateName,
+        template_variables: templateVars,
+        provider_message_id: providerMessageId,
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+        sent_by_user_id: sentByUserId,
+      })
+      .select('id')
+      .single();
+    
+    if (msgError) {
+      console.error('[Inbox] Failed to create outbound message:', msgError);
+      return { conversationId, messageId: null };
+    }
+    
+    // 3. Atualizar conversa com preview
+    await supabase
+      .from('conversations')
+      .update({
+        last_message_at: new Date().toISOString(),
+        last_message_preview: preview,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conversationId);
+    
+    console.log(`[Inbox] ✅ Created outbound message in inbox: conv=${conversationId}, msg=${message.id}`);
+    
+    return { conversationId, messageId: message.id };
+  } catch (error) {
+    console.error('[Inbox] Exception creating outbound message:', error);
+    return { conversationId: null, messageId: null };
+  }
+}
+
+// ============================================
 // MAIN PROCESSOR
 // ============================================
 
@@ -491,14 +714,21 @@ async function processCampaignBatch(
     errors: [],
   };
   
-  console.log(`[Campaign] Starting batch for "${campaign.name}", speed: ${speed}`);
-  console.log(`[Campaign] Batch size: ${config.batchSize}, delay: ${config.delayMs}ms`);
+  console.log(`
+════════════════════════════════════════════════════════════════
+CAMPAIGN BATCH START
+════════════════════════════════════════════════════════════════
+Campaign: ${campaign.name} (${campaign.id})
+Template: ${campaign.template.name}
+Channel: ${campaign.channel.name} (${campaign.channel_id})
+Speed: ${speed} (batch=${config.batchSize}, delay=${config.delayMs}ms)
+════════════════════════════════════════════════════════════════`);
   
   // Resolve token from channel config
   const token = resolveToken(campaign.channel.provider_config);
   
   if (!token) {
-    console.error(`[Campaign] No valid token found for channel ${campaign.channel_id}`);
+    console.error(`[Campaign] ❌ No valid token found for channel ${campaign.channel_id}`);
     return { 
       processed: 0, 
       success: 0, 
@@ -515,7 +745,7 @@ async function processCampaignBatch(
     campaign.channel.provider_phone_id;
   
   if (!subscriptionId) {
-    console.error(`[Campaign] No subscription_id found for channel ${campaign.channel_id}`);
+    console.error(`[Campaign] ❌ No subscription_id found for channel ${campaign.channel_id}`);
     return { 
       processed: 0, 
       success: 0, 
@@ -529,7 +759,7 @@ async function processCampaignBatch(
   
   // Validate channel status
   if (campaign.channel.status !== 'connected') {
-    console.error(`[Campaign] Channel ${campaign.channel_id} not connected`);
+    console.error(`[Campaign] ❌ Channel ${campaign.channel_id} not connected (status: ${campaign.channel.status})`);
     return { 
       processed: 0, 
       success: 0, 
@@ -543,7 +773,7 @@ async function processCampaignBatch(
   
   // Validate template status
   if (campaign.template.status !== 'approved') {
-    console.error(`[Campaign] Template ${campaign.template_id} not approved`);
+    console.error(`[Campaign] ❌ Template ${campaign.template_id} not approved (status: ${campaign.template.status})`);
     return { 
       processed: 0, 
       success: 0, 
@@ -587,7 +817,7 @@ async function processCampaignBatch(
   }
   
   if (!recipients || recipients.length === 0) {
-    console.log(`[Campaign] No more queued recipients, campaign done`);
+    console.log(`[Campaign] ✅ No more queued recipients, campaign done`);
     return { 
       processed: 0, 
       success: 0, 
@@ -599,7 +829,16 @@ async function processCampaignBatch(
     };
   }
   
-  console.log(`[Campaign] Processing ${recipients.length} recipients`);
+  console.log(`[Campaign] Processing ${recipients.length} recipients...`);
+  
+  // Get campaign creator for message attribution
+  const { data: campaignData } = await supabase
+    .from('mt_campaigns')
+    .select('created_by_user_id')
+    .eq('id', campaign.id)
+    .single();
+  
+  const sentByUserId = campaignData?.created_by_user_id || null;
   
   // Current backoff delay (increases on rate limit)
   let currentBackoff = 0;
@@ -608,7 +847,7 @@ async function processCampaignBatch(
   for (const recipient of recipients as unknown as RecipientData[]) {
     // Check time limit
     if (Date.now() - startTime > MAX_EXECUTION_TIME_MS) {
-      console.log(`[Campaign] Time limit reached, stopping batch`);
+      console.log(`[Campaign] ⏰ Time limit reached, stopping batch`);
       break;
     }
     
@@ -628,11 +867,17 @@ async function processCampaignBatch(
     
     const phone = normalizePhone(recipient.contact.phone);
     const isRetry = recipient.attempts > 0;
-    console.log(`[Campaign] ${isRetry ? '🔄 Retrying' : 'Sending to'} ${phone} (attempt: ${recipient.attempts + 1})`);
+    
+    console.log(`
+────────────────────────────────────────────────────────────────
+[${stats.processed + 1}/${recipients.length}] ${isRetry ? '🔄 RETRY' : '📤 SEND'}: ${phone}
+Contact: ${recipient.contact.name || 'N/A'} (${recipient.contact_id})
+Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
+────────────────────────────────────────────────────────────────`);
     
     // Apply backoff if we hit rate limit
     if (currentBackoff > 0) {
-      console.log(`[Campaign] Backoff delay: ${currentBackoff}ms`);
+      console.log(`[Campaign] ⏳ Backoff delay: ${currentBackoff}ms`);
       await sleep(currentBackoff);
       currentBackoff = 0; // Reset after applying
     }
@@ -656,8 +901,8 @@ async function processCampaignBatch(
         templateVars
       );
       
-      if (result.success) {
-        // Update recipient as sent ONLY after API confirmation
+      if (result.success && result.provider_message_id) {
+        // ✅ SENT CONFIRMADO COM MESSAGE_ID
         await supabase
           .from('campaign_recipients')
           .update({
@@ -670,24 +915,42 @@ async function processCampaignBatch(
           })
           .eq('id', recipient.id);
         
+        // 🔄 CRIAR MENSAGEM NO INBOX
+        await createOutboundMessageInInbox(
+          supabase,
+          campaign.tenant_id,
+          campaign.channel_id,
+          recipient.contact_id,
+          campaign.template.name,
+          templateVars,
+          result.provider_message_id,
+          sentByUserId
+        );
+        
         stats.success++;
-        console.log(`[Campaign] ✅ API confirmed sent to ${phone}, message_id: ${result.provider_message_id}`);
+        console.log(`[Campaign] ✅ CONFIRMED SENT: ${phone}, provider_message_id: ${result.provider_message_id}`);
+        
       } else {
+        // ❌ FALHA (inclui caso de 200 sem message_id)
+        const errorCode = result.error?.code || 'UNKNOWN';
+        const errorMessage = result.error?.message || 'Unknown error';
+        const httpStatus = result.error?.http_status || 0;
+        
         // Check if rate limited
-        if (result.error?.http_status === 429) {
+        if (httpStatus === 429) {
           stats.rateLimited = true;
           currentBackoff = calculateBackoff(recipient.attempts);
           console.log(`[Campaign] ⏳ Rate limited, backoff: ${currentBackoff}ms`);
         }
         
         // **CRITICAL: Check for token/auth errors - PAUSE ENTIRE CAMPAIGN**
-        const isAuthError = result.error?.http_status === 401 || 
-                           result.error?.http_status === 403 ||
-                           result.error?.code?.includes('TOKEN') ||
-                           result.error?.code?.includes('AUTH');
+        const isAuthError = httpStatus === 401 || 
+                           httpStatus === 403 ||
+                           errorCode.includes('TOKEN') ||
+                           errorCode.includes('AUTH');
         
         if (isAuthError) {
-          console.error(`[Campaign] 🚨 AUTH ERROR - Pausing campaign: ${result.error?.message}`);
+          console.error(`[Campaign] 🚨 AUTH ERROR - Pausing campaign: ${errorMessage}`);
           
           // Mark this recipient as failed
           await supabase
@@ -695,14 +958,14 @@ async function processCampaignBatch(
             .update({
               status: 'failed',
               attempts: recipient.attempts + 1,
-              last_error: result.error?.message || 'Token inválido',
+              last_error: errorMessage,
               next_retry_at: null,
               updated_at: new Date().toISOString(),
             })
             .eq('id', recipient.id);
           
           stats.failed++;
-          stats.errors.push({ phone, error: result.error?.message || 'Token inválido', code: result.error?.code || 'AUTH_ERROR' });
+          stats.errors.push({ phone, error: errorMessage, code: errorCode });
           
           // **PAUSE THE CAMPAIGN IMMEDIATELY**
           await supabase
@@ -737,7 +1000,7 @@ async function processCampaignBatch(
             .update({
               status: 'failed', // Keep as failed, will be picked up by next batch
               attempts: recipient.attempts + 1,
-              last_error: result.error.message,
+              last_error: errorMessage,
               next_retry_at: nextRetryAt.toISOString(),
               updated_at: new Date().toISOString(),
             })
@@ -752,7 +1015,7 @@ async function processCampaignBatch(
             .update({
               status: 'failed',
               attempts: recipient.attempts + 1,
-              last_error: result.error?.message || 'Unknown error',
+              last_error: errorMessage,
               next_retry_at: null,
               updated_at: new Date().toISOString(),
             })
@@ -761,10 +1024,10 @@ async function processCampaignBatch(
           stats.failed++;
           stats.errors.push({
             phone,
-            error: result.error?.message || 'Unknown error',
-            code: result.error?.code || 'UNKNOWN',
+            error: errorMessage,
+            code: errorCode,
           });
-          console.log(`[Campaign] ❌ Failed permanently for ${phone}: ${result.error?.message}`);
+          console.log(`[Campaign] ❌ Failed permanently for ${phone}: ${errorMessage}`);
         }
       }
     } catch (err) {
@@ -904,10 +1167,10 @@ Deno.serve(async (req) => {
       );
     }
     
-    console.log(`\n${'='.repeat(60)}`);
+    console.log(`\n${'═'.repeat(60)}`);
     console.log(`[Campaign] Processing: ${campaign_id}`);
     console.log(`[Campaign] Speed: ${speed}`);
-    console.log(`${'='.repeat(60)}\n`);
+    console.log(`${'═'.repeat(60)}\n`);
     
     const supabase = getSupabaseAdmin();
     
@@ -964,13 +1227,18 @@ Deno.serve(async (req) => {
       speed
     );
     
-    console.log(`\n[Campaign] Batch complete:`);
-    console.log(`  - Processed: ${result.processed}`);
-    console.log(`  - Success: ${result.success}`);
-    console.log(`  - Failed: ${result.failed}`);
-    console.log(`  - Retry Scheduled: ${result.retryScheduled}`);
-    console.log(`  - Finished: ${result.finished}`);
-    console.log(`  - Rate Limited: ${result.rateLimited}\n`);
+    console.log(`
+════════════════════════════════════════════════════════════════
+CAMPAIGN BATCH COMPLETE
+════════════════════════════════════════════════════════════════
+Processed: ${result.processed}
+Success:   ${result.success}
+Failed:    ${result.failed}
+Retry:     ${result.retryScheduled}
+Finished:  ${result.finished}
+Rate Limited: ${result.rateLimited}
+Paused Reason: ${result.paused_reason || 'N/A'}
+════════════════════════════════════════════════════════════════`);
     
     return new Response(
       JSON.stringify({
