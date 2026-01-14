@@ -29,3 +29,6 @@ verify_jwt = false
 
 [functions.validate-notificame-token]
 verify_jwt = false
+
+[functions.list-notificame-templates]
+verify_jwt = false
