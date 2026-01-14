@@ -250,8 +250,8 @@ function extractMessageId(responseData: unknown): string | null {
     return data.messageId;
   }
   
-  // Formato 3: { id: "xxx" }
-  if (data.id && typeof data.id === 'string') {
+  // Formato 3: { id: "xxx" } (mas NÃO se for UUID de erro)
+  if (data.id && typeof data.id === 'string' && !data.error) {
     return data.id;
   }
   
@@ -275,6 +275,9 @@ function extractMessageId(responseData: unknown): string | null {
     if (inner.message_id && typeof inner.message_id === 'string') {
       return inner.message_id;
     }
+    if (inner.messageId && typeof inner.messageId === 'string') {
+      return inner.messageId;
+    }
   }
   
   // Formato 6: { result: { id: "xxx" } }
@@ -285,12 +288,84 @@ function extractMessageId(responseData: unknown): string | null {
     }
   }
   
+  // Formato 7: { providerMessageId: "xxx" } (NotificaMe nativo)
+  if (data.providerMessageId && typeof data.providerMessageId === 'string') {
+    return data.providerMessageId;
+  }
+  
   console.log('[extractMessageId] Could not find message_id in response structure:', JSON.stringify(data).substring(0, 500));
   return null;
 }
 
 /**
+ * VERIFICA SE A RESPOSTA É UM ERRO DISFARÇADO
+ * NotificaMe às vezes retorna HTTP 200 com erro no body
+ */
+function isErrorResponse(responseData: unknown): { isError: boolean; code: string; message: string } {
+  if (!responseData || typeof responseData !== 'object') {
+    return { isError: false, code: '', message: '' };
+  }
+  
+  const data = responseData as Record<string, unknown>;
+  
+  // Formato 1: { error: { message: "...", code: "..." } }
+  if (data.error && typeof data.error === 'object') {
+    const err = data.error as Record<string, unknown>;
+    return {
+      isError: true,
+      code: String(err.code || err.type || 'API_ERROR'),
+      message: String(err.message || 'Erro retornado pela API'),
+    };
+  }
+  
+  // Formato 2: { error: "message string" }
+  if (data.error && typeof data.error === 'string') {
+    return {
+      isError: true,
+      code: 'API_ERROR',
+      message: data.error,
+    };
+  }
+  
+  // Formato 3: { success: false, message: "..." }
+  if (data.success === false) {
+    return {
+      isError: true,
+      code: String(data.code || 'API_ERROR'),
+      message: String(data.message || 'Operação falhou'),
+    };
+  }
+  
+  return { isError: false, code: '', message: '' };
+}
+
+/**
+ * Constrói payload no formato WhatsApp Cloud API
+ */
+function buildWhatsAppTemplatePayload(
+  subscriptionId: string,
+  to: string,
+  templateName: string,
+  language: string,
+  variables: Record<string, unknown>
+): Record<string, unknown> {
+  const components = buildComponents(variables);
+  
+  return {
+    from: subscriptionId,
+    to,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: language },
+      components: components.length > 0 ? components : undefined,
+    },
+  };
+}
+
+/**
  * Envia template via NotificaMe API
+ * ENDPOINT CORRETO: /channels/whatsapp/messages
  * COM LOGS DETALHADOS PARA DIAGNÓSTICO
  */
 async function sendTemplate(
@@ -301,29 +376,25 @@ async function sendTemplate(
   language: string,
   variables: Record<string, unknown>
 ): Promise<SendResult> {
-  const url = `${NOTIFICAME_BASE_URL}/subscriptions/${subscriptionId}/send-template`;
+  // ENDPOINT CORRETO - mesmo que sendText
+  const url = `${NOTIFICAME_BASE_URL}/channels/whatsapp/messages`;
   
-  const body = {
-    to,
-    template: {
-      name: templateName,
-      language: { code: language },
-      components: buildComponents(variables),
-    },
-  };
+  // Payload no formato WhatsApp Cloud API via NotificaMe
+  const body = buildWhatsAppTemplatePayload(subscriptionId, to, templateName, language, variables);
   
   // LOG ESTRUTURADO: REQUEST
   console.log(`
 ╔════════════════════════════════════════════════════════════════╗
-║ OUTBOUND REQUEST                                               ║
+║ OUTBOUND REQUEST (Template)                                    ║
 ╠════════════════════════════════════════════════════════════════╣
 ║ URL: ${url}
 ║ Method: POST
 ║ To: ${to}
+║ From (subscription_id): ${subscriptionId.substring(0, 8)}...
 ║ Template: ${templateName}
 ║ Language: ${language}
 ║ Token (last 4): ***${token.slice(-4)}
-║ Body: ${JSON.stringify(body).substring(0, 300)}...
+║ Body: ${JSON.stringify(body).substring(0, 400)}...
 ╚════════════════════════════════════════════════════════════════╝`);
   
   const controller = new AbortController();
@@ -365,21 +436,44 @@ async function sendTemplate(
 ║ Body: ${JSON.stringify(responseData).substring(0, 500)}
 ╚════════════════════════════════════════════════════════════════╝`);
     
+    // VERIFICAR SE É ERRO DISFARÇADO (200 com erro no body)
+    const errorCheck = isErrorResponse(responseData);
+    if (errorCheck.isError) {
+      console.error(`[sendTemplate] ⚠️ API returned ${response.status} but body contains error!`);
+      console.error(`[sendTemplate] Error: ${errorCheck.code}: ${errorCheck.message}`);
+      
+      return {
+        success: false,
+        raw_response: responseData,
+        error: {
+          code: errorCheck.code,
+          message: errorCheck.message,
+          http_status: response.status,
+          is_retryable: false,
+          raw_response: responseData,
+        },
+      };
+    }
+    
     if (response.ok) {
       // EXTRAIR message_id COM FUNÇÃO ROBUSTA
       const messageId = extractMessageId(responseData);
       
       if (!messageId) {
-        // RESPOSTA 200 MAS SEM MESSAGE_ID = FALHA
-        console.error(`[sendTemplate] ⚠️ API returned 200 but NO message_id found!`);
-        console.error(`[sendTemplate] Full response:`, JSON.stringify(responseData));
+        // RESPOSTA 200 MAS SEM MESSAGE_ID = MARCAR COMO PENDING
+        console.warn(`[sendTemplate] ⚠️ API returned 200 but NO message_id found`);
+        console.warn(`[sendTemplate] Full response:`, JSON.stringify(responseData));
+        
+        // Gerar correlationId para rastreamento
+        const correlationId = crypto.randomUUID();
+        console.log(`[sendTemplate] Generated correlationId for tracking: ${correlationId}`);
         
         return {
           success: false,
           raw_response: responseData,
           error: {
             code: 'NO_MESSAGE_ID',
-            message: 'API retornou sucesso mas sem ID da mensagem. Possível problema no payload.',
+            message: 'API retornou sucesso mas sem ID da mensagem. Verifique o payload ou aguarde webhook.',
             http_status: response.status,
             is_retryable: false,
             raw_response: responseData,
