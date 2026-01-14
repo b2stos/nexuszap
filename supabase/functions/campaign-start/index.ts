@@ -235,6 +235,7 @@ async function validateChannelConnection(
 
 Deno.serve(async (req) => {
   const traceId = generateTraceId();
+  const startTime = Date.now();
   
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -243,18 +244,62 @@ Deno.serve(async (req) => {
 
   console.log(`[campaign-start][${traceId}] ====== START ======`);
   
+  // Get Supabase client with service role for bypassing RLS
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  
+  // Helper para salvar log de tentativa
+  const saveAttemptLog = async (
+    campaignId: string | null,
+    tenantId: string | null,
+    channelId: string | null,
+    templateName: string | null,
+    step: string,
+    options: {
+      errorCode?: string;
+      errorMessage?: string;
+      errorStack?: string;
+      recipientsCount?: number;
+      successCount?: number;
+      failedCount?: number;
+      requestPayload?: unknown;
+    } = {}
+  ) => {
+    try {
+      const durationMs = Date.now() - startTime;
+      await supabase.from('campaign_send_attempts').insert({
+        trace_id: traceId,
+        campaign_id: campaignId,
+        tenant_id: tenantId,
+        channel_id: channelId,
+        template_name: templateName,
+        step,
+        error_code: options.errorCode,
+        error_message: options.errorMessage,
+        error_stack: options.errorStack?.substring(0, 2000),
+        recipients_count: options.recipientsCount,
+        success_count: options.successCount,
+        failed_count: options.failedCount,
+        request_payload: options.requestPayload ? JSON.stringify(options.requestPayload).substring(0, 5000) : null,
+        duration_ms: durationMs,
+      });
+    } catch (logError) {
+      console.error(`[campaign-start][${traceId}] Failed to save attempt log:`, logError);
+    }
+  };
+  
   try {
-    // Get Supabase client with service role for bypassing RLS
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
     // Parse request body
     let body: RequestBody;
     try {
       body = await req.json();
     } catch (parseError) {
       console.error(`[campaign-start][${traceId}] Invalid JSON:`, parseError);
+      await saveAttemptLog(null, null, null, null, 'parse_request', {
+        errorCode: 'INVALID_JSON',
+        errorMessage: 'Corpo da requisição inválido',
+      });
       return createErrorResponse(traceId, 'INVALID_JSON', 'Corpo da requisição inválido', 400);
     }
     
@@ -267,11 +312,20 @@ Deno.serve(async (req) => {
     // Validate required fields
     if (!campaign_id) {
       console.error(`[campaign-start][${traceId}] Missing campaign_id`);
+      await saveAttemptLog(null, null, null, null, 'validate_input', {
+        errorCode: 'MISSING_CAMPAIGN_ID',
+        errorMessage: 'campaign_id é obrigatório',
+        recipientsCount: contacts?.length || 0,
+      });
       return createErrorResponse(traceId, 'MISSING_CAMPAIGN_ID', 'campaign_id é obrigatório', 400, undefined, { enqueued: 0 });
     }
 
     if (!contacts || contacts.length === 0) {
       console.error(`[campaign-start][${traceId}] No contacts provided`);
+      await saveAttemptLog(campaign_id, null, null, null, 'validate_input', {
+        errorCode: 'NO_CONTACTS',
+        errorMessage: 'Nenhum contato fornecido',
+      });
       return createErrorResponse(traceId, 'NO_CONTACTS', 'Nenhum contato fornecido', 400, undefined, { enqueued: 0 });
     }
 
@@ -290,6 +344,11 @@ Deno.serve(async (req) => {
 
     if (campaignError || !campaign) {
       console.error(`[campaign-start][${traceId}] Campaign not found:`, campaignError);
+      await saveAttemptLog(campaign_id, null, null, null, 'fetch_campaign', {
+        errorCode: 'CAMPAIGN_NOT_FOUND',
+        errorMessage: `Campanha não encontrada: ${campaignError?.message || 'sem detalhes'}`,
+        recipientsCount: contacts.length,
+      });
       return createErrorResponse(
         traceId,
         'CAMPAIGN_NOT_FOUND',
@@ -304,6 +363,10 @@ Deno.serve(async (req) => {
 
     if (campaign.status === 'running') {
       console.warn(`[campaign-start][${traceId}] Campaign already running`);
+      await saveAttemptLog(campaign_id, campaign.tenant_id, campaign.channel_id, null, 'validate_status', {
+        errorCode: 'ALREADY_RUNNING',
+        errorMessage: 'Campanha já está em execução',
+      });
       return createErrorResponse(traceId, 'ALREADY_RUNNING', 'Campanha já está em execução', 400, undefined, { enqueued: 0 });
     }
 
@@ -563,6 +626,13 @@ Deno.serve(async (req) => {
     console.error(`[campaign-start][${traceId}] ====== UNEXPECTED ERROR ======`);
     console.error(`[campaign-start][${traceId}] Error:`, errorMessage);
     console.error(`[campaign-start][${traceId}] Stack:`, errorStack);
+    
+    // Salvar log de erro crítico
+    await saveAttemptLog(null, null, null, null, 'critical_error', {
+      errorCode: 'INTERNAL_ERROR',
+      errorMessage,
+      errorStack,
+    });
     
     return createErrorResponse(
       traceId,

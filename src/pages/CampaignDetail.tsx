@@ -4,6 +4,7 @@
  * Mostra status, contadores, barra de progresso e lista de destinatários
  * Com polling ativo, última atualização, e botão de refresh manual
  * **NEW: Exibe alertas de canal desconectado e erros recentes**
+ * **NEW: Debug Panel para diagnóstico de erros de envio**
  */
 
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -47,6 +48,8 @@ import { formatDistanceToNow, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { CampaignDebugPanel, DebugInfo } from "@/components/campaigns/CampaignDebugPanel";
+import { serializeError, extractTraceId, createPayloadSummary } from "@/hooks/useCampaignDebug";
 
 const statusConfig: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   draft: { label: 'Rascunho', color: 'bg-gray-500', icon: <Clock className="h-4 w-4" /> },
@@ -78,6 +81,7 @@ export default function CampaignDetail() {
   const [stallWarning, setStallWarning] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [recipientFilter, setRecipientFilter] = useState<'all' | 'queued' | 'sent' | 'failed'>('all');
+  const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
   
   // Fetch campaign data
   const { data: campaign, isLoading: campaignLoading, refetch: refetchCampaign } = useMTCampaign(campaignId);
@@ -228,10 +232,44 @@ export default function CampaignDetail() {
   
   const status = statusConfig[campaign.status] || statusConfig.draft;
   
-  // Handle actions
+  // Handle actions with debug capture
   const handleStart = async () => {
-    if (campaignId) {
-      await startCampaign.mutateAsync({ campaignId });
+    if (!campaignId) return;
+    
+    const startTime = Date.now();
+    const endpoint = `/functions/v1/campaign-start`;
+    
+    try {
+      const result = await startCampaign.mutateAsync({ campaignId });
+      
+      // Captura debug de sucesso
+      setDebugInfo({
+        timestamp: new Date().toISOString(),
+        endpoint,
+        method: 'POST',
+        status: 200,
+        statusText: 'OK',
+        responseRaw: JSON.stringify(result, null, 2),
+        traceId: extractTraceId(result),
+        payloadSummary: createPayloadSummary({ campaignId }),
+        durationMs: Date.now() - startTime,
+      });
+    } catch (error) {
+      // Captura debug de erro
+      const serialized = serializeError(error);
+      setDebugInfo({
+        timestamp: new Date().toISOString(),
+        endpoint,
+        method: 'POST',
+        status: serialized.status,
+        traceId: serialized.traceId,
+        errorName: serialized.name,
+        errorMessage: serialized.message,
+        errorStack: serialized.stack,
+        errorCause: serialized.cause,
+        payloadSummary: createPayloadSummary({ campaignId }),
+        durationMs: Date.now() - startTime,
+      });
     }
   };
   
@@ -396,6 +434,9 @@ export default function CampaignDetail() {
             </CardContent>
           </Card>
         )}
+        
+        {/* Debug Panel - Sempre visível quando há info */}
+        <CampaignDebugPanel debugInfo={debugInfo} />
         
         {/* Stats Cards */}
         <div className="grid gap-4 md:grid-cols-5">

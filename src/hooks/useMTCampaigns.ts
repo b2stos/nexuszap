@@ -264,13 +264,62 @@ export interface CampaignContactData {
 }
 
 /**
+ * Serializa erro do Supabase Functions para diagnóstico completo
+ */
+function serializeSupabaseFunctionError(err: unknown): {
+  name: string;
+  message: string;
+  status?: number;
+  responseText?: string;
+  stack?: string;
+  traceId?: string;
+  context?: unknown;
+} {
+  if (!(err instanceof Error)) {
+    return {
+      name: 'UnknownError',
+      message: typeof err === 'string' ? err : JSON.stringify(err),
+    };
+  }
+
+  const serialized: ReturnType<typeof serializeSupabaseFunctionError> = {
+    name: err.name,
+    message: err.message,
+    stack: err.stack,
+  };
+
+  // Extrai traceId da mensagem se existir
+  const traceMatch = err.message.match(/\(Trace: ([a-f0-9-]+)\)/i);
+  if (traceMatch) {
+    serialized.traceId = traceMatch[1];
+  }
+
+  // Tenta extrair context de FunctionsHttpError
+  // deno-lint-ignore no-explicit-any
+  const anyErr = err as any;
+  if (anyErr.context) {
+    serialized.context = anyErr.context;
+  }
+  if (anyErr.status) {
+    serialized.status = anyErr.status;
+  }
+  if (anyErr.details) {
+    const existingContext = (typeof serialized.context === 'object' && serialized.context) ? serialized.context : {};
+    serialized.context = { ...existingContext, details: anyErr.details };
+  }
+
+  return serialized;
+}
+
+/**
  * Parse error details from Supabase functions invoke response
  * The SDK may return error in `error` property or inside `data`
+ * NUNCA retorna mensagens genéricas - sempre extrai o máximo de detalhes
  */
 function parseEdgeFunctionError(
   error: Error | null, 
   data: unknown
-): { message: string; traceId?: string; code?: string } | null {
+): { message: string; traceId?: string; code?: string; details?: unknown } | null {
   // First check if there's a standardized error response in data
   if (data && typeof data === 'object') {
     const response = data as Record<string, unknown>;
@@ -280,50 +329,66 @@ function parseEdgeFunctionError(
     if (response.ok === false && response.error && typeof response.error === 'object') {
       const err = response.error as Record<string, unknown>;
       return {
-        message: String(err.message || 'Erro no servidor'),
+        message: String(err.message || 'Erro retornado pelo servidor (sem mensagem)'),
         code: String(err.code || 'UNKNOWN'),
         traceId,
+        details: err.details,
       };
     }
     
     // Legacy format: { success: false, error: string }
-    if (response.success === false && response.error) {
+    if (response.success === false) {
       const errorMsg = typeof response.error === 'string' 
         ? response.error 
-        : (response.error as Record<string, unknown>).message || 'Erro no servidor';
-      const details = response.details ? ` (${response.details})` : '';
+        : (typeof response.error === 'object' && response.error)
+          ? (response.error as Record<string, unknown>).message || JSON.stringify(response.error)
+          : 'Falha no servidor (formato legado)';
+      const details = response.details ? String(response.details) : undefined;
       return {
-        message: `${errorMsg}${details}`,
+        message: details ? `${errorMsg} - ${details}` : String(errorMsg),
         traceId,
+        details: response.details,
       };
     }
   }
   
   // Check the SDK error object
   if (error) {
-    // Try to parse the error message as JSON (sometimes SDK wraps the response)
+    const serialized = serializeSupabaseFunctionError(error);
+    
+    // Tenta parsear a mensagem como JSON (SDK às vezes encapsula)
     try {
       const parsed = JSON.parse(error.message);
       if (parsed.error && typeof parsed.error === 'object') {
         return {
           message: String(parsed.error.message || error.message),
           code: String(parsed.error.code || 'UNKNOWN'),
-          traceId: parsed.traceId,
+          traceId: parsed.traceId || serialized.traceId,
+          details: parsed.error.details,
         };
       }
       if (parsed.message) {
         return {
           message: parsed.message,
-          traceId: parsed.traceId,
+          traceId: parsed.traceId || serialized.traceId,
         };
       }
     } catch {
-      // Not JSON, use the message directly
+      // Não é JSON, usa a mensagem diretamente
     }
     
-    // Use the raw error message
+    // Constrói mensagem com contexto
+    let message = error.message;
+    if (serialized.status) {
+      message = `[HTTP ${serialized.status}] ${message}`;
+    }
+    if (serialized.context) {
+      message += ` | Contexto: ${JSON.stringify(serialized.context).slice(0, 200)}`;
+    }
+    
     return {
-      message: error.message || 'Erro de conexão',
+      message: message || 'Erro de conexão com o servidor (sem detalhes)',
+      traceId: serialized.traceId,
     };
   }
   
@@ -372,12 +437,15 @@ export function useStartCampaign() {
             error: responseError?.message,
           });
         } catch (fetchError) {
-          // Network/CORS/Timeout error
+          // Network/CORS/Timeout error - NUNCA "Unknown error"
           console.error('[useStartCampaign] Fetch exception:', fetchError);
-          const errorMsg = fetchError instanceof Error 
-            ? `Erro de conexão: ${fetchError.message}`
-            : 'Erro de conexão com o servidor';
-          throw new Error(errorMsg);
+          const serialized = serializeSupabaseFunctionError(fetchError);
+          const errorMsg = serialized.message || 'Falha de rede/CORS/timeout - verifique console';
+          throw new Error(
+            serialized.traceId
+              ? `${errorMsg} (Trace: ${serialized.traceId})`
+              : errorMsg
+          );
         }
         
         // Parse any error from the response
@@ -466,8 +534,12 @@ export function useStartCampaign() {
     },
     onError: (error) => {
       console.error('[useStartCampaign] Error:', error);
+      const serialized = serializeSupabaseFunctionError(error);
+      const displayMsg = serialized.message || 'Falha ao iniciar. Veja o painel de debug.';
       toast.error('Erro ao iniciar campanha', {
-        description: error instanceof Error ? error.message : 'Erro desconhecido. Tente novamente.',
+        description: serialized.traceId 
+          ? `${displayMsg} (Trace: ${serialized.traceId})`
+          : displayMsg,
       });
     },
   });
