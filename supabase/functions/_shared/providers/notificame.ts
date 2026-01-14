@@ -33,13 +33,13 @@ import {
 // DEFAULT CONFIGURATION
 // ============================================
 
-// IMPORTANT: baseUrl already includes /v1 (e.g., https://api.notificame.com.br/v1)
-// So endpoints should NOT include /v1 prefix to avoid /v1/v1 duplication!
+// IMPORTANT: NotificaMe Hub API uses /channels/whatsapp/* endpoints
+// Base URL: https://api.notificame.com.br (no /v1 suffix)
 const DEFAULT_ENDPOINTS = {
-  send_message: '/messages',
-  send_template: '/messages',
-  upload_media: '/media',
-  get_media: '/media',
+  send_message: '/channels/whatsapp/messages',
+  send_template: '/channels/whatsapp/messages',
+  upload_media: '/channels/whatsapp/media',
+  get_media: '/channels/whatsapp/media',
 };
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -67,15 +67,16 @@ async function notificameRequest<T = unknown>(
   options: HttpRequestOptions
 ): Promise<HttpResponse<T>> {
   // =====================================================
-  // SINGLE SOURCE OF TRUTH: NotificaMe API Base URL
+  // SINGLE SOURCE OF TRUTH: NotificaMe Hub API Base URL
+  // The Hub API does NOT use /v1 prefix - it uses /channels/whatsapp/* directly
   // ENV: NOTIFICAME_API_BASE_URL (default to official)
   // =====================================================
-  const DEFAULT_BASE_URL = 'https://api.notificame.com.br/v1';
+  const DEFAULT_BASE_URL = 'https://api.notificame.com.br';
   const envBase = (Deno.env.get('NOTIFICAME_API_BASE_URL') || '').trim();
-  const baseUrl = (envBase || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const baseUrl = (envBase || DEFAULT_BASE_URL).replace(/\/+$/, '').replace(/\/v1$/, ''); // Strip any /v1 suffix
 
   // VALIDATION: Block any non-official domain to avoid regressions
-  if (!baseUrl.startsWith('https://api.notificame.com.br')) {
+  if (!baseUrl.includes('notificame.com.br')) {
     console.error(`[NotificaMe] CRITICAL: NOTIFICAME_API_BASE_URL inválida: "${baseUrl}". Bloqueando envio.`);
     throw new ProviderException(
       createProviderError('invalid_request', 'INVALID_BASE_URL', `URL base inválida. Use: ${DEFAULT_BASE_URL}`)
