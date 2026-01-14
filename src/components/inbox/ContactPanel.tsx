@@ -13,15 +13,14 @@ import {
   User,
   CheckCircle2,
   XCircle,
-  Calendar,
-  Mail,
   Shield,
   Ban,
   MessageSquare,
   Send,
   Plus,
   X,
-  Save
+  Save,
+  Trash2
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +29,17 @@ import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { InboxConversation, InboxContact, WindowStatus } from '@/types/inbox';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -38,6 +48,8 @@ interface ContactPanelProps {
   conversation: InboxConversation | null;
   contact: InboxContact | null;
   windowStatus: WindowStatus;
+  onDeleteConversation?: () => void;
+  isDeletingConversation?: boolean;
 }
 
 function formatPhone(phone: string): string {
@@ -185,12 +197,16 @@ function QuickActions({
   conversationStatus,
   onResolve,
   onReopen,
-  onBlock
+  onBlock,
+  onDelete,
+  isDeleting,
 }: {
   conversationStatus: string;
   onResolve?: () => void;
   onReopen?: () => void;
   onBlock?: () => void;
+  onDelete?: () => void;
+  isDeleting?: boolean;
 }) {
   return (
     <Card>
@@ -231,12 +247,51 @@ function QuickActions({
           <Ban className="w-4 h-4 mr-2" />
           Bloquear contato
         </Button>
+        
+        {/* Delete conversation with confirmation dialog */}
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="w-full justify-start text-destructive hover:text-destructive"
+              disabled={isDeleting}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              {isDeleting ? 'Apagando...' : 'Apagar conversa'}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Apagar conversa?</AlertDialogTitle>
+              <AlertDialogDescription>
+                A conversa será arquivada e removida da sua lista. 
+                Você poderá receber novas mensagens deste contato no futuro.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={onDelete}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Apagar
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardContent>
     </Card>
   );
 }
 
-export function ContactPanel({ conversation, contact, windowStatus }: ContactPanelProps) {
+export function ContactPanel({ 
+  conversation, 
+  contact, 
+  windowStatus,
+  onDeleteConversation,
+  isDeletingConversation,
+}: ContactPanelProps) {
   if (!conversation || !contact) {
     return (
       <div className="h-full bg-card border-l border-border">
@@ -377,7 +432,11 @@ export function ContactPanel({ conversation, contact, windowStatus }: ContactPan
           <NotesSection />
           
           {/* Quick Actions */}
-          <QuickActions conversationStatus={conversation.status} />
+          <QuickActions 
+            conversationStatus={conversation.status} 
+            onDelete={onDeleteConversation}
+            isDeleting={isDeletingConversation}
+          />
         </div>
       </ScrollArea>
     </div>
