@@ -715,8 +715,29 @@ export const notificameProvider: Provider = {
     const config = channel.provider_config;
     const endpoint = getEndpoint(config, 'send_template');
     
-    // Build components
-    const components: Array<Record<string, unknown>> = [];
+    // Get subscription_id for "from" field
+    const subscriptionId = config.subscription_id;
+    if (!subscriptionId) {
+      console.error('[NotificaMe] Missing subscription_id for sendTemplate');
+      return {
+        success: false,
+        raw: null,
+        error: createProviderError(
+          'invalid_request',
+          'MISSING_SUBSCRIPTION_ID',
+          'Subscription ID não configurado. Vá em Configurações > Canais e atualize as credenciais.'
+        ),
+      };
+    }
+    
+    // =====================================================
+    // NotificaMe Hub API format (NOT Meta Cloud API format!)
+    // Uses: from, to, contents[{ type: 'template', ... }]
+    // NOT: messaging_product, recipient_type, template: {}
+    // =====================================================
+    
+    // Build components array for template variables
+    const templateComponents: Array<Record<string, unknown>> = [];
     
     // Header with media
     if (media) {
@@ -745,19 +766,19 @@ export const notificameProvider: Provider = {
         }];
       }
       
-      components.push(headerComponent);
+      templateComponents.push(headerComponent);
     }
     
     // Header variables
     if (variables?.header?.length) {
-      const existing = components.find(c => c.type === 'header');
+      const existing = templateComponents.find(c => c.type === 'header');
       if (existing) {
         (existing.parameters as unknown[]).push(...variables.header.map(v => ({
           type: v.type,
           text: v.value,
         })));
       } else {
-        components.push({
+        templateComponents.push({
           type: 'header',
           parameters: variables.header.map(v => ({
             type: v.type,
@@ -769,7 +790,7 @@ export const notificameProvider: Provider = {
     
     // Body variables
     if (variables?.body?.length) {
-      components.push({
+      templateComponents.push({
         type: 'body',
         parameters: variables.body.map(v => {
           if (v.type === 'currency') {
@@ -798,7 +819,7 @@ export const notificameProvider: Provider = {
     // Button variables
     if (variables?.button?.length) {
       variables.button.forEach((v, index) => {
-        components.push({
+        templateComponents.push({
           type: 'button',
           sub_type: 'quick_reply',
           index,
@@ -807,22 +828,26 @@ export const notificameProvider: Provider = {
       });
     }
     
+    // NotificaMe Hub native format
     const payload = {
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
+      from: subscriptionId,
       to: normalizePhoneNumber(to),
-      type: 'template',
-      template: {
-        name: template_name,
+      contents: [{
+        type: 'template',
+        templateName: template_name,
         language: { code: language },
-        components: components.length > 0 ? components : undefined,
-      },
+        ...(templateComponents.length > 0 && { components: templateComponents }),
+      }],
     };
     
     try {
       const response = await notificameRequest<{
+        id?: string;
+        messageId?: string;
         messages?: Array<{ id: string }>;
         error?: { message?: string; type?: string; code?: string };
+        code?: string;
+        message?: string;
       }>(config, {
         method: 'POST',
         path: endpoint,
@@ -851,7 +876,22 @@ export const notificameProvider: Provider = {
         };
       }
       
-      const messageId = response.data.messages?.[0]?.id;
+      // Check for error code at root level
+      if (response.data.code && response.data.code !== 'OK' && response.data.code !== 'SUCCESS') {
+        console.error('[NotificaMe] ERROR CODE in response:', response.data.code, response.data.message);
+        return {
+          success: false,
+          raw: response.data,
+          error: createProviderError(
+            'invalid_request',
+            response.data.code,
+            response.data.message || 'Erro desconhecido da API NotificaMe'
+          ),
+        };
+      }
+      
+      // NotificaMe Hub returns messageId at root OR in messages array (Cloud API format)
+      const messageId = response.data.id || response.data.messageId || response.data.messages?.[0]?.id;
       
       // Validate that we got a message ID
       if (!messageId) {
@@ -866,6 +906,8 @@ export const notificameProvider: Provider = {
           ),
         };
       }
+      
+      console.log(`[NotificaMe] Template sent successfully, messageId: ${messageId}`);
       
       return {
         success: true,
