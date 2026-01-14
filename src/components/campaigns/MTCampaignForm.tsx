@@ -14,9 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-import { Checkbox } from "@/components/ui/checkbox";
+
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
+
 import { toast } from "sonner";
 import { 
   Loader2, 
@@ -543,10 +543,12 @@ export function MTCampaignForm() {
               />
             </div>
             <div className="flex items-center space-x-2">
-              <Checkbox
+              <input
+                type="checkbox"
                 id="select-all"
                 checked={selectAll}
-                onCheckedChange={(checked) => handleSelectAllChange(!!checked)}
+                onChange={(e) => handleSelectAllChange(e.target.checked)}
+                className="h-4 w-4 rounded border-primary text-primary focus:ring-primary"
               />
               <Label htmlFor="select-all" className="text-sm cursor-pointer">
                 Selecionar todos
@@ -555,7 +557,8 @@ export function MTCampaignForm() {
           </div>
           
           {/* Contact List */}
-          <ScrollArea className="h-[300px] rounded-md border">
+          {/* Contact List - using native div instead of ScrollArea to avoid Radix ref loop */}
+          <div className="h-[300px] rounded-md border overflow-y-auto">
             {contactsLoading ? (
               <div className="flex items-center justify-center h-full">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -573,9 +576,12 @@ export function MTCampaignForm() {
                     className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50 cursor-pointer"
                     onClick={() => toggleContact(contact.id)}
                   >
-                    <Checkbox
+                    <input
+                      type="checkbox"
                       checked={selectedContactIds.includes(contact.id)}
-                      onCheckedChange={() => toggleContact(contact.id)}
+                      onChange={() => toggleContact(contact.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-4 w-4 rounded border-primary text-primary focus:ring-primary"
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">
@@ -589,7 +595,7 @@ export function MTCampaignForm() {
                 ))}
               </div>
             )}
-          </ScrollArea>
+          </div>
         </CardContent>
       </Card>
       
