@@ -30,6 +30,55 @@ const corsHeaders = {
 };
 
 // ============================================
+// TRACE ID & STANDARDIZED RESPONSE HELPERS
+// ============================================
+
+function generateTraceId(): string {
+  return crypto.randomUUID();
+}
+
+interface StandardResponse {
+  ok: boolean;
+  traceId: string;
+  data?: unknown;
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+}
+
+function createSuccessResponse(traceId: string, data: unknown, status = 200): Response {
+  const body: StandardResponse = {
+    ok: true,
+    traceId,
+    data,
+  };
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json', 'x-trace-id': traceId },
+  });
+}
+
+function createErrorResponse(
+  traceId: string,
+  code: string,
+  message: string,
+  status: number,
+  details?: unknown
+): Response {
+  const body: StandardResponse = {
+    ok: false,
+    traceId,
+    error: { code, message, details },
+  };
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json', 'x-trace-id': traceId },
+  });
+}
+
+// ============================================
 // CONFIGURATION
 // ============================================
 
@@ -750,29 +799,35 @@ Rate Limited: ${stats.rateLimited}
 // ============================================
 
 Deno.serve(async (req) => {
+  const traceId = generateTraceId();
+  
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { headers: { ...corsHeaders, 'x-trace-id': traceId } });
   }
   
   const startTime = Date.now();
   
+  console.log(`\n[Campaign] ══════════════════════════════════════════════`);
+  console.log(`[Campaign] TraceId: ${traceId}`);
+  
   try {
-    const body: ProcessRequest = await req.json();
+    let body: ProcessRequest;
+    try {
+      body = await req.json();
+    } catch (parseError) {
+      console.error(`[Campaign][${traceId}] Invalid JSON body:`, parseError);
+      return createErrorResponse(traceId, 'INVALID_JSON', 'Corpo da requisição não é JSON válido', 400);
+    }
+    
     const { campaign_id, speed = 'normal' } = body;
     
     if (!campaign_id) {
-      return new Response(
-        JSON.stringify({ error: 'campaign_id is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      console.error(`[Campaign][${traceId}] Missing campaign_id`);
+      return createErrorResponse(traceId, 'MISSING_CAMPAIGN_ID', 'campaign_id é obrigatório', 400);
     }
     
-    console.log(`
-════════════════════════════════════════════════════════════`);
-    console.log(`[Campaign] Processing: ${campaign_id}`);
-    console.log(`[Campaign] Speed: ${speed}`);
-    console.log(`════════════════════════════════════════════════════════════
-`);
+    console.log(`[Campaign][${traceId}] Processing: ${campaign_id}`);
+    console.log(`[Campaign][${traceId}] Speed: ${speed}`);
     
     const supabase = getSupabaseAdmin();
     
@@ -799,19 +854,28 @@ Deno.serve(async (req) => {
       .single();
     
     if (campaignError || !campaign) {
-      console.error('[Campaign] Campaign not found:', campaignError);
-      return new Response(
-        JSON.stringify({ error: 'Campaign not found', details: campaignError?.message }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      console.error(`[Campaign][${traceId}] Campaign not found:`, campaignError);
+      return createErrorResponse(
+        traceId,
+        'CAMPAIGN_NOT_FOUND',
+        'Campanha não encontrada',
+        404,
+        { db_error: campaignError?.message }
       );
     }
     
+    // Log context for debugging
+    console.log(`[Campaign][${traceId}] Context: tenant=${campaign.tenant_id}, channel=${campaign.channel_id}`);
+    
     // Check campaign status
     if (campaign.status !== 'running') {
-      console.log(`[Campaign] Campaign is not running (status: ${campaign.status})`);
-      return new Response(
-        JSON.stringify({ error: 'Campaign is not running', status: campaign.status }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      console.log(`[Campaign][${traceId}] Campaign not running (status: ${campaign.status})`);
+      return createErrorResponse(
+        traceId,
+        'CAMPAIGN_NOT_RUNNING',
+        `Campanha não está em execução (status: ${campaign.status})`,
+        400,
+        { current_status: campaign.status }
       );
     }
     
@@ -823,19 +887,26 @@ Deno.serve(async (req) => {
       startTime
     );
     
-    return new Response(
-      JSON.stringify({
-        campaign_id,
-        ...result,
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    console.log(`[Campaign][${traceId}] Completed: processed=${result.processed}, success=${result.success}, failed=${result.failed}`);
+    
+    return createSuccessResponse(traceId, {
+      campaign_id,
+      ...result,
+    });
     
   } catch (error) {
-    console.error('[Campaign] Unexpected error:', error);
-    return new Response(
-      JSON.stringify({ error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    
+    console.error(`[Campaign][${traceId}] EXCEPTION:`, errorMessage);
+    console.error(`[Campaign][${traceId}] Stack:`, errorStack);
+    
+    return createErrorResponse(
+      traceId,
+      'INTERNAL_ERROR',
+      errorMessage,
+      500,
+      { stack: errorStack?.substring(0, 500) }
     );
   }
 });
