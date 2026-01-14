@@ -239,11 +239,36 @@ function buildTemplateVariables(
 
 /**
  * Renderiza preview do template para o Inbox
+ * Formato: "[Template: nome_template] Variáveis: {{1}}=valor1, {{2}}=valor2"
+ * Se não houver variáveis, apenas "[Template: nome_template]"
  */
-function renderTemplatePreview(templateName: string, variables: Record<string, TemplateVariable[]>): string {
+function renderTemplatePreview(templateName: string, variables: Record<string, TemplateVariable[]>, contactName?: string | null): string {
   const bodyVars = variables.body || [];
-  const values = bodyVars.map((v, i) => `{{${i + 1}}}=${v.value}`).join(', ');
-  return `[Template: ${templateName}] ${values}`.substring(0, 200);
+  
+  if (bodyVars.length === 0) {
+    // Sem variáveis - mostra apenas nome do template
+    return `📋 Template: ${templateName}`;
+  }
+  
+  // Com variáveis - mostra valores preenchidos
+  const values = bodyVars
+    .map((v, i) => `{{${i + 1}}}=${v.value || '?'}`)
+    .filter(v => !v.endsWith('=?'))
+    .join(', ');
+  
+  if (!values) {
+    return `📋 Template: ${templateName}`;
+  }
+  
+  // Formato final: "Template enviado com: nome=João, data=10/01"
+  const friendlyValues = bodyVars
+    .map((v, i) => v.value)
+    .filter(Boolean)
+    .join(' | ');
+  
+  return friendlyValues 
+    ? `${friendlyValues}\n\n📋 Template: ${templateName}`
+    : `📋 Template: ${templateName}`;
 }
 
 function logCampaignStats(campaignName: string, stats: CampaignStats) {

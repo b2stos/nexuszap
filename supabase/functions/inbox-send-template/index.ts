@@ -229,11 +229,16 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Create message in database as queued
-    const messageContent = `TEMPLATE: ${tpl.name}` + 
-      (Object.keys(variables).length > 0 
-        ? ` | Variáveis: ${JSON.stringify(variables)}` 
-        : '');
+    // Build readable preview for message content
+    // Format: "variavel1 | variavel2 | variavel3" + template name footer
+    const variableValues = Object.values(variables).filter(Boolean);
+    const variablesPreview = variableValues.length > 0
+      ? variableValues.join(' | ')
+      : '';
+    
+    const messageContent = variablesPreview
+      ? `${variablesPreview}\n\n📋 Template: ${tpl.name}`
+      : `📋 Template: ${tpl.name}`;
 
     const { data: message, error: msgError } = await supabase
       .from('mt_messages')
@@ -370,12 +375,16 @@ Deno.serve(async (req) => {
       console.error('[inbox-send-template] Failed to update message status:', updateError);
     }
 
-    // Update conversation last_message_at
+    // Update conversation last_message_at with better preview
+    const conversationPreview = variablesPreview
+      ? variablesPreview.substring(0, 80)
+      : `📋 ${tpl.name}`;
+    
     await supabase
       .from('conversations')
       .update({
         last_message_at: new Date().toISOString(),
-        last_message_preview: `📋 ${tpl.name}`,
+        last_message_preview: conversationPreview,
       })
       .eq('id', conversation_id);
 
