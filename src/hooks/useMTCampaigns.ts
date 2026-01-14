@@ -771,17 +771,30 @@ export function useProcessCampaignBatch() {
         throw new Error(fetchError instanceof Error ? fetchError.message : 'Erro de conexão');
       }
       
+      // Check for noop response (campaign not running - expected behavior)
+      const data = responseData as Record<string, unknown> | null;
+      if (data?.noop === true || data?.reason === 'CAMPAIGN_NOT_RUNNING') {
+        console.log('[useProcessCampaignBatch] Campaign not running (noop) - ignoring silently');
+        return { 
+          ...data, 
+          campaign_id: campaignId, 
+          finished: true,
+          noop: true,
+        };
+      }
+      
       // Parse error from response
       const parsedError = parseEdgeFunctionError(responseError, responseData);
       
       if (parsedError) {
-        // Don't throw for "not running" - it's expected when campaign finishes
+        // Double-check for not-running cases (legacy 400 response)
         if (parsedError.code === 'CAMPAIGN_NOT_RUNNING') {
-          console.log('[useProcessCampaignBatch] Campaign finished, not an error');
+          console.log('[useProcessCampaignBatch] Campaign finished (legacy), not an error');
           return { 
-            ...(responseData as Record<string, unknown>), 
+            ...(data || {}), 
             campaign_id: campaignId, 
-            finished: true 
+            finished: true,
+            noop: true,
           };
         }
         
@@ -791,18 +804,29 @@ export function useProcessCampaignBatch() {
         throw new Error(errorWithTrace);
       }
       
-      return { ...(responseData as Record<string, unknown>), campaign_id: campaignId };
+      return { ...data, campaign_id: campaignId };
     },
     onSuccess: (data) => {
+      // Don't invalidate/refetch for noop responses to avoid unnecessary re-renders
+      const isNoop = data && typeof data === 'object' && 'noop' in data && (data as { noop?: boolean }).noop;
+      if (isNoop) {
+        console.log('[useProcessCampaignBatch] Noop response, skipping cache invalidation');
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ['mt-campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['mt-campaign', data?.campaign_id] });
       queryClient.invalidateQueries({ queryKey: ['campaign-recipients', data?.campaign_id] });
     },
     onError: (error) => {
-      // Only show toast for unexpected errors
+      // Only show toast for unexpected errors - never for campaign completion
       const errorMessage = error instanceof Error ? error.message : 'Erro ao processar campanha';
-      if (!errorMessage.includes('não está em execução') && !errorMessage.includes('CAMPAIGN_NOT_RUNNING')) {
-        console.error('[useProcessCampaignBatch] Error:', errorMessage);
+      const isExpectedNoOp = 
+        errorMessage.includes('não está em execução') || 
+        errorMessage.includes('CAMPAIGN_NOT_RUNNING') ||
+        errorMessage.includes('noop');
+      
+      if (!isExpectedNoOp) {
+        console.error('[useProcessCampaignBatch] Unexpected error:', errorMessage);
         toast.error('Erro ao processar lote', {
           description: errorMessage,
         });
