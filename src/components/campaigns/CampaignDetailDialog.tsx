@@ -32,7 +32,7 @@ import {
 } from "@/hooks/useMTCampaigns";
 
 interface CampaignDetailDialogProps {
-  campaign: MTCampaign;
+  campaign: MTCampaign | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -71,17 +71,37 @@ export function CampaignDetailDialog({
 }: CampaignDetailDialogProps) {
   const [activeTab, setActiveTab] = useState("overview");
   
-  const { data: allRecipients, isLoading: loadingAll } = useCampaignRecipients(campaign.id);
-  const { data: failedRecipients, isLoading: loadingFailed } = useCampaignRecipients(campaign.id, 'failed');
+  // Only fetch data when we have a valid campaign
+  const campaignId = campaign?.id;
+  
+  const { data: allRecipients, isLoading: loadingAll } = useCampaignRecipients(
+    open ? campaignId : undefined
+  );
+  const { data: failedRecipients, isLoading: loadingFailed } = useCampaignRecipients(
+    open ? campaignId : undefined, 
+    'failed'
+  );
   
   const retryFailed = useRetryFailedRecipients();
+  
+  // Early return if no campaign, but still render Dialog for controlled behavior
+  if (!campaign) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-2xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle>Carregando...</DialogTitle>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
+    );
+  }
   
   const total = campaign.total_recipients || 0;
   const sent = campaign.sent_count || 0;
   const delivered = campaign.delivered_count || 0;
   const read = campaign.read_count || 0;
   const failed = campaign.failed_count || 0;
-  const queued = total - sent - failed;
   const progress = total > 0 ? ((sent + failed) / total) * 100 : 0;
   
   const handleRetryFailed = async () => {
