@@ -2,9 +2,7 @@
  * MTCampaignForm - Formulário de criação de campanha multi-tenant
  * 
  * Baseado exclusivamente em templates aprovados
- * 
- * HOTFIX: Evita loop infinito de refs ao NÃO renderizar Select com .map()
- * até que os dados estejam completamente carregados e estáveis.
+ * Usa CampaignRecipients para seleção com limite BM e fila de envio
  */
 
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from "react";
@@ -13,20 +11,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-
 import { Badge } from "@/components/ui/badge";
-
 import { toast } from "sonner";
 import { 
   Loader2, 
   Send, 
   FileText, 
-  Users, 
   Zap, 
   Gauge, 
   Snail,
-  Search,
   CheckCircle2,
   AlertCircle,
   ChevronDown,
@@ -34,8 +27,8 @@ import {
 } from "lucide-react";
 import { useChannels } from "@/hooks/useChannels";
 import { useApprovedTemplates } from "@/hooks/useTemplates";
-import { useMTContacts, useMTContactsCount } from "@/hooks/useMTContacts";
 import { useCreateMTCampaign, useCurrentTenantForCampaigns } from "@/hooks/useMTCampaigns";
+import { CampaignRecipients } from "./CampaignRecipients";
 
 type SendSpeed = 'slow' | 'normal' | 'fast';
 
@@ -178,16 +171,12 @@ export function MTCampaignForm() {
   const [channelId, setChannelId] = useState("");
   const [templateId, setTemplateId] = useState("");
   const [sendSpeed, setSendSpeed] = useState<SendSpeed>("normal");
-  const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
-  const [selectAll, setSelectAll] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
   const [variables, setVariables] = useState<Record<string, string>>({});
   
   // Data fetching - only enable when tenantId is available
   const { data: channels, isLoading: channelsLoading } = useChannels(tenantId);
   const { data: templates, isLoading: templatesLoading } = useApprovedTemplates(tenantId);
-  const { data: contacts, isLoading: contactsLoading } = useMTContacts(tenantId, { limit: 1000 });
-  const { data: totalContacts } = useMTContactsCount(tenantId);
   
   // Mutations
   const createCampaign = useCreateMTCampaign();
@@ -243,28 +232,6 @@ export function MTCampaignForm() {
     setVariables(next);
   }, [templateId, templateVariableKeys, templateVariables]);
   
-  // Filter contacts by search
-  const filteredContacts = useMemo(() => {
-    if (!contacts) return [];
-    if (!searchTerm) return contacts;
-    const term = searchTerm.toLowerCase();
-    return contacts.filter(c => 
-      c.name?.toLowerCase().includes(term) ||
-      c.phone.includes(term)
-    );
-  }, [contacts, searchTerm]);
-  
-  // Track if initial selection has been made - use ref to avoid re-runs
-  const initialSelectionRef = useRef(false);
-  
-  // Handle initial select all - only run once when contacts first load
-  useEffect(() => {
-    if (selectAll && contacts && contacts.length > 0 && !initialSelectionRef.current) {
-      initialSelectionRef.current = true;
-      setSelectedContactIds(contacts.map(c => c.id));
-    }
-  }, [selectAll, contacts]);
-  
   // Memoized callbacks for channel/template selection - prevents ref instability
   const handleChannelSelect = useCallback((id: string) => {
     setChannelId(id);
@@ -274,27 +241,10 @@ export function MTCampaignForm() {
     setTemplateId(id);
   }, []);
   
-  // Toggle contact selection
-  const toggleContact = useCallback((contactId: string) => {
-    setSelectAll(false);
-    setSelectedContactIds(prev => 
-      prev.includes(contactId)
-        ? prev.filter(id => id !== contactId)
-        : [...prev, contactId]
-    );
+  // Handle selection change from CampaignRecipients component
+  const handleSelectionChange = useCallback((ids: Set<string>) => {
+    setSelectedContactIds(ids);
   }, []);
-  
-  // Toggle all - manual action by user
-  const handleSelectAllChange = useCallback((checked: boolean) => {
-    setSelectAll(checked);
-    if (checked && contacts) {
-      setSelectedContactIds(contacts.map(c => c.id));
-    } else {
-      setSelectedContactIds([]);
-    }
-    // Mark as done since user manually interacted
-    initialSelectionRef.current = true;
-  }, [contacts]);
   
   // Handle submit
   const handleSubmit = async (e: React.FormEvent) => {
@@ -320,7 +270,7 @@ export function MTCampaignForm() {
       return;
     }
     
-    if (selectedContactIds.length === 0) {
+    if (selectedContactIds.size === 0) {
       toast.error("Selecione pelo menos um contato");
       return;
     }
@@ -334,7 +284,7 @@ export function MTCampaignForm() {
           channel_id: channelId,
           template_id: templateId,
           template_variables: variables,
-          contact_ids: selectedContactIds,
+          contact_ids: Array.from(selectedContactIds),
         },
       });
       
@@ -344,8 +294,8 @@ export function MTCampaignForm() {
     }
   };
   
-  // Loading state - include tenant loading
-  const isDataLoading = channelsLoading || templatesLoading || contactsLoading;
+  // Loading state
+  const isDataLoading = channelsLoading || templatesLoading;
   
   // Show loading spinner while tenant data is loading
   if (tenantLoading) {
@@ -562,103 +512,22 @@ export function MTCampaignForm() {
         </CardContent>
       </Card>
       
-      {/* Contact Selection */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="h-5 w-5" />
-            Destinatários
-          </CardTitle>
-          <CardDescription>
-            Selecione os contatos que receberão a campanha
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Stats */}
-          <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-            <span className="text-sm">
-              Total de contatos: <strong>{totalContacts || 0}</strong>
-            </span>
-            <span className="text-sm">
-              Selecionados: <strong className="text-primary">{selectedContactIds.length}</strong>
-            </span>
-          </div>
-          
-          {/* Search & Select All */}
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Buscar contatos..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-            <div className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                id="select-all"
-                checked={selectAll}
-                onChange={(e) => handleSelectAllChange(e.target.checked)}
-                className="h-4 w-4 rounded border-primary text-primary focus:ring-primary"
-              />
-              <Label htmlFor="select-all" className="text-sm cursor-pointer">
-                Selecionar todos
-              </Label>
-            </div>
-          </div>
-          
-          {/* Contact List */}
-          {/* Contact List - using native div instead of ScrollArea to avoid Radix ref loop */}
-          <div className="h-[300px] rounded-md border overflow-y-auto">
-            {contactsLoading ? (
-              <div className="flex items-center justify-center h-full">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              </div>
-            ) : filteredContacts.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-                <Users className="h-8 w-8 mb-2" />
-                <p>Nenhum contato encontrado</p>
-              </div>
-            ) : (
-              <div className="p-4 space-y-2">
-                {filteredContacts.map((contact) => (
-                  <div
-                    key={contact.id}
-                    className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50 cursor-pointer"
-                    onClick={() => toggleContact(contact.id)}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedContactIds.includes(contact.id)}
-                      onChange={() => toggleContact(contact.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="h-4 w-4 rounded border-primary text-primary focus:ring-primary"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {contact.name || 'Sem nome'}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {contact.phone}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      {/* Recipients Selection - New component with BM limit */}
+      {tenantId && (
+        <CampaignRecipients
+          tenantId={tenantId}
+          selectedContactIds={selectedContactIds}
+          onSelectionChange={handleSelectionChange}
+        />
+      )}
       
       {/* Submit */}
       <div className="flex items-center justify-between pt-4 border-t">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          {selectedContactIds.length > 0 ? (
+          {selectedContactIds.size > 0 ? (
             <>
               <CheckCircle2 className="h-4 w-4 text-green-500" />
-              {selectedContactIds.length} contato(s) selecionado(s)
+              {selectedContactIds.size} contato(s) selecionado(s)
             </>
           ) : (
             <>
@@ -678,7 +547,7 @@ export function MTCampaignForm() {
           </Button>
           <Button 
             type="submit" 
-            disabled={createCampaign.isPending || selectedContactIds.length === 0}
+            disabled={createCampaign.isPending || selectedContactIds.size === 0}
           >
             {createCampaign.isPending ? (
               <>
