@@ -1,11 +1,16 @@
 /**
  * ImportTemplatesDialog Component
  * 
- * Dialog para importar templates aprovados do NotificaMe
+ * Dialog para importar templates aprovados diretamente da API oficial da Meta (WhatsApp Business Platform).
+ * 
+ * IMPORTANTE:
+ * - Templates pertencem à Meta, NÃO ao NotificaMe
+ * - O canal precisa ter WABA_ID configurado
+ * - Apenas templates com status APPROVED são listados
  */
 
 import { useState, useEffect } from 'react';
-import { Download, Loader2, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
+import { Download, Loader2, AlertCircle, CheckCircle, RefreshCw, Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -28,6 +33,14 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { parseVariablesFromText } from '@/utils/templateParser';
+
+interface VariableSchema {
+  index: number;
+  key: string;
+  label: string;
+  required: boolean;
+}
 
 interface ExternalTemplate {
   external_id: string;
@@ -46,12 +59,20 @@ interface ExternalTemplate {
       phone_number?: string;
     }>;
   }>;
+  variables_schema?: {
+    header?: VariableSchema[];
+    body?: VariableSchema[];
+    button?: VariableSchema[];
+  };
 }
 
 interface Channel {
   id: string;
   name: string;
   phone_number: string | null;
+  provider_config: {
+    waba_id?: string;
+  } | null;
 }
 
 interface ImportTemplatesDialogProps {
@@ -78,6 +99,9 @@ export function ImportTemplatesDialog({
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const selectedChannel = channels.find(c => c.id === selectedChannelId);
+  const hasWabaId = !!selectedChannel?.provider_config?.waba_id;
+
   // Load channels when dialog opens
   useEffect(() => {
     if (open && tenantId) {
@@ -87,13 +111,13 @@ export function ImportTemplatesDialog({
 
   // Load templates when channel is selected
   useEffect(() => {
-    if (selectedChannelId) {
+    if (selectedChannelId && hasWabaId) {
       loadTemplates();
     } else {
       setTemplates([]);
       setSelectedTemplates(new Set());
     }
-  }, [selectedChannelId]);
+  }, [selectedChannelId, hasWabaId]);
 
   const loadChannels = async () => {
     setIsLoadingChannels(true);
@@ -102,17 +126,20 @@ export function ImportTemplatesDialog({
     try {
       const { data, error: queryError } = await supabase
         .from('channels')
-        .select('id, name, phone_number')
+        .select('id, name, phone_number, provider_config')
         .eq('tenant_id', tenantId)
         .eq('status', 'connected');
 
       if (queryError) throw queryError;
 
-      setChannels(data || []);
+      setChannels((data || []) as Channel[]);
       
-      // Auto-select first channel if only one
-      if (data?.length === 1) {
-        setSelectedChannelId(data[0].id);
+      // Auto-select first channel with WABA_ID if only one
+      const channelsWithWaba = (data || []).filter(
+        (c: Channel) => c.provider_config?.waba_id
+      );
+      if (channelsWithWaba.length === 1) {
+        setSelectedChannelId(channelsWithWaba[0].id);
       }
     } catch (err) {
       console.error('Error loading channels:', err);
@@ -153,7 +180,7 @@ export function ImportTemplatesDialog({
       setTemplates(result.templates || []);
 
       if (result.templates?.length === 0) {
-        setError('Nenhum template encontrado no provedor. Verifique se existem templates aprovados na sua conta NotificaMe.');
+        setError('Nenhum template aprovado encontrado na conta WhatsApp Business. Certifique-se de ter templates com status "APPROVED" na Meta.');
       }
     } catch (err) {
       console.error('Error loading templates:', err);
@@ -207,6 +234,34 @@ export function ImportTemplatesDialog({
           continue;
         }
 
+        // Parse variables from components
+        const bodyComponent = template.components.find(c => c.type === 'BODY');
+        const headerComponent = template.components.find(c => c.type === 'HEADER');
+        
+        let variablesSchema = template.variables_schema;
+        
+        // If no variables_schema from API, parse from text
+        if (!variablesSchema || (!variablesSchema.header?.length && !variablesSchema.body?.length)) {
+          const bodyResult = bodyComponent?.text ? parseVariablesFromText(bodyComponent.text, 'BODY') : { variables: [] };
+          const headerResult = headerComponent?.text ? parseVariablesFromText(headerComponent.text, 'HEADER') : { variables: [] };
+          
+          variablesSchema = {
+            header: headerResult.variables.map(v => ({
+              index: v.index,
+              key: `header_${v.index}`,
+              label: v.label,
+              required: v.required,
+            })),
+            body: bodyResult.variables.map(v => ({
+              index: v.index,
+              key: `body_${v.index}`,
+              label: v.label,
+              required: v.required,
+            })),
+            button: [],
+          };
+        }
+
         // Insert template
         const { error: insertError } = await supabase
           .from('mt_templates')
@@ -216,10 +271,10 @@ export function ImportTemplatesDialog({
             name: template.name,
             language: template.language || 'pt_BR',
             category: template.category || 'UTILITY',
-            status: template.status === 'approved' ? 'approved' : 
-                   template.status === 'rejected' ? 'rejected' : 'pending',
-            components: template.components || [],
-            variables_schema: null, // Will be parsed on edit
+            status: 'approved',
+            components: JSON.parse(JSON.stringify(template.components || [])),
+            variables_schema: variablesSchema ? JSON.parse(JSON.stringify(variablesSchema)) : null,
+            provider_template_id: template.external_id,
           });
 
         if (insertError) {
@@ -255,35 +310,39 @@ export function ImportTemplatesDialog({
     return colors[category.toUpperCase()] || 'bg-gray-500/10 text-gray-600';
   };
 
-  const getStatusBadge = (status: string) => {
-    if (status === 'approved') {
-      return (
-        <Badge className="bg-green-500/10 text-green-600">
-          <CheckCircle className="w-3 h-3 mr-1" />
-          Aprovado
-        </Badge>
-      );
-    }
-    return <Badge variant="outline">{status}</Badge>;
+  const getVariableCount = (template: ExternalTemplate) => {
+    const bodyComponent = template.components.find(c => c.type === 'BODY');
+    if (!bodyComponent?.text) return 0;
+    const matches = bodyComponent.text.match(/\{\{\d+\}\}/g);
+    return matches ? matches.length : 0;
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent className="sm:max-w-[650px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Download className="h-5 w-5" />
-            Importar Templates do NotificaMe
+            Importar Templates da Meta (WhatsApp)
           </DialogTitle>
           <DialogDescription>
-            Importe templates aprovados diretamente da sua conta NotificaMe.
+            Importe templates aprovados diretamente da sua conta WhatsApp Business na Meta.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
+          {/* Info Alert */}
+          <Alert className="bg-blue-500/10 border-blue-500/30">
+            <Info className="h-4 w-4 text-blue-600" />
+            <AlertDescription className="text-sm text-blue-800 dark:text-blue-200">
+              Templates são gerenciados pela Meta (WhatsApp Business Platform). 
+              Apenas templates com status <strong>APPROVED</strong> serão listados.
+            </AlertDescription>
+          </Alert>
+
           {/* Channel Selector */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Selecione o Canal</label>
+            <label className="text-sm font-medium">Selecione o Canal WhatsApp</label>
             {isLoadingChannels ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -293,22 +352,45 @@ export function ImportTemplatesDialog({
               <Alert>
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription>
-                  Nenhum canal conectado. Conecte um canal do NotificaMe primeiro.
+                  Nenhum canal conectado. Conecte um canal WhatsApp primeiro.
                 </AlertDescription>
               </Alert>
             ) : (
-              <Select value={selectedChannelId} onValueChange={setSelectedChannelId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecione um canal..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {channels.map((channel) => (
-                    <SelectItem key={channel.id} value={channel.id}>
-                      {channel.name} {channel.phone_number && `(${channel.phone_number})`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <>
+                <Select value={selectedChannelId} onValueChange={setSelectedChannelId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione um canal..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {channels.map((channel) => (
+                      <SelectItem key={channel.id} value={channel.id}>
+                        <div className="flex items-center gap-2">
+                          <span>{channel.name}</span>
+                          {channel.phone_number && (
+                            <span className="text-muted-foreground">({channel.phone_number})</span>
+                          )}
+                          {!channel.provider_config?.waba_id && (
+                            <Badge variant="outline" className="text-xs text-yellow-600">
+                              Sem WABA_ID
+                            </Badge>
+                          )}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                {/* WABA ID Warning */}
+                {selectedChannelId && !hasWabaId && (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                      Este canal não possui WABA_ID configurado. 
+                      Edite o canal e adicione o ID da conta WhatsApp Business para importar templates.
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </>
             )}
           </div>
 
@@ -321,11 +403,11 @@ export function ImportTemplatesDialog({
           )}
 
           {/* Templates List */}
-          {selectedChannelId && (
+          {selectedChannelId && hasWabaId && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">
-                  Templates Disponíveis
+                  Templates Aprovados
                   {templates.length > 0 && (
                     <span className="ml-2 text-muted-foreground">
                       ({selectedTemplates.size}/{templates.length} selecionados)
@@ -351,14 +433,20 @@ export function ImportTemplatesDialog({
               </div>
 
               {isLoadingTemplates ? (
-                <div className="flex items-center justify-center py-8">
+                <div className="flex flex-col items-center justify-center py-8 gap-2">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    Buscando templates na API da Meta...
+                  </span>
                 </div>
               ) : templates.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <Download className="h-8 w-8 mx-auto mb-2 opacity-50" />
                   <p className="text-sm">
-                    Nenhum template encontrado. Verifique se o canal está configurado corretamente.
+                    Nenhum template aprovado encontrado.
+                  </p>
+                  <p className="text-xs mt-1">
+                    Verifique se existem templates com status APPROVED na sua conta WhatsApp Business.
                   </p>
                 </div>
               ) : (
@@ -367,7 +455,7 @@ export function ImportTemplatesDialog({
                     {templates.map((template) => (
                       <div
                         key={template.name}
-                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
                           selectedTemplates.has(template.name)
                             ? 'bg-primary/5 border-primary/30'
                             : 'hover:bg-muted/50'
@@ -377,22 +465,37 @@ export function ImportTemplatesDialog({
                         <Checkbox
                           checked={selectedTemplates.has(template.name)}
                           onCheckedChange={() => toggleTemplate(template.name)}
+                          className="mt-1"
                         />
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium font-mono text-sm truncate">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium font-mono text-sm">
                               {template.name}
                             </span>
-                            {getStatusBadge(template.status)}
+                            <Badge className="bg-green-500/10 text-green-600 text-xs">
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                              Aprovado
+                            </Badge>
                           </div>
-                          <div className="flex items-center gap-2 mt-1">
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <Badge variant="outline" className="text-xs">
                               {template.language}
                             </Badge>
                             <Badge className={`text-xs ${getCategoryBadge(template.category)}`}>
                               {template.category}
                             </Badge>
+                            {getVariableCount(template) > 0 && (
+                              <Badge variant="secondary" className="text-xs">
+                                {getVariableCount(template)} variável(is)
+                              </Badge>
+                            )}
                           </div>
+                          {/* Preview body text */}
+                          {template.components.find(c => c.type === 'BODY')?.text && (
+                            <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+                              {template.components.find(c => c.type === 'BODY')?.text}
+                            </p>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -409,7 +512,7 @@ export function ImportTemplatesDialog({
           </Button>
           <Button
             onClick={handleImport}
-            disabled={selectedTemplates.size === 0 || isImporting}
+            disabled={selectedTemplates.size === 0 || isImporting || !hasWabaId}
           >
             {isImporting ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
