@@ -34,27 +34,32 @@ export const BM_LIMIT_TIERS: BMLimitTier[] = [
 ];
 
 /**
- * Fetch ALL non-blocked contacts for a tenant (same source as Contacts page)
- * No limit applied - returns all contacts
+ * Fetch ALL contacts from the 'contacts' table (same source as Contacts page)
+ * This is the legacy table used by /dashboard/contacts
+ * No limit applied - returns all contacts for the current user
  */
-export function useAllMTContacts(tenantId: string | undefined) {
+export function useAllMTContacts(_tenantId: string | undefined) {
   return useQuery({
-    queryKey: ['all-mt-contacts', tenantId],
+    queryKey: ['all-contacts-for-campaign'],
     queryFn: async () => {
-      if (!tenantId) return [];
-      
+      // The 'contacts' table is user-scoped via RLS, not tenant-scoped
+      // This matches exactly what ContactsTable.tsx does
       const { data, error } = await supabase
-        .from('mt_contacts')
-        .select('id, phone, name, email, created_at')
-        .eq('tenant_id', tenantId)
-        .eq('is_blocked', false)
+        .from('contacts')
+        .select('id, phone, name, created_at')
         .order('created_at', { ascending: true }); // Oldest first for deterministic selection
       
       if (error) throw error;
       
-      return (data || []) as CampaignContact[];
+      // Map to CampaignContact format (contacts table doesn't have email)
+      return (data || []).map(c => ({
+        id: c.id,
+        phone: c.phone,
+        name: c.name,
+        email: null,
+        created_at: c.created_at,
+      })) as CampaignContact[];
     },
-    enabled: !!tenantId,
     staleTime: 30 * 1000, // 30 seconds
   });
 }
