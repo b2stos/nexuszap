@@ -97,15 +97,22 @@ export function MTCampaignForm() {
   }, [selectedTemplate]);
   
   // Initialize variables when template changes
+  // Use templateId as dependency to avoid re-running when variables object changes
   useEffect(() => {
     if (templateVariables.length > 0) {
-      const initial: Record<string, string> = {};
-      templateVariables.forEach(v => {
-        initial[v.key] = variables[v.key] || '';
+      setVariables(prev => {
+        const next: Record<string, string> = {};
+        templateVariables.forEach(v => {
+          next[v.key] = prev[v.key] || '';
+        });
+        // Only update if keys changed
+        const prevKeys = Object.keys(prev).sort().join(',');
+        const nextKeys = Object.keys(next).sort().join(',');
+        if (prevKeys === nextKeys) return prev;
+        return next;
       });
-      setVariables(initial);
     }
-  }, [templateVariables]);
+  }, [templateId]); // Only run when template changes, not on every templateVariables recalc
   
   // Filter contacts by search
   const filteredContacts = useMemo(() => {
@@ -118,12 +125,16 @@ export function MTCampaignForm() {
     );
   }, [contacts, searchTerm]);
   
-  // Handle select all
+  // Track if initial selection has been made to avoid re-running on refetch
+  const [initialSelectionDone, setInitialSelectionDone] = useState(false);
+  
+  // Handle initial select all - only run once when contacts first load
   useEffect(() => {
-    if (selectAll && contacts) {
+    if (selectAll && contacts && contacts.length > 0 && !initialSelectionDone) {
       setSelectedContactIds(contacts.map(c => c.id));
+      setInitialSelectionDone(true);
     }
-  }, [selectAll, contacts]);
+  }, [selectAll, contacts, initialSelectionDone]);
   
   // Toggle contact selection
   const toggleContact = (contactId: string) => {
@@ -135,7 +146,7 @@ export function MTCampaignForm() {
     );
   };
   
-  // Toggle all
+  // Toggle all - manual action by user
   const handleSelectAllChange = (checked: boolean) => {
     setSelectAll(checked);
     if (checked && contacts) {
@@ -143,6 +154,8 @@ export function MTCampaignForm() {
     } else {
       setSelectedContactIds([]);
     }
+    // Mark as done since user manually interacted
+    setInitialSelectionDone(true);
   };
   
   // Handle submit
