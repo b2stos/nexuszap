@@ -15,6 +15,9 @@ verify_jwt = false
 [functions.campaign-process-queue]
 verify_jwt = false
 
+[functions.campaign-start]
+verify_jwt = false
+
 [functions.webhook-notificame]
 verify_jwt = false
 

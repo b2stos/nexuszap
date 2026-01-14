@@ -34,10 +34,17 @@ import {
   type BMLimitTier,
 } from '@/hooks/useCampaignContacts';
 
+// Selected contact with full data
+export interface SelectedContactData {
+  id: string;
+  phone: string;
+  name: string | null;
+}
+
 interface CampaignRecipientsProps {
   tenantId: string;
   selectedContactIds: Set<string>;
-  onSelectionChange: (ids: Set<string>) => void;
+  onSelectionChange: (ids: Set<string>, contacts: SelectedContactData[]) => void;
   onBMLimitChange?: (tier: BMLimitTier) => void;
 }
 
@@ -194,6 +201,14 @@ export function CampaignRecipients({
     return selectedContactIds.size > remainingLimit;
   }, [selectedContactIds.size, remainingLimit, bmLimit.value]);
   
+  // Helper to get selected contacts data
+  const getSelectedContactsData = useCallback((selection: Set<string>): SelectedContactData[] => {
+    if (!allContacts) return [];
+    return allContacts
+      .filter(c => selection.has(c.id))
+      .map(c => ({ id: c.id, phone: c.phone, name: c.name }));
+  }, [allContacts]);
+  
   // Toggle contact selection
   const toggleContact = useCallback((contactId: string) => {
     const newSelection = new Set(selectedContactIds);
@@ -208,8 +223,8 @@ export function CampaignRecipients({
       newSelection.add(contactId);
     }
     
-    onSelectionChange(newSelection);
-  }, [selectedContactIds, onSelectionChange, bmLimit.value, remainingLimit]);
+    onSelectionChange(newSelection, getSelectedContactsData(newSelection));
+  }, [selectedContactIds, onSelectionChange, bmLimit.value, remainingLimit, getSelectedContactsData]);
   
   // Select all visible (up to limit)
   const handleSelectAllVisible = useCallback(() => {
@@ -234,8 +249,8 @@ export function CampaignRecipients({
       pendingContacts.forEach(c => newSelection.delete(c.id));
     }
     
-    onSelectionChange(newSelection);
-  }, [selectedContactIds, pendingContacts, bmLimit.value, remainingLimit, onSelectionChange]);
+    onSelectionChange(newSelection, getSelectedContactsData(newSelection));
+  }, [selectedContactIds, pendingContacts, bmLimit.value, remainingLimit, onSelectionChange, getSelectedContactsData]);
   
   // Auto-select up to daily limit
   const handleSelectUpToLimit = useCallback(() => {
@@ -249,12 +264,12 @@ export function CampaignRecipients({
       newSelection.add(pendingContacts[i].id);
     }
     
-    onSelectionChange(newSelection);
-  }, [pendingContacts, bmLimit.value, remainingLimit, onSelectionChange]);
+    onSelectionChange(newSelection, getSelectedContactsData(newSelection));
+  }, [pendingContacts, bmLimit.value, remainingLimit, onSelectionChange, getSelectedContactsData]);
   
   // Clear selection
   const handleClearSelection = useCallback(() => {
-    onSelectionChange(new Set());
+    onSelectionChange(new Set(), []);
   }, [onSelectionChange]);
   
   // Are all visible selected?

@@ -175,6 +175,7 @@ export function MTCampaignForm() {
   const [templateId, setTemplateId] = useState("");
   const [sendSpeed, setSendSpeed] = useState<SendSpeed>("normal");
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
+  const [selectedContacts, setSelectedContacts] = useState<Array<{id: string; phone: string; name: string | null}>>([]);
   const [variables, setVariables] = useState<Record<string, string>>({});
   const [bmLimit, setBMLimit] = useState<BMLimitTier>(BM_LIMIT_TIERS[0]); // Default: 250
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -250,8 +251,9 @@ export function MTCampaignForm() {
   }, []);
   
   // Handle selection change from CampaignRecipients component
-  const handleSelectionChange = useCallback((ids: Set<string>) => {
+  const handleSelectionChange = useCallback((ids: Set<string>, contacts: Array<{id: string; phone: string; name: string | null}>) => {
     setSelectedContactIds(ids);
+    setSelectedContacts(contacts);
   }, []);
   
   // Handle BM limit change from CampaignRecipients
@@ -362,9 +364,11 @@ export function MTCampaignForm() {
         },
       });
       
-      // 2. Start the campaign immediately
+      // 2. Start the campaign immediately with contact data
       await startCampaign.mutateAsync({
         campaignId: campaign.id,
+        contacts: selectedContacts.map(c => ({ phone: c.phone, name: c.name })),
+        speed: sendSpeed,
       });
       
       setShowConfirmDialog(false);
