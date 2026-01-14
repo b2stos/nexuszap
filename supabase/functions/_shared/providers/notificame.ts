@@ -730,12 +730,23 @@ export const notificameProvider: Provider = {
     }
     
     // =====================================================
-    // NotificaMe Hub Template Send Format
-    // The Hub exposes both native and Cloud API format
-    // Based on testing, the "/v1/messages" endpoint expects Cloud API format
-    // while "/v1/channels/whatsapp/messages" is for session messages
-    // 
-    // Use Cloud API format: POST /v1/messages
+    // NotificaMe Hub Template Send Format (VERIFIED FROM n8n NODE)
+    // Endpoint: POST /channels/whatsapp/messages
+    // Format:
+    // {
+    //   "from": "subscription_id",
+    //   "to": "5511999999999",
+    //   "contents": [
+    //     {
+    //       "type": "template",
+    //       "template": {
+    //         "name": "template_name",
+    //         "language": { "code": "pt_BR" },
+    //         "components": [...]
+    //       }
+    //     }
+    //   ]
+    // }
     // =====================================================
     
     // Build components array for template variables
@@ -771,19 +782,19 @@ export const notificameProvider: Provider = {
       components.push(headerComponent);
     }
     
-    // Header variables
+    // Header variables (text)
     if (variables?.header?.length) {
       const existing = components.find(c => c.type === 'header');
       if (existing) {
         (existing.parameters as unknown[]).push(...variables.header.map(v => ({
-          type: v.type,
+          type: 'text',
           text: v.value,
         })));
       } else {
         components.push({
           type: 'header',
           parameters: variables.header.map(v => ({
-            type: v.type,
+            type: 'text',
             text: v.value,
           })),
         });
@@ -818,33 +829,37 @@ export const notificameProvider: Provider = {
       });
     }
     
-    // Button variables
+    // Button variables (URL buttons need special handling)
     if (variables?.button?.length) {
       variables.button.forEach((v, index) => {
         components.push({
           type: 'button',
-          sub_type: 'quick_reply',
+          sub_type: 'url',
           index,
-          parameters: [{ type: 'payload', payload: v.value }],
+          parameters: [{ type: 'text', text: v.value }],
         });
       });
     }
     
-    // NotificaMe Hub accepts Cloud API format on /messages endpoint
-    // Use "from" (subscription_id) + standard template payload
+    // NotificaMe Hub Native Format (VERIFIED from official n8n node)
+    // Uses "contents" array with template object inside
     const payload = {
-      from: subscriptionId,  // NotificaMe Hub requires "from" with subscription_id
+      from: subscriptionId,
       to: normalizePhoneNumber(to),
-      type: 'template',
-      template: {
-        name: template_name,
-        language: { code: language },
-        components: components.length > 0 ? components : undefined,
-      },
+      contents: [
+        {
+          type: 'template',
+          template: {
+            name: template_name,
+            language: { code: language },
+            ...(components.length > 0 && { components }),
+          },
+        },
+      ],
     };
     
-    // Use /messages endpoint (not /channels/whatsapp/messages which is for session)
-    const endpoint = '/messages';
+    // CORRECT ENDPOINT: /channels/whatsapp/messages (same as text messages)
+    const endpoint = '/channels/whatsapp/messages';
     
     try {
       const response = await notificameRequest<{
