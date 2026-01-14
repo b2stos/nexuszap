@@ -828,13 +828,13 @@ export const notificameProvider: Provider = {
       });
     }
     
-    // NotificaMe Hub native format
+    // NotificaMe Hub native format - uses snake_case!
     const payload = {
       from: subscriptionId,
       to: normalizePhoneNumber(to),
       contents: [{
         type: 'template',
-        templateName: template_name,
+        template_name: template_name,  // snake_case, NOT camelCase
         language: { code: language },
         ...(templateComponents.length > 0 && { components: templateComponents }),
       }],
