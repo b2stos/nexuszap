@@ -173,19 +173,21 @@ export function useCampaignRecipients(campaignId: string | undefined, filterStat
           contact:mt_contacts(id, phone, name)
         `)
         .eq('campaign_id', campaignId)
-        .order('created_at', { ascending: true });
+        .order('updated_at', { ascending: false });
       
       if (filterStatus) {
         query = query.eq('status', filterStatus);
       }
       
-      const { data, error } = await query.limit(500);
+      const { data, error } = await query.limit(100);
       
       if (error) throw error;
       
       return (data || []) as CampaignRecipient[];
     },
     enabled: !!campaignId,
+    // Refresh recipients when campaign is running
+    refetchInterval: 5000,
   });
 }
 
