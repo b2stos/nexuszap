@@ -30,14 +30,16 @@ import { useUserRole } from '@/hooks/useUserRole';
 interface HealthCheckResponse {
   timestamp: string;
   configuration: {
-    api_token_configured: boolean;
-    api_token_length: number;
     api_base_url: string;
+    channels_with_token: number;
+    total_channels: number;
   };
   api_connectivity: {
     success: boolean;
     status: number;
     message: string;
+    url_called?: string;
+    response_preview?: string;
   };
   channels: Array<{
     id: string;
@@ -45,6 +47,8 @@ interface HealthCheckResponse {
     status: string;
     last_connected_at: string | null;
     has_subscription_id: boolean;
+    has_token: boolean;
+    token_preview?: string;
   }>;
   recent_webhook_errors: Array<{
     id: string;
@@ -58,6 +62,10 @@ interface HealthCheckResponse {
     error_detail: string;
     created_at: string;
   }>;
+  filters?: {
+    errors_since: string;
+    note: string;
+  };
 }
 
 export default function NotificameDiagnostics() {
@@ -214,7 +222,7 @@ export default function NotificameDiagnostics() {
 
                 {/* Connectivity Test */}
                 <Separator />
-                <div className="p-4 rounded-lg border bg-card">
+                <div className="p-4 rounded-lg border bg-card space-y-3">
                   <div className="flex items-center gap-3">
                     <Wifi className={`w-5 h-5 ${healthData.api_connectivity.success ? 'text-green-500' : 'text-destructive'}`} />
                     <div>
@@ -226,6 +234,24 @@ export default function NotificameDiagnostics() {
                       </p>
                     </div>
                   </div>
+                  
+                  {/* URL Called */}
+                  {healthData.api_connectivity.url_called && (
+                    <div className="p-3 bg-muted/50 rounded-lg">
+                      <p className="text-xs font-medium text-muted-foreground mb-1">URL Chamada:</p>
+                      <p className="text-xs font-mono break-all">{healthData.api_connectivity.url_called}</p>
+                    </div>
+                  )}
+                  
+                  {/* Response Preview */}
+                  {healthData.api_connectivity.response_preview && (
+                    <div className="p-3 bg-muted/50 rounded-lg">
+                      <p className="text-xs font-medium text-muted-foreground mb-1">Resposta (primeiros 500 chars):</p>
+                      <pre className="text-xs font-mono whitespace-pre-wrap break-all max-h-32 overflow-auto">
+                        {healthData.api_connectivity.response_preview}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -276,8 +302,13 @@ export default function NotificameDiagnostics() {
                   <AlertTriangle className="w-5 h-5 text-orange-500" />
                   Erros Recentes (Outbound)
                 </CardTitle>
-                <CardDescription>
-                  Últimas 20 mensagens com falha no envio
+                <CardDescription className="flex flex-col gap-1">
+                  <span>Últimas 20 mensagens com falha no envio</span>
+                  {healthData.filters?.note && (
+                    <Badge variant="outline" className="w-fit text-xs">
+                      {healthData.filters.note}
+                    </Badge>
+                  )}
                 </CardDescription>
               </CardHeader>
               <CardContent>

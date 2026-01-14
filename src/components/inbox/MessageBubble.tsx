@@ -383,17 +383,28 @@ export const MessageBubble = memo(function MessageBubble({
             {/* Template indicator */}
             {message.type === 'template' && (
               <div>
-                {message.content && (
+                {/* Show rendered preview if available, otherwise show content */}
+                {message.content && message.content !== message.template_name ? (
                   <p className="text-sm whitespace-pre-wrap break-words">
                     {message.content}
                   </p>
+                ) : (
+                  <p className={cn(
+                    "text-sm italic",
+                    isInbound ? "text-muted-foreground" : "text-white/80"
+                  )}>
+                    [Template enviado]
+                  </p>
                 )}
-                <p className={cn(
-                  "text-xs mt-1",
-                  isInbound ? "text-muted-foreground" : "text-white/70"
-                )}>
-                  📋 Template: {message.template_name}
-                </p>
+                {message.template_name && (
+                  <p className={cn(
+                    "text-xs mt-1 flex items-center gap-1",
+                    isInbound ? "text-muted-foreground" : "text-white/70"
+                  )}>
+                    <span>📋</span>
+                    <span className="font-mono">{message.template_name}</span>
+                  </p>
+                )}
               </div>
             )}
             
