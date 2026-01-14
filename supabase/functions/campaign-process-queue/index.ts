@@ -477,6 +477,7 @@ async function processCampaignBatch(
   finished: boolean;
   rateLimited: boolean;
   errors: Array<{phone: string; error: string; code: string}>;
+  paused_reason?: string;
 }> {
   const startTime = Date.now();
   const config = SPEED_CONFIG[speed];
@@ -656,7 +657,7 @@ async function processCampaignBatch(
       );
       
       if (result.success) {
-        // Update recipient as sent
+        // Update recipient as sent ONLY after API confirmation
         await supabase
           .from('campaign_recipients')
           .update({
@@ -670,7 +671,7 @@ async function processCampaignBatch(
           .eq('id', recipient.id);
         
         stats.success++;
-        console.log(`[Campaign] ✅ Sent to ${phone}, message_id: ${result.provider_message_id}`);
+        console.log(`[Campaign] ✅ API confirmed sent to ${phone}, message_id: ${result.provider_message_id}`);
       } else {
         // Check if rate limited
         if (result.error?.http_status === 429) {
@@ -679,7 +680,55 @@ async function processCampaignBatch(
           console.log(`[Campaign] ⏳ Rate limited, backoff: ${currentBackoff}ms`);
         }
         
-        // Check if should retry
+        // **CRITICAL: Check for token/auth errors - PAUSE ENTIRE CAMPAIGN**
+        const isAuthError = result.error?.http_status === 401 || 
+                           result.error?.http_status === 403 ||
+                           result.error?.code?.includes('TOKEN') ||
+                           result.error?.code?.includes('AUTH');
+        
+        if (isAuthError) {
+          console.error(`[Campaign] 🚨 AUTH ERROR - Pausing campaign: ${result.error?.message}`);
+          
+          // Mark this recipient as failed
+          await supabase
+            .from('campaign_recipients')
+            .update({
+              status: 'failed',
+              attempts: recipient.attempts + 1,
+              last_error: result.error?.message || 'Token inválido',
+              next_retry_at: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', recipient.id);
+          
+          stats.failed++;
+          stats.errors.push({ phone, error: result.error?.message || 'Token inválido', code: result.error?.code || 'AUTH_ERROR' });
+          
+          // **PAUSE THE CAMPAIGN IMMEDIATELY**
+          await supabase
+            .from('mt_campaigns')
+            .update({
+              status: 'paused',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', campaign.id);
+          
+          console.log(`[Campaign] Campaign ${campaign.id} paused due to auth error`);
+          
+          // Return immediately - stop processing
+          return { 
+            processed: stats.processed + 1, 
+            success: stats.success, 
+            failed: stats.failed, 
+            retryScheduled: stats.retryScheduled,
+            finished: false, 
+            rateLimited: false,
+            errors: stats.errors,
+            paused_reason: 'TOKEN_INVALID',
+          };
+        }
+        
+        // Check if should retry (non-auth errors)
         if (result.error?.is_retryable && recipient.attempts < MAX_RETRIES - 1) {
           const nextRetryAt = new Date(Date.now() + calculateBackoff(recipient.attempts + 1));
           
@@ -697,7 +746,7 @@ async function processCampaignBatch(
           stats.retryScheduled++;
           console.log(`[Campaign] 🔄 Scheduled retry for ${phone} at ${nextRetryAt.toISOString()}`);
         } else {
-          // Permanent failure
+          // Permanent failure (non-auth)
           await supabase
             .from('campaign_recipients')
             .update({

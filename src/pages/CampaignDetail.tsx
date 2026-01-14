@@ -3,9 +3,10 @@
  * 
  * Mostra status, contadores, barra de progresso e lista de destinatários
  * Com polling ativo, última atualização, e botão de refresh manual
+ * **NEW: Exibe alertas de canal desconectado e erros recentes**
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { useProtectedUser } from "@/components/auth/ProtectedRoute";
@@ -30,6 +31,8 @@ import {
   Smartphone,
   FileText,
   AlertCircle,
+  Unplug,
+  Settings,
 } from "lucide-react";
 import { 
   useMTCampaign, 
@@ -43,6 +46,7 @@ import {
 import { formatDistanceToNow, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 
 const statusConfig: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   draft: { label: 'Rascunho', color: 'bg-gray-500', icon: <Clock className="h-4 w-4" /> },
@@ -82,6 +86,9 @@ export default function CampaignDetail() {
     recipientFilter === 'all' ? undefined : recipientFilter
   );
   
+  // Fetch failed recipients for error display
+  const { data: failedRecipients } = useCampaignRecipients(campaignId, 'failed');
+  
   // Mutations
   const startCampaign = useStartCampaign();
   const pauseCampaign = usePauseCampaign();
@@ -98,6 +105,32 @@ export default function CampaignDetail() {
   const processed = sent + failed;
   const queued = total - processed;
   const progressPercent = total > 0 ? (processed / total) * 100 : 0;
+  
+  // Detect channel issues
+  const isChannelDisconnected = campaign?.channel?.status !== 'connected';
+  
+  // Detect token errors in failed recipients
+  const tokenErrors = useMemo(() => {
+    if (!failedRecipients) return [];
+    return failedRecipients.filter(r => 
+      r.last_error?.toLowerCase().includes('token') ||
+      r.last_error?.toLowerCase().includes('invalid') ||
+      r.last_error?.toLowerCase().includes('expirado') ||
+      r.last_error?.toLowerCase().includes('401') ||
+      r.last_error?.toLowerCase().includes('403')
+    );
+  }, [failedRecipients]);
+  
+  const hasTokenError = tokenErrors.length > 0;
+  
+  // Get recent errors (max 10)
+  const recentErrors = useMemo(() => {
+    if (!failedRecipients) return [];
+    return failedRecipients.slice(0, 10);
+  }, [failedRecipients]);
+  
+  // Determine if campaign is stuck (paused with queued items and errors)
+  const isCampaignStuck = campaign?.status === 'paused' && queued > 0 && (hasTokenError || isChannelDisconnected);
   
   // Detect stall (no progress in 30 seconds while running)
   useEffect(() => {
@@ -283,6 +316,77 @@ export default function CampaignDetail() {
                 )}
                 Forçar Processamento
               </Button>
+            </CardContent>
+          </Card>
+        )}
+        
+        {/* Channel Disconnected Alert */}
+        {isChannelDisconnected && (
+          <Card className="border-red-500 bg-red-500/10">
+            <CardContent className="flex items-center justify-between py-4">
+              <div className="flex items-center gap-3">
+                <Unplug className="h-5 w-5 text-red-600" />
+                <div>
+                  <p className="font-medium text-red-700">Canal Desconectado</p>
+                  <p className="text-sm text-red-600">
+                    O canal "{campaign.channel?.name}" não está conectado. O envio não funcionará.
+                  </p>
+                </div>
+              </div>
+              <Button 
+                asChild
+                variant="outline" 
+                size="sm" 
+                className="border-red-500 text-red-700 hover:bg-red-500/20"
+              >
+                <Link to="/dashboard/channels">
+                  <Settings className="h-4 w-4 mr-2" />
+                  Reconectar
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+        
+        {/* Token Error Alert */}
+        {hasTokenError && !isChannelDisconnected && (
+          <Card className="border-orange-500 bg-orange-500/10">
+            <CardContent className="flex items-center justify-between py-4">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="h-5 w-5 text-orange-600" />
+                <div>
+                  <p className="font-medium text-orange-700">Token Inválido ou Expirado</p>
+                  <p className="text-sm text-orange-600">
+                    O envio foi pausado porque o token do canal está inválido. Reconecte o canal.
+                  </p>
+                </div>
+              </div>
+              <Button 
+                asChild
+                variant="outline" 
+                size="sm" 
+                className="border-orange-500 text-orange-700 hover:bg-orange-500/20"
+              >
+                <Link to="/dashboard/channels">
+                  <Settings className="h-4 w-4 mr-2" />
+                  Configurar Canal
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+        
+        {/* Campaign Stuck Alert */}
+        {isCampaignStuck && (
+          <Card className="border-yellow-500 bg-yellow-500/10">
+            <CardContent className="flex items-center gap-3 py-4">
+              <AlertCircle className="h-5 w-5 text-yellow-600" />
+              <div>
+                <p className="font-medium text-yellow-700">Campanha Pausada</p>
+                <p className="text-sm text-yellow-600">
+                  Ainda há {queued} contatos na fila. Corrija o problema do canal e clique em "Retomar".
+                </p>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -494,7 +598,51 @@ export default function CampaignDetail() {
                   Falhas ({failed})
                 </TabsTrigger>
               </TabsList>
-              
+        
+        {/* Recent Errors Section */}
+        {recentErrors.length > 0 && (
+          <Card className="border-red-200">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <XCircle className="h-5 w-5 text-red-500" />
+                <CardTitle className="text-lg text-red-700">Erros Recentes ({failed})</CardTitle>
+              </div>
+              <CardDescription>
+                Últimos erros de envio - verifique os motivos abaixo
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                {recentErrors.map((recipient) => (
+                  <div 
+                    key={recipient.id}
+                    className="flex items-center justify-between p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm">
+                        {recipient.contact?.name || 'Sem nome'}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {recipient.contact?.phone}
+                      </p>
+                    </div>
+                    <div className="flex-1 text-right">
+                      <p className="text-sm text-red-600 font-medium truncate" title={recipient.last_error || undefined}>
+                        {recipient.last_error || 'Erro desconhecido'}
+                      </p>
+                      {recipient.updated_at && (
+                        <p className="text-xs text-muted-foreground">
+                          {format(new Date(recipient.updated_at), 'dd/MM HH:mm', { locale: ptBR })}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        
               <TabsContent value={recipientFilter} className="mt-0">
                 {recipientsLoading ? (
                   <div className="flex items-center justify-center py-8">

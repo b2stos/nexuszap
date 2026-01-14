@@ -3,10 +3,11 @@
  * 
  * Handles campaign start with proper contact upsert to mt_contacts:
  * 1. Validates campaign exists and is not already running
- * 2. Upserts contacts to mt_contacts (resolves FK mismatch)
- * 3. Inserts campaign_recipients with valid contact_ids
- * 4. Updates mt_campaigns status to 'running'
- * 5. Returns { success: true, enqueued: N } or detailed error
+ * 2. **NEW: Validates channel connection and token BEFORE enqueuing**
+ * 3. Upserts contacts to mt_contacts (resolves FK mismatch)
+ * 4. Inserts campaign_recipients with valid contact_ids
+ * 5. Updates mt_campaigns status to 'running'
+ * 6. Returns { success: true, enqueued: N } or detailed error
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -15,6 +16,8 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+const NOTIFICAME_BASE_URL = 'https://api.notificame.com.br/v1';
 
 interface ContactData {
   phone: string;
@@ -26,6 +29,120 @@ interface RequestBody {
   campaign_id: string;
   contacts: ContactData[];
   speed?: 'slow' | 'normal' | 'fast';
+}
+
+interface ChannelConfig {
+  api_key?: string;
+  subscription_id?: string;
+}
+
+/**
+ * Extract and sanitize token from various formats
+ */
+function extractToken(raw: string | undefined | null): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  let token = raw.trim();
+  
+  // Remove Bearer prefix
+  if (token.toLowerCase().startsWith('bearer ')) {
+    token = token.slice(7).trim();
+  }
+  
+  // Remove X-API-Token: prefix
+  if (token.toLowerCase().startsWith('x-api-token:')) {
+    token = token.slice(12).trim();
+  }
+  
+  // Try to extract from JSON
+  if (token.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(token);
+      if (parsed.token) token = parsed.token;
+      else if (parsed.api_key) token = parsed.api_key;
+      else if (parsed.apiKey) token = parsed.apiKey;
+    } catch { /* not JSON */ }
+  }
+  
+  // If it's a valid length string without spaces, accept it
+  if (token.length >= 20 && !token.includes(' ')) {
+    return token;
+  }
+  
+  return null;
+}
+
+/**
+ * Validate channel connection by testing the NotificaMe API
+ * Returns { ok: true } or { ok: false, reason: string, code: string }
+ */
+async function validateChannelConnection(
+  channelConfig: ChannelConfig | null,
+  subscriptionId: string | null
+): Promise<{ ok: boolean; reason?: string; code?: string }> {
+  // Check if we have a token
+  const token = extractToken(channelConfig?.api_key);
+  
+  if (!token) {
+    return { ok: false, reason: 'Token não configurado no canal', code: 'NO_TOKEN' };
+  }
+  
+  // Check if token equals subscription_id (misconfiguration)
+  if (token === subscriptionId) {
+    return { 
+      ok: false, 
+      reason: 'Token configurado incorretamente (igual ao ID da assinatura). Verifique a API Key.', 
+      code: 'TOKEN_MISCONFIGURED' 
+    };
+  }
+  
+  if (!subscriptionId) {
+    return { ok: false, reason: 'Subscription ID não configurado', code: 'NO_SUBSCRIPTION' };
+  }
+  
+  // Test the API with a lightweight call
+  try {
+    console.log('[campaign-start] Testing NotificaMe connection...');
+    const response = await fetch(`${NOTIFICAME_BASE_URL}/subscriptions/${subscriptionId}`, {
+      method: 'GET',
+      headers: {
+        'X-API-Token': token,
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    console.log('[campaign-start] NotificaMe validation response:', response.status);
+    
+    if (response.status === 401 || response.status === 403) {
+      return { 
+        ok: false, 
+        reason: 'Token inválido ou expirado. Reconecte o canal em Configurações → Canais.',
+        code: 'TOKEN_INVALID'
+      };
+    }
+    
+    if (response.status === 404) {
+      // 404 can mean subscription not found, but also means auth worked
+      // For safety, treat as potentially valid but log warning
+      console.warn('[campaign-start] Subscription not found (404), but auth may be valid');
+      return { ok: true }; // Continue - the send will fail if truly invalid
+    }
+    
+    if (response.ok || response.status < 400) {
+      return { ok: true };
+    }
+    
+    // Other errors - allow to continue but log
+    console.warn('[campaign-start] Unexpected status:', response.status);
+    return { ok: true }; // Let it proceed, specific errors will show on send
+    
+  } catch (error) {
+    console.error('[campaign-start] Network error testing channel:', error);
+    return { 
+      ok: false, 
+      reason: 'Erro de conexão ao validar canal. Verifique sua conexão.',
+      code: 'NETWORK_ERROR'
+    };
+  }
 }
 
 Deno.serve(async (req) => {
@@ -67,11 +184,16 @@ Deno.serve(async (req) => {
       );
     }
 
-    // 1. Fetch campaign and validate status
-    console.log('[campaign-start] Fetching campaign...');
+    // 1. Fetch campaign WITH channel details for validation
+    console.log('[campaign-start] Fetching campaign with channel...');
     const { data: campaign, error: campaignError } = await supabase
       .from('mt_campaigns')
-      .select('id, tenant_id, status, name, channel_id, template_id')
+      .select(`
+        id, tenant_id, status, name, channel_id, template_id,
+        channel:channels!inner(
+          id, name, status, provider_config, provider_phone_id
+        )
+      `)
       .eq('id', campaign_id)
       .single();
 
@@ -92,6 +214,54 @@ Deno.serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
+    // 2. **NEW: Validate channel connection BEFORE proceeding**
+    // deno-lint-ignore no-explicit-any
+    const channelData = campaign.channel as any;
+    const channel = {
+      id: channelData.id as string,
+      name: channelData.name as string,
+      status: channelData.status as string,
+      provider_config: channelData.provider_config as ChannelConfig | null,
+      provider_phone_id: channelData.provider_phone_id as string | null,
+    };
+    
+    console.log('[campaign-start] Channel status:', channel.status);
+    
+    // Check channel status first
+    if (channel.status !== 'connected') {
+      console.error('[campaign-start] Channel not connected:', channel.status);
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: 'Canal desconectado',
+          error_code: 'CHANNEL_DISCONNECTED',
+          details: `O canal "${channel.name}" não está conectado. Reconecte em Configurações → Canais.`,
+          enqueued: 0 
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    
+    // Validate token with NotificaMe API
+    const subscriptionId = (channel.provider_config as ChannelConfig)?.subscription_id || channel.provider_phone_id;
+    const validation = await validateChannelConnection(channel.provider_config, subscriptionId);
+    
+    if (!validation.ok) {
+      console.error('[campaign-start] Channel validation failed:', validation.reason);
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: validation.reason,
+          error_code: validation.code,
+          details: 'Verifique a configuração do canal em Configurações → Canais.',
+          enqueued: 0 
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    
+    console.log('[campaign-start] Channel validation passed ✓');
 
     const tenantId = campaign.tenant_id;
     console.log('[campaign-start] Tenant ID:', tenantId);
