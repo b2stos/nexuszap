@@ -545,6 +545,8 @@ function ChannelCard({
   const [phoneNumber, setPhoneNumber] = useState(channel.phone_number || '');
   const [subscriptionId, setSubscriptionId] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [wabaId, setWabaId] = useState('');
+  const [accessToken, setAccessToken] = useState('');
   const [isValidating, setIsValidating] = useState(false);
   
   const updateChannel = useUpdateChannel();
@@ -601,6 +603,8 @@ function ChannelCard({
     const providerConfigUpdates: Record<string, unknown> = {};
     if (trimmedSubscriptionId) providerConfigUpdates.subscription_id = trimmedSubscriptionId;
     if (trimmedApiKey) providerConfigUpdates.api_key = trimmedApiKey;
+    if (wabaId.trim()) providerConfigUpdates.waba_id = wabaId.trim();
+    if (accessToken.trim()) providerConfigUpdates.access_token = accessToken.trim();
     
     if (Object.keys(providerConfigUpdates).length > 0) {
       input.provider_config = providerConfigUpdates;
@@ -625,6 +629,8 @@ function ChannelCard({
     setEditOpen(false);
     setSubscriptionId('');
     setApiKey('');
+    setWabaId('');
+    setAccessToken('');
     onUpdate();
   };
 
@@ -854,7 +860,7 @@ function ChannelCard({
             <div className="p-4 rounded-lg bg-primary/5 border border-primary/20 space-y-4">
               <div className="flex items-center gap-2 text-sm font-medium text-primary">
                 <Key className="w-4 h-4" />
-                Credenciais NotificaMe
+                Credenciais NotificaMe (BSP)
               </div>
 
               <div className="space-y-2">
@@ -891,6 +897,56 @@ function ChannelCard({
                   {config?.subscription_id && config.subscription_id.length === 36 && !config.subscription_id.includes('/')
                     ? `✓ Atual: ${config.subscription_id.substring(0, 8)}...${config.subscription_id.substring(28)}` 
                     : '✗ Subscription ID NÃO configurado'}
+                </p>
+              </div>
+            </div>
+            
+            <Separator />
+            
+            {/* Meta/WhatsApp Business API Section */}
+            <div className="p-4 rounded-lg bg-blue-500/5 border border-blue-500/20 space-y-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-blue-600">
+                <Globe className="w-4 h-4" />
+                Meta WhatsApp Business API (para importar templates)
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Configure estas credenciais para importar templates aprovados diretamente da Meta.
+              </p>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit-wabaId">
+                  WABA ID (WhatsApp Business Account ID) *
+                </Label>
+                <Input
+                  id="edit-wabaId"
+                  value={wabaId}
+                  onChange={(e) => setWabaId(e.target.value)}
+                  placeholder={config?.waba_id || "Ex: 123456789012345"}
+                  className="font-mono text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {config?.waba_id 
+                    ? `✓ Configurado: ${config.waba_id}` 
+                    : 'Encontre em: Meta Business Suite → WhatsApp Manager → Configurações da conta → ID da Conta'}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit-accessToken">
+                  Access Token da Meta (opcional)
+                </Label>
+                <Input
+                  id="edit-accessToken"
+                  type="password"
+                  value={accessToken}
+                  onChange={(e) => setAccessToken(e.target.value)}
+                  placeholder="Deixe vazio para usar token do BSP"
+                  className="font-mono text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {config?.access_token 
+                    ? `✓ Token Meta configurado (***${String(config.access_token).slice(-4)})` 
+                    : 'Se vazio, usará o token do NotificaMe como credencial BSP'}
                 </p>
               </div>
             </div>

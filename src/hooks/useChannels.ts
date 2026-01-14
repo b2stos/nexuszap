@@ -9,8 +9,10 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 
 export interface ChannelProviderConfig {
-  api_key?: string; // Token de autenticação da API
+  api_key?: string; // Token de autenticação da API (NotificaMe BSP)
   subscription_id?: string; // UUID do canal no NotificaMe (from)
+  waba_id?: string; // WhatsApp Business Account ID (Meta)
+  access_token?: string; // Access Token da Meta Graph API (opcional)
   base_url?: string;
   api_key_header?: string;
   api_key_prefix?: string;
