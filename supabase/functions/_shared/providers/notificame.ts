@@ -713,9 +713,8 @@ export const notificameProvider: Provider = {
   async sendTemplate(request: SendTemplateRequest): Promise<SendResponse> {
     const { channel, to, template_name, language, variables, media } = request;
     const config = channel.provider_config;
-    const endpoint = getEndpoint(config, 'send_template');
     
-    // Get subscription_id for "from" field
+    // Get subscription_id for "from" field (NotificaMe Hub format)
     const subscriptionId = config.subscription_id;
     if (!subscriptionId) {
       console.error('[NotificaMe] Missing subscription_id for sendTemplate');
@@ -731,13 +730,16 @@ export const notificameProvider: Provider = {
     }
     
     // =====================================================
-    // NotificaMe Hub API format (NOT Meta Cloud API format!)
-    // Uses: from, to, contents[{ type: 'template', ... }]
-    // NOT: messaging_product, recipient_type, template: {}
+    // NotificaMe Hub Template Send Format
+    // The Hub exposes both native and Cloud API format
+    // Based on testing, the "/v1/messages" endpoint expects Cloud API format
+    // while "/v1/channels/whatsapp/messages" is for session messages
+    // 
+    // Use Cloud API format: POST /v1/messages
     // =====================================================
     
     // Build components array for template variables
-    const templateComponents: Array<Record<string, unknown>> = [];
+    const components: Array<Record<string, unknown>> = [];
     
     // Header with media
     if (media) {
@@ -766,19 +768,19 @@ export const notificameProvider: Provider = {
         }];
       }
       
-      templateComponents.push(headerComponent);
+      components.push(headerComponent);
     }
     
     // Header variables
     if (variables?.header?.length) {
-      const existing = templateComponents.find(c => c.type === 'header');
+      const existing = components.find(c => c.type === 'header');
       if (existing) {
         (existing.parameters as unknown[]).push(...variables.header.map(v => ({
           type: v.type,
           text: v.value,
         })));
       } else {
-        templateComponents.push({
+        components.push({
           type: 'header',
           parameters: variables.header.map(v => ({
             type: v.type,
@@ -790,7 +792,7 @@ export const notificameProvider: Provider = {
     
     // Body variables
     if (variables?.body?.length) {
-      templateComponents.push({
+      components.push({
         type: 'body',
         parameters: variables.body.map(v => {
           if (v.type === 'currency') {
@@ -819,7 +821,7 @@ export const notificameProvider: Provider = {
     // Button variables
     if (variables?.button?.length) {
       variables.button.forEach((v, index) => {
-        templateComponents.push({
+        components.push({
           type: 'button',
           sub_type: 'quick_reply',
           index,
@@ -828,17 +830,21 @@ export const notificameProvider: Provider = {
       });
     }
     
-    // NotificaMe Hub native format - uses snake_case!
+    // NotificaMe Hub accepts Cloud API format on /messages endpoint
+    // Use "from" (subscription_id) + standard template payload
     const payload = {
-      from: subscriptionId,
+      from: subscriptionId,  // NotificaMe Hub requires "from" with subscription_id
       to: normalizePhoneNumber(to),
-      contents: [{
-        type: 'template',
-        template_name: template_name,  // snake_case, NOT camelCase
+      type: 'template',
+      template: {
+        name: template_name,
         language: { code: language },
-        ...(templateComponents.length > 0 && { components: templateComponents }),
-      }],
+        components: components.length > 0 ? components : undefined,
+      },
     };
+    
+    // Use /messages endpoint (not /channels/whatsapp/messages which is for session)
+    const endpoint = '/messages';
     
     try {
       const response = await notificameRequest<{
