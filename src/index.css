@@ -130,3 +130,31 @@ All colors MUST be HSL.
 .animate-fade-in {
   animation: fade-in 0.8s ease-out forwards;
 }
+
+/* =============================================
+   iOS Safari / iPad Layout Fix for Inbox
+   Uses dvh (dynamic viewport height) with vh fallback
+   ============================================= */
+
+/* Inbox container - fills available height properly on iOS */
+.inbox-container {
+  /* Fallback for browsers that don't support dvh */
+  height: calc(100vh - 4rem);
+  /* Modern browsers with dvh support */
+  height: calc(100dvh - 4rem);
+  /* Ensure proper flex behavior */
+  min-height: 0;
+}
+
+/* Fix for iOS Safari address bar changes */
+@supports (height: 100dvh) {
+  .inbox-container {
+    height: calc(100dvh - 4rem);
+  }
+}
+
+/* Ensure scroll containers work on iOS */
+.ios-scroll {
+  -webkit-overflow-scrolling: touch;
+  overflow-y: auto;
+}
