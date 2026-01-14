@@ -35,6 +35,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { parseVariablesFromText } from '@/utils/templateParser';
 
+type TemplateSource = 'notificame' | 'meta' | 'none';
+
 interface VariableSchema {
   index: number;
   key: string;
