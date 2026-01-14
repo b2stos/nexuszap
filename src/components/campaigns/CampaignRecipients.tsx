@@ -38,6 +38,7 @@ interface CampaignRecipientsProps {
   tenantId: string;
   selectedContactIds: Set<string>;
   onSelectionChange: (ids: Set<string>) => void;
+  onBMLimitChange?: (tier: BMLimitTier) => void;
 }
 
 // BM Limit Dropdown Component
@@ -148,11 +149,18 @@ export function CampaignRecipients({
   tenantId,
   selectedContactIds,
   onSelectionChange,
+  onBMLimitChange,
 }: CampaignRecipientsProps) {
   // State
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'pending' | 'sent'>('pending');
   const [bmLimit, setBMLimit] = useState<BMLimitTier>(BM_LIMIT_TIERS[0]); // Default: 250
+  
+  // Notify parent when BM limit changes
+  const handleBMLimitChange = useCallback((tier: BMLimitTier) => {
+    setBMLimit(tier);
+    onBMLimitChange?.(tier);
+  }, [onBMLimitChange]);
   
   // Fetch all contacts (same source as Contacts page)
   const { data: allContacts, isLoading: contactsLoading } = useAllMTContacts(tenantId);
@@ -283,7 +291,7 @@ export function CampaignRecipients({
                   <BMLimitDropdown
                     tiers={BM_LIMIT_TIERS}
                     selectedTier={bmLimit}
-                    onSelect={setBMLimit}
+                    onSelect={handleBMLimitChange}
                   />
                 </div>
                 
