@@ -33,11 +33,13 @@ import {
 // DEFAULT CONFIGURATION
 // ============================================
 
+// IMPORTANT: baseUrl already includes /v1 (e.g., https://api.notificame.com.br/v1)
+// So endpoints should NOT include /v1 prefix to avoid /v1/v1 duplication!
 const DEFAULT_ENDPOINTS = {
-  send_message: '/v1/messages',
-  send_template: '/v1/messages',
-  upload_media: '/v1/media',
-  get_media: '/v1/media',
+  send_message: '/messages',
+  send_template: '/messages',
+  upload_media: '/media',
+  get_media: '/media',
 };
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -817,19 +819,50 @@ export const notificameProvider: Provider = {
     try {
       const response = await notificameRequest<{
         messages?: Array<{ id: string }>;
-        error?: unknown;
+        error?: { message?: string; type?: string; code?: string };
       }>(config, {
         method: 'POST',
         path: endpoint,
         body: payload,
       });
       
+      // Check for HTTP error status
       if (!response.ok) {
         const error = extractErrorFromResponse(response.status, response.data);
         return { success: false, raw: response.data, error };
       }
       
+      // CRITICAL: Check for error in response body even with HTTP 200
+      // NotificaMe sometimes returns 200 OK with error object in body
+      if (response.data.error) {
+        const errData = response.data.error;
+        console.error('[NotificaMe] ERROR IN BODY (HTTP 200):', JSON.stringify(errData));
+        return {
+          success: false,
+          raw: response.data,
+          error: createProviderError(
+            'invalid_request',
+            errData.code || errData.type || 'API_ERROR',
+            errData.message || 'Erro desconhecido da API NotificaMe'
+          ),
+        };
+      }
+      
       const messageId = response.data.messages?.[0]?.id;
+      
+      // Validate that we got a message ID
+      if (!messageId) {
+        console.error('[NotificaMe] No message ID in response:', JSON.stringify(response.data));
+        return {
+          success: false,
+          raw: response.data,
+          error: createProviderError(
+            'invalid_request',
+            'NO_MESSAGE_ID',
+            'API não retornou ID da mensagem - verifique se o template está aprovado e o número é válido'
+          ),
+        };
+      }
       
       return {
         success: true,
