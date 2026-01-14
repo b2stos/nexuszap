@@ -440,6 +440,7 @@ export type Database = {
           channel_id: string
           contact_id: string
           created_at: string
+          deleted_at: string | null
           id: string
           is_pinned: boolean
           last_inbound_at: string | null
@@ -455,6 +456,7 @@ export type Database = {
           channel_id: string
           contact_id: string
           created_at?: string
+          deleted_at?: string | null
           id?: string
           is_pinned?: boolean
           last_inbound_at?: string | null
@@ -470,6 +472,7 @@ export type Database = {
           channel_id?: string
           contact_id?: string
           created_at?: string
+          deleted_at?: string | null
           id?: string
           is_pinned?: boolean
           last_inbound_at?: string | null
@@ -735,6 +738,7 @@ export type Database = {
           content: string | null
           conversation_id: string
           created_at: string
+          deleted_at: string | null
           delivered_at: string | null
           direction: Database["public"]["Enums"]["message_direction"]
           error_code: string | null
@@ -761,6 +765,7 @@ export type Database = {
           content?: string | null
           conversation_id: string
           created_at?: string
+          deleted_at?: string | null
           delivered_at?: string | null
           direction: Database["public"]["Enums"]["message_direction"]
           error_code?: string | null
@@ -787,6 +792,7 @@ export type Database = {
           content?: string | null
           conversation_id?: string
           created_at?: string
+          deleted_at?: string | null
           delivered_at?: string | null
           direction?: Database["public"]["Enums"]["message_direction"]
           error_code?: string | null

@@ -67,6 +67,7 @@ export function useConversations(tenantId: string | undefined, filter: Conversat
           channel:channels(id, name, phone_number)
         `)
         .eq('tenant_id', tenantId)
+        .is('deleted_at', null) // Filtrar conversas não deletadas
         .order('is_pinned', { ascending: false })
         .order('last_message_at', { ascending: false, nullsFirst: false });
       
@@ -75,9 +76,12 @@ export function useConversations(tenantId: string | undefined, filter: Conversat
         query = query.gt('unread_count', 0);
       }
       
-      // Filtro de status
+      // Filtro de status - não mostra arquivadas por padrão
       if (filter.status && filter.status !== 'all') {
         query = query.eq('status', filter.status);
+      } else {
+        // Por padrão, não mostrar arquivadas
+        query = query.neq('status', 'archived');
       }
       
       const { data, error } = await query;
@@ -117,6 +121,7 @@ export function useMessages(conversationId: string | undefined) {
         .from('mt_messages')
         .select('*')
         .eq('conversation_id', conversationId)
+        .is('deleted_at', null) // Filtrar mensagens não deletadas
         .order('created_at', { ascending: true });
       
       if (error) throw error;
