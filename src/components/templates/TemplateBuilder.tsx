@@ -164,10 +164,10 @@ function HeaderSection({
   onTextChange,
   onMediaUrlChange,
 }: {
-  format: HeaderFormat;
+  format: LocalHeaderFormat;
   text: string;
   mediaUrl: string;
-  onFormatChange: (format: HeaderFormat) => void;
+  onFormatChange: (format: LocalHeaderFormat) => void;
   onTextChange: (text: string) => void;
   onMediaUrlChange: (url: string) => void;
 }) {
@@ -175,7 +175,7 @@ function HeaderSection({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <Label className="text-sm font-medium">Header (opcional)</Label>
-        <Select value={format} onValueChange={(v) => onFormatChange(v as HeaderFormat)}>
+        <Select value={format} onValueChange={(v) => onFormatChange(v as LocalHeaderFormat)}>
           <SelectTrigger className="w-[160px]">
             <SelectValue />
           </SelectTrigger>
