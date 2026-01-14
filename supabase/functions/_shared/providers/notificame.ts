@@ -68,12 +68,14 @@ async function notificameRequest<T = unknown>(
 ): Promise<HttpResponse<T>> {
   // =====================================================
   // SINGLE SOURCE OF TRUTH: NotificaMe Hub API Base URL
-  // The Hub API does NOT use /v1 prefix - it uses /channels/whatsapp/* directly
+  // Match notificameClient.ts: BASE_URL = https://api.notificame.com.br/v1
+  // Endpoints: /channels/whatsapp/messages
   // ENV: NOTIFICAME_API_BASE_URL (default to official)
   // =====================================================
-  const DEFAULT_BASE_URL = 'https://api.notificame.com.br';
+  const DEFAULT_BASE_URL = 'https://api.notificame.com.br/v1';
   const envBase = (Deno.env.get('NOTIFICAME_API_BASE_URL') || '').trim();
-  const baseUrl = (envBase || DEFAULT_BASE_URL).replace(/\/+$/, '').replace(/\/v1$/, ''); // Strip any /v1 suffix
+  // Don't strip /v1 - it's required!
+  const baseUrl = (envBase || DEFAULT_BASE_URL).replace(/\/+$/, '');
 
   // VALIDATION: Block any non-official domain to avoid regressions
   if (!baseUrl.includes('notificame.com.br')) {
