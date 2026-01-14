@@ -13,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -439,20 +439,20 @@ export function MTCampaignForm() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <RadioGroup
-            value={sendSpeed}
-            onValueChange={(value) => setSendSpeed(value as SendSpeed)}
-            className="grid grid-cols-3 gap-4"
-          >
+          <fieldset className="grid grid-cols-3 gap-4" aria-label="Velocidade de envio">
             <div>
-              <RadioGroupItem
-                value="slow"
+              <input
+                type="radio"
                 id="speed-slow"
+                name="sendSpeed"
+                value="slow"
+                checked={sendSpeed === "slow"}
+                onChange={() => setSendSpeed("slow")}
                 className="peer sr-only"
               />
               <Label
                 htmlFor="speed-slow"
-                className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-checked:border-primary cursor-pointer"
               >
                 <Snail className="mb-2 h-6 w-6 text-green-500" />
                 <span className="text-sm font-medium">Lento</span>
@@ -461,15 +461,20 @@ export function MTCampaignForm() {
                 </span>
               </Label>
             </div>
+
             <div>
-              <RadioGroupItem
-                value="normal"
+              <input
+                type="radio"
                 id="speed-normal"
+                name="sendSpeed"
+                value="normal"
+                checked={sendSpeed === "normal"}
+                onChange={() => setSendSpeed("normal")}
                 className="peer sr-only"
               />
               <Label
                 htmlFor="speed-normal"
-                className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-checked:border-primary cursor-pointer"
               >
                 <Gauge className="mb-2 h-6 w-6 text-blue-500" />
                 <span className="text-sm font-medium">Normal</span>
@@ -478,15 +483,20 @@ export function MTCampaignForm() {
                 </span>
               </Label>
             </div>
+
             <div>
-              <RadioGroupItem
-                value="fast"
+              <input
+                type="radio"
                 id="speed-fast"
+                name="sendSpeed"
+                value="fast"
+                checked={sendSpeed === "fast"}
+                onChange={() => setSendSpeed("fast")}
                 className="peer sr-only"
               />
               <Label
                 htmlFor="speed-fast"
-                className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-checked:border-primary cursor-pointer"
               >
                 <Zap className="mb-2 h-6 w-6 text-yellow-500" />
                 <span className="text-sm font-medium">Rápido</span>
@@ -495,7 +505,7 @@ export function MTCampaignForm() {
                 </span>
               </Label>
             </div>
-          </RadioGroup>
+          </fieldset>
         </CardContent>
       </Card>
       
