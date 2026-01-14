@@ -265,15 +265,27 @@ export function MTCampaignForm() {
     return channels.find(c => c.id === channelId) || null;
   }, [channels, channelId]);
   
-  // Validation: check if form is ready to submit
-  const isFormValid = useMemo(() => {
-    return (
-      name.trim().length > 0 &&
-      channelId.length > 0 &&
-      templateId.length > 0 &&
-      selectedContactIds.size > 0
-    );
+  // Validation: check if form is ready to submit - with detailed error tracking
+  const validationErrors = useMemo(() => {
+    const errors: string[] = [];
+    
+    if (!name.trim()) {
+      errors.push('Nome da campanha');
+    }
+    if (!channelId) {
+      errors.push('Canal WhatsApp');
+    }
+    if (!templateId) {
+      errors.push('Template de mensagem');
+    }
+    if (selectedContactIds.size === 0) {
+      errors.push('Ao menos 1 destinatário');
+    }
+    
+    return errors;
   }, [name, channelId, templateId, selectedContactIds.size]);
+  
+  const isFormValid = validationErrors.length === 0;
   
   // Handle "Save as Draft" - creates campaign without starting
   const handleSaveDraft = async () => {
@@ -616,12 +628,21 @@ export function MTCampaignForm() {
                   </span>
                 </>
               ) : (
-                <>
-                  <AlertCircle className="h-4 w-4 text-amber-500" />
-                  <span className="text-muted-foreground">
-                    Preencha os campos obrigatórios
-                  </span>
-                </>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 text-amber-500" />
+                    <span className="text-muted-foreground">
+                      Campos obrigatórios faltando:
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 ml-6">
+                    {validationErrors.map((error, idx) => (
+                      <Badge key={idx} variant="outline" className="text-xs text-amber-600 border-amber-300">
+                        {error}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
             
