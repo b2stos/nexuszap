@@ -6,6 +6,7 @@
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import type { InboxConversation, InboxMessage } from '@/types/inbox';
 import { toast } from 'sonner';
 
 export function useResolveConversation() {
@@ -135,36 +136,124 @@ export function useTogglePinConversation() {
 
 /**
  * Soft delete de conversa - define deleted_at para remover da lista
- * Usa edge function para garantir que mensagens também sejam marcadas
+ * Usa backend function para garantir que mensagens também sejam marcadas
+ * 
+ * Requisitos:
+ * - Optimistic UI: remove da lista imediatamente
+ * - Rollback em erro: volta a conversa
+ * - Toast com detalhes reais do erro (status + body quando disponível)
  */
 export function useDeleteConversation() {
   const queryClient = useQueryClient();
-  
-  return useMutation({
-    mutationFn: async ({ 
-      conversationId, 
-      hardDelete = false 
-    }: { 
-      conversationId: string; 
-      hardDelete?: boolean;
-    }) => {
+
+  const formatInvokeError = (err: unknown) => {
+    const anyErr = err as any;
+    const status = anyErr?.context?.status;
+    const body = anyErr?.context?.body;
+
+    let bodyText = '';
+    if (typeof body === 'string') {
+      bodyText = body;
+    } else if (body) {
+      try {
+        bodyText = JSON.stringify(body);
+      } catch {
+        bodyText = String(body);
+      }
+    }
+
+    const baseMessage = anyErr?.message || 'Erro ao apagar conversa';
+
+    if (status) {
+      // Prefer a clear API error message if present
+      const parsedMessage = (() => {
+        if (typeof body === 'object' && body?.error) return String(body.error);
+        try {
+          const parsed = typeof bodyText === 'string' ? JSON.parse(bodyText) : null;
+          if (parsed?.error) return String(parsed.error);
+        } catch {
+          // ignore
+        }
+        return '';
+      })();
+
+      const details = parsedMessage || bodyText;
+      return details ? `HTTP ${status}: ${details}` : `HTTP ${status}: ${baseMessage}`;
+    }
+
+    return baseMessage;
+  };
+
+  return useMutation<
+    string,
+    Error,
+    { conversationId: string; hardDelete?: boolean },
+    {
+      conversationQuerySnapshots: Array<{
+        queryKey: unknown[];
+        data: InboxConversation[] | undefined;
+      }>;
+      messagesSnapshot: InboxMessage[] | undefined;
+    }
+  >({
+    mutationFn: async ({ conversationId, hardDelete = false }) => {
       const { data, error } = await supabase.functions.invoke('inbox-delete-conversation', {
         method: 'DELETE',
         body: { conversationId, hardDelete },
       });
-      
-      if (error) throw error;
+
+      if (error) throw error as unknown as Error;
       if (data?.error) throw new Error(data.error);
-      
-      return conversationId;
+
+      return data?.conversationId || conversationId;
+    },
+    onMutate: async ({ conversationId }) => {
+      await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] });
+      await queryClient.cancelQueries({ queryKey: ['inbox-messages', conversationId] });
+
+      // Snapshot all conversation list caches (tenantId + filter variants)
+      const conversationQueries = queryClient.getQueriesData<InboxConversation[]>({
+        queryKey: ['inbox-conversations'],
+      });
+
+      const conversationQuerySnapshots = conversationQueries.map(([queryKey, data]) => ({
+        queryKey: queryKey as unknown[],
+        data,
+      }));
+
+      // Optimistic: remove from all cached conversation lists
+      conversationQueries.forEach(([queryKey]) => {
+        queryClient.setQueryData<InboxConversation[]>(queryKey, (old) =>
+          old ? old.filter((c) => c.id !== conversationId) : old
+        );
+      });
+
+      // Optimistic: clear messages cache for this conversation
+      const messagesKey = ['inbox-messages', conversationId] as const;
+      const messagesSnapshot = queryClient.getQueryData<InboxMessage[]>(messagesKey);
+      queryClient.setQueryData<InboxMessage[]>(messagesKey, []);
+
+      return { conversationQuerySnapshots, messagesSnapshot };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] });
-      queryClient.invalidateQueries({ queryKey: ['inbox-messages'] });
       toast.success('Conversa apagada');
     },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Erro ao apagar conversa');
+    onError: (err, variables, context) => {
+      // Rollback caches
+      context?.conversationQuerySnapshots.forEach(({ queryKey, data }) => {
+        queryClient.setQueryData(queryKey, data);
+      });
+
+      if (context) {
+        queryClient.setQueryData(['inbox-messages', variables.conversationId], context.messagesSnapshot);
+      }
+
+      toast.error(formatInvokeError(err));
+    },
+    onSettled: (_data, _error, variables) => {
+      // Ensure backend truth wins
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['inbox-messages', variables.conversationId] });
     },
   });
 }

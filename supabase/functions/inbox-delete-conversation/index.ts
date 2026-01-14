@@ -93,14 +93,21 @@ Deno.serve(async (req) => {
 
     const now = new Date().toISOString();
 
+    // Use service role for soft/hard delete operations (mt_messages has no DELETE policy)
+    const supabaseServiceRole = createClient(
+      supabaseUrl,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
     if (hardDelete) {
       // Hard delete: remove messages first, then conversation
       console.log("[inbox-delete-conversation] Performing hard delete");
 
-      const { error: msgDeleteError } = await supabase
+      const { error: msgDeleteError } = await supabaseServiceRole
         .from("mt_messages")
         .delete()
-        .eq("conversation_id", conversationId);
+        .eq("conversation_id", conversationId)
+        .eq("tenant_id", conversation.tenant_id);
 
       if (msgDeleteError) {
         console.error("[inbox-delete-conversation] Error deleting messages:", msgDeleteError);
@@ -110,10 +117,11 @@ Deno.serve(async (req) => {
         );
       }
 
-      const { error: convDeleteError } = await supabase
+      const { error: convDeleteError } = await supabaseServiceRole
         .from("conversations")
         .delete()
-        .eq("id", conversationId);
+        .eq("id", conversationId)
+        .eq("tenant_id", conversation.tenant_id);
 
       if (convDeleteError) {
         console.error("[inbox-delete-conversation] Error deleting conversation:", convDeleteError);
@@ -126,17 +134,12 @@ Deno.serve(async (req) => {
       // Soft delete: set deleted_at timestamp
       console.log("[inbox-delete-conversation] Performing soft delete");
 
-      // Use service role for updating deleted_at since user might not have direct update permission
-      const supabaseServiceRole = createClient(
-        supabaseUrl,
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-      );
-
       // Soft delete messages
       const { error: msgUpdateError } = await supabaseServiceRole
         .from("mt_messages")
         .update({ deleted_at: now })
         .eq("conversation_id", conversationId)
+        .eq("tenant_id", conversation.tenant_id)
         .is("deleted_at", null);
 
       if (msgUpdateError) {
@@ -151,7 +154,8 @@ Deno.serve(async (req) => {
       const { error: convUpdateError } = await supabaseServiceRole
         .from("conversations")
         .update({ deleted_at: now })
-        .eq("id", conversationId);
+        .eq("id", conversationId)
+        .eq("tenant_id", conversation.tenant_id);
 
       if (convUpdateError) {
         console.error("[inbox-delete-conversation] Error soft-deleting conversation:", convUpdateError);
@@ -165,7 +169,7 @@ Deno.serve(async (req) => {
     console.log(`[inbox-delete-conversation] Successfully deleted conversation: ${conversationId}`);
 
     return new Response(
-      JSON.stringify({ ok: true }),
+      JSON.stringify({ ok: true, conversationId }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
