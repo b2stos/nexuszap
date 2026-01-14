@@ -221,8 +221,8 @@ export default function Inbox() {
             </div>
           </div>
           
-          {/* Right Column - Contact Panel (hidden on mobile and tablet) */}
-          <div className="w-80 flex-shrink-0 hidden xl:block">
+          {/* Right Column - Contact Panel (hidden on mobile, visible on lg+) */}
+          <div className="w-72 lg:w-80 flex-shrink-0 hidden lg:block">
             <ContactPanel
               conversation={activeConversation}
               contact={contact || activeConversation?.contact || null}
