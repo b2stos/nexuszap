@@ -247,6 +247,14 @@ export default function Inbox() {
               filter={filter}
               onFilterChange={setFilter}
               onSelect={handleSelectConversation}
+              onDeleteConversation={(conversationId) => {
+                // Find the conversation to delete
+                const convToDelete = conversations.find(c => c.id === conversationId);
+                if (convToDelete) {
+                  setActiveConversation(convToDelete);
+                  setShowDeleteDialog(true);
+                }
+              }}
             />
           </div>
           
