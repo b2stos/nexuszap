@@ -34,12 +34,24 @@ export function DashboardHeader({ user }: DashboardHeaderProps) {
         .single();
 
       if (data) {
-        setProfile(data);
+        // Use profile avatar, or fallback to Google OAuth avatar from user metadata
+        const googleAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture;
+        setProfile({
+          full_name: data.full_name || user.user_metadata?.full_name || user.user_metadata?.name,
+          avatar_url: data.avatar_url || googleAvatar || null
+        });
+      } else {
+        // No profile yet, use Google OAuth data directly
+        const googleAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture;
+        setProfile({
+          full_name: user.user_metadata?.full_name || user.user_metadata?.name || null,
+          avatar_url: googleAvatar || null
+        });
       }
     }
 
     fetchProfile();
-  }, [user?.id]);
+  }, [user?.id, user?.user_metadata]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
