@@ -29,6 +29,8 @@ import {
   Search,
   CheckCircle2,
   AlertCircle,
+  ChevronDown,
+  Check,
 } from "lucide-react";
 import { useChannels } from "@/hooks/useChannels";
 import { useApprovedTemplates } from "@/hooks/useTemplates";
@@ -37,7 +39,7 @@ import { useCreateMTCampaign, useCurrentTenantForCampaigns } from "@/hooks/useMT
 
 type SendSpeed = 'slow' | 'normal' | 'fast';
 
-// Memoized select option to prevent ref instability
+// Memoized channel option to prevent ref instability
 const ChannelOption = memo(function ChannelOption({ 
   channel, 
   isSelected, 
@@ -67,32 +69,98 @@ const ChannelOption = memo(function ChannelOption({
   );
 });
 
-// Memoized template option
-const TemplateOption = memo(function TemplateOption({
-  template,
-  isSelected,
-  onSelect
+// Custom dropdown selector for templates (avoids Radix ref issues)
+const TemplateDropdown = memo(function TemplateDropdown({
+  templates,
+  selectedId,
+  onSelect,
+  isLoading,
 }: {
-  template: { id: string; name: string; category: string };
-  isSelected: boolean;
+  templates: Array<{ id: string; name: string; category: string }>;
+  selectedId: string;
   onSelect: (id: string) => void;
+  isLoading: boolean;
 }) {
-  return (
-    <div
-      onClick={() => onSelect(template.id)}
-      className={`p-3 rounded-md cursor-pointer transition-colors ${
-        isSelected 
-          ? 'bg-primary text-primary-foreground' 
-          : 'bg-muted/50 hover:bg-muted'
-      }`}
-    >
-      <div className="flex items-center gap-2">
-        <CheckCircle2 className={`h-4 w-4 ${isSelected ? 'opacity-100' : 'opacity-0'}`} />
-        <Badge variant="outline" className={isSelected ? 'border-primary-foreground' : ''}>
-          {template.category}
-        </Badge>
-        <span className="font-medium">{template.name}</span>
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  
+  // Close on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+  
+  const selectedTemplate = templates.find(t => t.id === selectedId);
+  
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 p-4 bg-muted/30 rounded-md border">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <span className="text-sm text-muted-foreground">Carregando templates...</span>
       </div>
+    );
+  }
+  
+  if (templates.length === 0) {
+    return (
+      <div className="p-4 text-center text-sm text-muted-foreground bg-muted/30 rounded-md border">
+        Nenhum template aprovado encontrado
+      </div>
+    );
+  }
+  
+  return (
+    <div ref={dropdownRef} className="relative">
+      {/* Trigger button - looks like a select */}
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background hover:bg-accent hover:text-accent-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+      >
+        <span className={selectedTemplate ? 'text-foreground' : 'text-muted-foreground'}>
+          {selectedTemplate 
+            ? `${selectedTemplate.category} - ${selectedTemplate.name}` 
+            : 'Selecione um template'
+          }
+        </span>
+        <ChevronDown className={`h-4 w-4 opacity-50 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      
+      {/* Dropdown menu */}
+      {isOpen && (
+        <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover text-popover-foreground shadow-md max-h-[300px] overflow-y-auto">
+          <div className="p-1">
+            {templates.map((template) => (
+              <div
+                key={template.id}
+                onClick={() => {
+                  onSelect(template.id);
+                  setIsOpen(false);
+                }}
+                className={`relative flex cursor-pointer select-none items-center rounded-sm px-2 py-2 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground ${
+                  selectedId === template.id ? 'bg-accent' : ''
+                }`}
+              >
+                <span className="mr-2 flex h-4 w-4 items-center justify-center">
+                  {selectedId === template.id && <Check className="h-4 w-4" />}
+                </span>
+                <Badge variant="outline" className="mr-2 text-xs">
+                  {template.category}
+                </Badge>
+                <span>{template.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 });
@@ -369,27 +437,12 @@ export function MTCampaignForm() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {templatesLoading ? (
-            <div className="flex items-center gap-2 p-4 bg-muted/30 rounded-md">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm text-muted-foreground">Carregando templates...</span>
-            </div>
-          ) : (templates ?? []).length === 0 ? (
-            <div className="p-4 text-center text-sm text-muted-foreground bg-muted/30 rounded-md">
-              Nenhum template aprovado encontrado
-            </div>
-          ) : (
-            <div className="grid gap-2 max-h-[300px] overflow-y-auto">
-              {(templates ?? []).map((template) => (
-                <TemplateOption
-                  key={template.id}
-                  template={template}
-                  isSelected={templateId === template.id}
-                  onSelect={handleTemplateSelect}
-                />
-              ))}
-            </div>
-          )}
+          <TemplateDropdown
+            templates={templates ?? []}
+            selectedId={templateId}
+            onSelect={handleTemplateSelect}
+            isLoading={templatesLoading}
+          />
           
           {/* Template Preview & Variables */}
           {selectedTemplate && (
