@@ -892,16 +892,20 @@ Deno.serve(async (req) => {
     // Log context for debugging
     console.log(`[Campaign][${traceId}] Context: tenant=${campaign.tenant_id}, channel=${campaign.channel_id}`);
     
-    // Check campaign status
+    // Check campaign status - NOT an error, just a no-op
     if (campaign.status !== 'running') {
-      console.log(`[Campaign][${traceId}] Campaign not running (status: ${campaign.status})`);
-      return createErrorResponse(
-        traceId,
-        'CAMPAIGN_NOT_RUNNING',
-        `Campanha não está em execução (status: ${campaign.status})`,
-        400,
-        { current_status: campaign.status }
-      );
+      console.log(`[Campaign][${traceId}] Campaign not running (status: ${campaign.status}) - returning noop`);
+      // Return 200 with noop flag - this is expected behavior, not an error
+      return createSuccessResponse(traceId, {
+        campaign_id,
+        noop: true,
+        reason: 'CAMPAIGN_NOT_RUNNING',
+        current_status: campaign.status,
+        processed: 0,
+        success: 0,
+        failed: 0,
+        finished: true,
+      });
     }
     
     // Process batch
