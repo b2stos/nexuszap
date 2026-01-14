@@ -191,7 +191,8 @@ export function useCampaignRecipients(campaignId: string | undefined, filterStat
   });
 }
 
-// Create campaign
+// Create campaign (draft only - no recipients inserted here)
+// Recipients are inserted by campaign-start edge function when starting
 export function useCreateMTCampaign() {
   const queryClient = useQueryClient();
   
@@ -205,7 +206,12 @@ export function useCreateMTCampaign() {
       userId: string;
       input: CreateCampaignInput;
     }) => {
-      // Create campaign
+      console.log('[useCreateMTCampaign] Creating campaign:', input.name);
+      console.log('[useCreateMTCampaign] Contact IDs count:', input.contact_ids?.length || 0);
+      
+      // Create campaign as draft
+      // Note: We store total_recipients as the expected count,
+      // but actual recipients are inserted when campaign starts via campaign-start edge function
       const { data: campaign, error: campaignError } = await supabase
         .from('mt_campaigns')
         .insert({
@@ -222,37 +228,27 @@ export function useCreateMTCampaign() {
         .select()
         .single();
       
-      if (campaignError) throw campaignError;
-      
-      // Create recipients
-      const recipients = input.contact_ids.map(contactId => ({
-        campaign_id: campaign.id,
-        contact_id: contactId,
-        status: 'queued' as const,
-        variables: {},
-      }));
-      
-      // Insert in batches
-      const BATCH_SIZE = 500;
-      for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-        const batch = recipients.slice(i, i + BATCH_SIZE);
-        const { error: recipientsError } = await supabase
-          .from('campaign_recipients')
-          .insert(batch);
-        
-        if (recipientsError) {
-          console.error('Failed to insert recipients batch:', recipientsError);
-          // Continue with other batches
-        }
+      if (campaignError) {
+        console.error('[useCreateMTCampaign] Failed to create campaign:', campaignError);
+        throw campaignError;
       }
+      
+      console.log('[useCreateMTCampaign] Campaign created:', campaign.id);
+      
+      // NOTE: We no longer insert recipients here!
+      // The campaign-start edge function handles:
+      // 1. Upserting contacts to mt_contacts (resolves FK issues)
+      // 2. Inserting campaign_recipients with valid contact IDs
+      // This is done when the user clicks "Iniciar Campanha"
       
       return campaign as MTCampaign;
     },
     onSuccess: (_, { tenantId }) => {
       queryClient.invalidateQueries({ queryKey: ['mt-campaigns', tenantId] });
-      toast.success('Campanha criada com sucesso');
+      toast.success('Campanha criada como rascunho');
     },
     onError: (error) => {
+      console.error('[useCreateMTCampaign] Error:', error);
       toast.error('Erro ao criar campanha', {
         description: error instanceof Error ? error.message : 'Tente novamente',
       });
@@ -260,12 +256,78 @@ export function useCreateMTCampaign() {
   });
 }
 
-// Start campaign
+// Contact data for campaign start
+export interface CampaignContactData {
+  phone: string;
+  name: string | null;
+  email?: string | null;
+}
+
+// Start campaign - uses new campaign-start edge function when contacts provided
+// If no contacts provided, just updates status (for resuming campaigns with existing recipients)
 export function useStartCampaign() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: async ({ campaignId }: { campaignId: string }) => {
+    mutationFn: async ({ 
+      campaignId, 
+      contacts,
+      speed = 'normal' 
+    }: { 
+      campaignId: string; 
+      contacts?: CampaignContactData[];
+      speed?: 'slow' | 'normal' | 'fast';
+    }) => {
+      console.log('[useStartCampaign] Starting campaign:', campaignId, 'with', contacts?.length || 0, 'contacts');
+      
+      // If contacts are provided, use the campaign-start edge function
+      // This handles upsert to mt_contacts and creates campaign_recipients
+      if (contacts && contacts.length > 0) {
+        const { data, error } = await supabase.functions.invoke('campaign-start', {
+          body: { 
+            campaign_id: campaignId, 
+            contacts,
+            speed 
+          },
+        });
+        
+        console.log('[useStartCampaign] Edge function response:', data, error);
+        
+        if (error) {
+          console.error('[useStartCampaign] Edge function error:', error);
+          throw new Error(error.message || 'Erro ao iniciar campanha');
+        }
+        
+        if (!data?.success) {
+          const errorMsg = data?.error || 'Falha ao enfileirar destinatários';
+          const details = data?.details ? ` (${data.details})` : '';
+          console.error('[useStartCampaign] Start failed:', errorMsg, details);
+          throw new Error(`${errorMsg}${details}`);
+        }
+        
+        if (data.enqueued === 0) {
+          throw new Error('Nenhum destinatário foi enfileirado. Verifique os contatos selecionados.');
+        }
+        
+        return {
+          campaign_id: campaignId,
+          id: campaignId,
+          enqueued: data.enqueued,
+          ...data,
+        };
+      }
+      
+      // No contacts provided - just update status (for resuming or starting existing draft)
+      // First check if there are existing recipients
+      const { count: recipientCount } = await supabase
+        .from('campaign_recipients')
+        .select('*', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId);
+      
+      if (!recipientCount || recipientCount === 0) {
+        throw new Error('Campanha não possui destinatários. Recrie a campanha com contatos.');
+      }
+      
       // Update status to running
       const { data, error } = await supabase
         .from('mt_campaigns')
@@ -282,21 +344,31 @@ export function useStartCampaign() {
       
       // Trigger first batch processing
       const { error: processError } = await supabase.functions.invoke('campaign-process-queue', {
-        body: { campaign_id: campaignId, speed: 'normal' },
+        body: { campaign_id: campaignId, speed },
       });
       
       if (processError) {
-        console.warn('Failed to trigger initial processing:', processError);
+        console.warn('[useStartCampaign] Failed to trigger initial processing:', processError);
       }
       
-      return data;
+      return {
+        campaign_id: campaignId,
+        id: data.id,
+        enqueued: recipientCount,
+      };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['mt-campaigns'] });
-      queryClient.invalidateQueries({ queryKey: ['mt-campaign', data.id] });
-      toast.success('Campanha iniciada');
+      queryClient.invalidateQueries({ queryKey: ['mt-campaign', data.campaign_id || data.id] });
+      queryClient.invalidateQueries({ queryKey: ['campaign-recipients', data.campaign_id || data.id] });
+      
+      const msg = data.enqueued 
+        ? `Campanha iniciada com ${data.enqueued} destinatários`
+        : 'Campanha iniciada';
+      toast.success(msg);
     },
     onError: (error) => {
+      console.error('[useStartCampaign] Error:', error);
       toast.error('Erro ao iniciar campanha', {
         description: error instanceof Error ? error.message : 'Tente novamente',
       });
