@@ -263,6 +263,73 @@ export interface CampaignContactData {
   email?: string | null;
 }
 
+/**
+ * Parse error details from Supabase functions invoke response
+ * The SDK may return error in `error` property or inside `data`
+ */
+function parseEdgeFunctionError(
+  error: Error | null, 
+  data: unknown
+): { message: string; traceId?: string; code?: string } | null {
+  // First check if there's a standardized error response in data
+  if (data && typeof data === 'object') {
+    const response = data as Record<string, unknown>;
+    const traceId = response.traceId as string | undefined;
+    
+    // Standardized format: { ok: false, error: { code, message } }
+    if (response.ok === false && response.error && typeof response.error === 'object') {
+      const err = response.error as Record<string, unknown>;
+      return {
+        message: String(err.message || 'Erro no servidor'),
+        code: String(err.code || 'UNKNOWN'),
+        traceId,
+      };
+    }
+    
+    // Legacy format: { success: false, error: string }
+    if (response.success === false && response.error) {
+      const errorMsg = typeof response.error === 'string' 
+        ? response.error 
+        : (response.error as Record<string, unknown>).message || 'Erro no servidor';
+      const details = response.details ? ` (${response.details})` : '';
+      return {
+        message: `${errorMsg}${details}`,
+        traceId,
+      };
+    }
+  }
+  
+  // Check the SDK error object
+  if (error) {
+    // Try to parse the error message as JSON (sometimes SDK wraps the response)
+    try {
+      const parsed = JSON.parse(error.message);
+      if (parsed.error && typeof parsed.error === 'object') {
+        return {
+          message: String(parsed.error.message || error.message),
+          code: String(parsed.error.code || 'UNKNOWN'),
+          traceId: parsed.traceId,
+        };
+      }
+      if (parsed.message) {
+        return {
+          message: parsed.message,
+          traceId: parsed.traceId,
+        };
+      }
+    } catch {
+      // Not JSON, use the message directly
+    }
+    
+    // Use the raw error message
+    return {
+      message: error.message || 'Erro de conexão',
+    };
+  }
+  
+  return null;
+}
+
 // Start campaign - uses new campaign-start edge function when contacts provided
 // If no contacts provided, just updates status (for resuming campaigns with existing recipients)
 export function useStartCampaign() {
@@ -283,60 +350,66 @@ export function useStartCampaign() {
       // If contacts are provided, use the campaign-start edge function
       // This handles upsert to mt_contacts and creates campaign_recipients
       if (contacts && contacts.length > 0) {
-        const { data, error } = await supabase.functions.invoke('campaign-start', {
-          body: { 
-            campaign_id: campaignId, 
-            contacts,
-            speed 
-          },
-        });
+        let responseData: unknown = null;
+        let responseError: Error | null = null;
         
-        console.log('[useStartCampaign] Edge function response:', data, error);
-        
-        if (error) {
-          console.error('[useStartCampaign] Edge function error:', error);
-          throw new Error(error.message || 'Erro ao iniciar campanha');
-        }
-        
-        // Handle standardized error response
-        if (data && typeof data === 'object') {
-          const response = data as Record<string, unknown>;
-          const traceId = response.traceId as string | undefined;
+        try {
+          const result = await supabase.functions.invoke('campaign-start', {
+            body: { 
+              campaign_id: campaignId, 
+              contacts,
+              speed 
+            },
+          });
           
-          if (response.ok === false && response.error) {
-            const err = response.error as Record<string, unknown>;
-            const errorMsg = String(err.message || 'Erro desconhecido');
-            const errorWithTrace = traceId ? `${errorMsg} (Trace: ${traceId})` : errorMsg;
-            console.error('[useStartCampaign] API error:', err);
-            throw new Error(errorWithTrace);
-          }
+          responseData = result.data;
+          responseError = result.error;
           
-          // Legacy format
-          if (!response.success && response.error) {
-            const errorMsg = String(response.error);
-            const details = response.details ? ` (${response.details})` : '';
-            const errorWithTrace = traceId ? `${errorMsg}${details} (Trace: ${traceId})` : `${errorMsg}${details}`;
-            console.error('[useStartCampaign] Start failed:', errorMsg, details);
-            throw new Error(errorWithTrace);
-          }
+          console.log('[useStartCampaign] Edge function response:', {
+            hasData: !!responseData,
+            hasError: !!responseError,
+            data: responseData,
+            error: responseError?.message,
+          });
+        } catch (fetchError) {
+          // Network/CORS/Timeout error
+          console.error('[useStartCampaign] Fetch exception:', fetchError);
+          const errorMsg = fetchError instanceof Error 
+            ? `Erro de conexão: ${fetchError.message}`
+            : 'Erro de conexão com o servidor';
+          throw new Error(errorMsg);
         }
         
-        if (!data?.success) {
-          const errorMsg = data?.error || 'Falha ao enfileirar destinatários';
-          const details = data?.details ? ` (${data.details})` : '';
-          console.error('[useStartCampaign] Start failed:', errorMsg, details);
-          throw new Error(`${errorMsg}${details}`);
+        // Parse any error from the response
+        const parsedError = parseEdgeFunctionError(responseError, responseData);
+        
+        if (parsedError) {
+          const errorWithTrace = parsedError.traceId 
+            ? `${parsedError.message} (Trace: ${parsedError.traceId})`
+            : parsedError.message;
+          console.error('[useStartCampaign] Parsed error:', parsedError);
+          throw new Error(errorWithTrace);
         }
         
+        // Check for success response
+        const data = responseData as Record<string, unknown> | null;
+        
+        if (!data) {
+          throw new Error('Resposta vazia do servidor');
+        }
+        
+        // Check if enqueued is 0 (no recipients added)
         if (data.enqueued === 0) {
-          throw new Error('Nenhum destinatário foi enfileirado. Verifique os contatos selecionados.');
+          const traceId = data.traceId as string | undefined;
+          const errorMsg = 'Nenhum destinatário foi enfileirado. Verifique os contatos selecionados.';
+          throw new Error(traceId ? `${errorMsg} (Trace: ${traceId})` : errorMsg);
         }
         
         return {
           campaign_id: campaignId,
           id: campaignId,
-          enqueued: data.enqueued,
-          traceId: data.traceId,
+          enqueued: data.enqueued as number,
+          traceId: data.traceId as string | undefined,
           ...data,
         };
       }
@@ -394,7 +467,7 @@ export function useStartCampaign() {
     onError: (error) => {
       console.error('[useStartCampaign] Error:', error);
       toast.error('Erro ao iniciar campanha', {
-        description: error instanceof Error ? error.message : 'Tente novamente',
+        description: error instanceof Error ? error.message : 'Erro desconhecido. Tente novamente.',
       });
     },
   });
@@ -573,35 +646,24 @@ export function useRetryFailedRecipients() {
   });
 }
 
-// Helper to extract error details from response
+// Helper to extract error details from response (now uses parseEdgeFunctionError for consistency)
 function extractErrorDetails(data: unknown): { code: string; message: string; traceId?: string; details?: unknown } {
+  const parsed = parseEdgeFunctionError(null, data);
+  if (parsed) {
+    return {
+      code: parsed.code || 'UNKNOWN',
+      message: parsed.message,
+      traceId: parsed.traceId,
+    };
+  }
+  
+  // Fallback for edge cases
   if (!data || typeof data !== 'object') {
-    return { code: 'UNKNOWN', message: 'Erro desconhecido' };
+    return { code: 'UNKNOWN', message: 'Resposta inválida do servidor' };
   }
   
   const response = data as Record<string, unknown>;
   const traceId = response.traceId as string | undefined;
-  
-  // Standardized format: { ok: false, traceId, error: { code, message, details } }
-  if (response.ok === false && response.error && typeof response.error === 'object') {
-    const err = response.error as Record<string, unknown>;
-    return {
-      code: String(err.code || 'UNKNOWN'),
-      message: String(err.message || 'Erro no servidor'),
-      traceId,
-      details: err.details,
-    };
-  }
-  
-  // Legacy format: { error: string }
-  if (typeof response.error === 'string') {
-    return {
-      code: 'LEGACY_ERROR',
-      message: response.error,
-      traceId,
-      details: response.details || response.status,
-    };
-  }
   
   // Errors array format
   if (Array.isArray(response.errors) && response.errors.length > 0) {
@@ -614,7 +676,7 @@ function extractErrorDetails(data: unknown): { code: string; message: string; tr
     };
   }
   
-  return { code: 'UNKNOWN', message: 'Erro desconhecido', traceId };
+  return { code: 'UNKNOWN', message: 'Erro no servidor', traceId };
 }
 
 // Process next batch (called from polling)
@@ -623,34 +685,41 @@ export function useProcessCampaignBatch() {
   
   return useMutation({
     mutationFn: async ({ campaignId, speed = 'normal' }: { campaignId: string; speed?: string }) => {
-      const { data, error } = await supabase.functions.invoke('campaign-process-queue', {
-        body: { campaign_id: campaignId, speed },
-      });
+      let responseData: unknown = null;
+      let responseError: Error | null = null;
       
-      // Handle Supabase invoke error
-      if (error) {
-        console.error('[useProcessCampaignBatch] Invoke error:', error);
-        throw new Error(error.message || 'Erro ao processar campanha');
+      try {
+        const result = await supabase.functions.invoke('campaign-process-queue', {
+          body: { campaign_id: campaignId, speed },
+        });
+        responseData = result.data;
+        responseError = result.error;
+      } catch (fetchError) {
+        console.error('[useProcessCampaignBatch] Fetch exception:', fetchError);
+        throw new Error(fetchError instanceof Error ? fetchError.message : 'Erro de conexão');
       }
       
-      // Check for standardized error response
-      if (data && typeof data === 'object' && (data as Record<string, unknown>).ok === false) {
-        const errorDetails = extractErrorDetails(data);
-        console.error('[useProcessCampaignBatch] API error:', errorDetails);
-        
+      // Parse error from response
+      const parsedError = parseEdgeFunctionError(responseError, responseData);
+      
+      if (parsedError) {
         // Don't throw for "not running" - it's expected when campaign finishes
-        if (errorDetails.code === 'CAMPAIGN_NOT_RUNNING') {
+        if (parsedError.code === 'CAMPAIGN_NOT_RUNNING') {
           console.log('[useProcessCampaignBatch] Campaign finished, not an error');
-          return { ...data, campaign_id: campaignId, finished: true };
+          return { 
+            ...(responseData as Record<string, unknown>), 
+            campaign_id: campaignId, 
+            finished: true 
+          };
         }
         
-        const errorWithTrace = errorDetails.traceId 
-          ? `${errorDetails.message} (Trace: ${errorDetails.traceId})`
-          : errorDetails.message;
+        const errorWithTrace = parsedError.traceId 
+          ? `${parsedError.message} (Trace: ${parsedError.traceId})`
+          : parsedError.message;
         throw new Error(errorWithTrace);
       }
       
-      return { ...data, campaign_id: campaignId };
+      return { ...(responseData as Record<string, unknown>), campaign_id: campaignId };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['mt-campaigns'] });
@@ -659,8 +728,8 @@ export function useProcessCampaignBatch() {
     },
     onError: (error) => {
       // Only show toast for unexpected errors
-      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      if (!errorMessage.includes('não está em execução')) {
+      const errorMessage = error instanceof Error ? error.message : 'Erro ao processar campanha';
+      if (!errorMessage.includes('não está em execução') && !errorMessage.includes('CAMPAIGN_NOT_RUNNING')) {
         console.error('[useProcessCampaignBatch] Error:', errorMessage);
         toast.error('Erro ao processar lote', {
           description: errorMessage,
