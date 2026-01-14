@@ -131,9 +131,23 @@ async function validateChannelConnection(
       return { ok: true };
     }
     
-    // Other errors - allow to continue but log
-    console.warn('[campaign-start] Unexpected status:', response.status);
-    return { ok: true }; // Let it proceed, specific errors will show on send
+    // 5xx errors often indicate malformed token or server issues
+    if (response.status >= 500) {
+      console.error('[campaign-start] Server error during validation:', response.status);
+      return { 
+        ok: false, 
+        reason: 'Erro ao validar token. Verifique se o token está correto e tente novamente.',
+        code: 'TOKEN_VALIDATION_ERROR'
+      };
+    }
+    
+    // Other 4xx errors - treat as potential auth issues
+    console.error('[campaign-start] Unexpected client error:', response.status);
+    return { 
+      ok: false, 
+      reason: `Erro de autenticação (${response.status}). Verifique a configuração do canal.`,
+      code: 'AUTH_ERROR'
+    };
     
   } catch (error) {
     console.error('[campaign-start] Network error testing channel:', error);
