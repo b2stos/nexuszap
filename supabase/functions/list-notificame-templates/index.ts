@@ -115,17 +115,36 @@ function generateVariablesSchema(components: TemplateComponent[]): Record<string
 
 /**
  * Busca templates via API do NotificaMe (BSP)
+ * 
+ * O NotificaMe usa subscriptions (channel IDs). Precisamos tentar endpoints
+ * baseados na subscription_id quando disponível.
  */
-async function fetchTemplatesFromNotificaMe(token: string): Promise<{ success: boolean; templates: NotificaMeTemplate[]; error?: string }> {
+async function fetchTemplatesFromNotificaMe(
+  token: string, 
+  subscriptionId?: string
+): Promise<{ success: boolean; templates: NotificaMeTemplate[]; error?: string }> {
   console.log('[list-templates] Trying NotificaMe API...');
   
-  // Try multiple NotificaMe endpoints
-  const endpoints = [
+  // Build endpoints to try - subscription-specific endpoints first
+  const endpoints: string[] = [];
+  
+  if (subscriptionId) {
+    // Subscription-based endpoints (most likely to work)
+    endpoints.push(
+      `/subscriptions/${subscriptionId}/templates`,
+      `/subscriptions/${subscriptionId}/message-templates`,
+      `/channels/${subscriptionId}/templates`,
+      `/whatsapp/${subscriptionId}/templates`
+    );
+  }
+  
+  // Generic endpoints as fallback
+  endpoints.push(
+    '/subscriptions/templates',
     '/templates',
     '/message-templates',
-    '/whatsapp/templates',
-    '/channels/whatsapp/templates',
-  ];
+    '/whatsapp/templates'
+  );
 
   for (const endpoint of endpoints) {
     console.log(`[list-templates] Trying NotificaMe endpoint: ${endpoint}`);
@@ -156,11 +175,25 @@ async function fetchTemplatesFromNotificaMe(token: string): Promise<{ success: b
         return { success: true, templates };
       }
     } else {
-      console.log(`[list-templates] NotificaMe ${endpoint} failed: ${result.error?.message || 'Unknown'}`);
+      const errorMsg = result.error?.message || 'Unknown';
+      console.log(`[list-templates] NotificaMe ${endpoint} failed: ${errorMsg}`);
+      
+      // Stop trying if it's an auth error
+      if (result.status === 401 || result.status === 403) {
+        return { 
+          success: false, 
+          templates: [], 
+          error: 'Token NotificaMe inválido ou expirado. Reconecte o canal.' 
+        };
+      }
     }
   }
 
-  return { success: false, templates: [], error: 'Nenhum template encontrado via NotificaMe API' };
+  return { 
+    success: false, 
+    templates: [], 
+    error: 'API do NotificaMe não retornou templates. Pode ser necessário configurar o Access Token da Meta para buscar diretamente.' 
+  };
 }
 
 /**
@@ -327,7 +360,8 @@ Deno.serve(async (req: Request) => {
     // Strategy 1: Try NotificaMe API first (most common for BSP users)
     if (notificameToken) {
       console.log(`[list-templates] Attempting NotificaMe API with token: ${maskToken(notificameToken)}`);
-      const notificameResult = await fetchTemplatesFromNotificaMe(notificameToken);
+      const subscriptionId = providerConfig?.subscription_id;
+      const notificameResult = await fetchTemplatesFromNotificaMe(notificameToken, subscriptionId);
       
       if (notificameResult.success && notificameResult.templates.length > 0) {
         templates = notificameResult.templates;

@@ -74,6 +74,8 @@ interface Channel {
   phone_number: string | null;
   provider_config: {
     waba_id?: string;
+    access_token?: string;
+    api_key?: string;
   } | null;
 }
 
@@ -103,6 +105,9 @@ export function ImportTemplatesDialog({
 
   const selectedChannel = channels.find(c => c.id === selectedChannelId);
   const hasWabaId = !!selectedChannel?.provider_config?.waba_id;
+  const hasMetaToken = !!selectedChannel?.provider_config?.access_token;
+  const hasNotificameToken = !!selectedChannel?.provider_config?.api_key;
+  const canFetchTemplates = hasNotificameToken || (hasWabaId && hasMetaToken);
 
   // Load channels when dialog opens
   useEffect(() => {
@@ -113,13 +118,13 @@ export function ImportTemplatesDialog({
 
   // Load templates when channel is selected
   useEffect(() => {
-    if (selectedChannelId && hasWabaId) {
+    if (selectedChannelId && canFetchTemplates) {
       loadTemplates();
     } else {
       setTemplates([]);
       setSelectedTemplates(new Set());
     }
-  }, [selectedChannelId, hasWabaId]);
+  }, [selectedChannelId, canFetchTemplates]);
 
   const loadChannels = async () => {
     setIsLoadingChannels(true);
@@ -371,9 +376,9 @@ export function ImportTemplatesDialog({
                           {channel.phone_number && (
                             <span className="text-muted-foreground">({channel.phone_number})</span>
                           )}
-                          {!channel.provider_config?.waba_id && (
+                          {!channel.provider_config?.api_key && !channel.provider_config?.access_token && (
                             <Badge variant="outline" className="text-xs text-yellow-600">
-                              Sem WABA_ID
+                              Sem Token
                             </Badge>
                           )}
                         </div>
@@ -382,13 +387,26 @@ export function ImportTemplatesDialog({
                   </SelectContent>
                 </Select>
 
-                {/* WABA ID Warning */}
-                {selectedChannelId && !hasWabaId && (
+                {/* Configuration Warning */}
+                {selectedChannelId && !canFetchTemplates && (
                   <Alert variant="destructive">
                     <AlertCircle className="h-4 w-4" />
                     <AlertDescription>
-                      Este canal não possui WABA_ID configurado. 
-                      Edite o canal e adicione o ID da conta WhatsApp Business para importar templates.
+                      <strong>Configuração necessária para importar templates:</strong>
+                      <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
+                        {!hasNotificameToken && (
+                          <li>Token do NotificaMe não configurado</li>
+                        )}
+                        {!hasWabaId && (
+                          <li>WABA ID (ID da conta WhatsApp Business)</li>
+                        )}
+                        {!hasMetaToken && (
+                          <li>Access Token da Meta (para buscar templates diretamente)</li>
+                        )}
+                      </ul>
+                      <p className="mt-2 text-sm">
+                        Acesse <strong>Canais → Editar</strong> para configurar estas credenciais.
+                      </p>
                     </AlertDescription>
                   </Alert>
                 )}
@@ -405,7 +423,7 @@ export function ImportTemplatesDialog({
           )}
 
           {/* Templates List */}
-          {selectedChannelId && hasWabaId && (
+          {selectedChannelId && canFetchTemplates && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">
