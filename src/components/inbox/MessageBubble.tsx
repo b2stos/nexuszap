@@ -383,23 +383,42 @@ export const MessageBubble = memo(function MessageBubble({
             {/* Template indicator */}
             {message.type === 'template' && (
               <div>
-                {/* Show rendered preview if available, otherwise show content */}
-                {message.content && message.content !== message.template_name ? (
-                  <p className="text-sm whitespace-pre-wrap break-words">
-                    {message.content}
-                  </p>
-                ) : (
-                  <p className={cn(
-                    "text-sm italic",
-                    isInbound ? "text-muted-foreground" : "text-white/80"
-                  )}>
-                    [Template enviado]
-                  </p>
-                )}
+                {/* Determine if content is a real preview or just the template name */}
+                {(() => {
+                  const content = message.content?.trim();
+                  const templateName = message.template_name?.trim();
+                  
+                  // Check if content is just the template name or "Template: name" pattern
+                  const isJustTemplateName = !content || 
+                    content === templateName ||
+                    content.toLowerCase() === `template: ${templateName?.toLowerCase()}` ||
+                    content.toLowerCase().startsWith('template:');
+                  
+                  if (!isJustTemplateName && content) {
+                    // Real rendered preview available
+                    return (
+                      <p className="text-sm whitespace-pre-wrap break-words">
+                        {content}
+                      </p>
+                    );
+                  } else {
+                    // No useful preview, show placeholder
+                    return (
+                      <p className={cn(
+                        "text-sm italic",
+                        isInbound ? "text-muted-foreground" : "text-white/80"
+                      )}>
+                        Mensagem de template enviada
+                      </p>
+                    );
+                  }
+                })()}
+                
+                {/* Template name badge */}
                 {message.template_name && (
                   <p className={cn(
-                    "text-xs mt-1 flex items-center gap-1",
-                    isInbound ? "text-muted-foreground" : "text-white/70"
+                    "text-[10px] mt-1.5 flex items-center gap-1 opacity-70",
+                    isInbound ? "text-muted-foreground" : "text-white/60"
                   )}>
                     <span>📋</span>
                     <span className="font-mono">{message.template_name}</span>
