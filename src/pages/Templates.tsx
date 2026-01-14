@@ -17,6 +17,7 @@ import {
   XCircle,
   RefreshCw,
   Building2,
+  Download,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -34,7 +35,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -48,17 +48,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
+import { TemplateBuilder, TemplateBuilderOutput } from '@/components/templates/TemplateBuilder';
+import { ImportTemplatesDialog } from '@/components/templates/ImportTemplatesDialog';
 import { supabase } from '@/integrations/supabase/client';
 import { User } from '@supabase/supabase-js';
 import { format } from 'date-fns';
@@ -66,14 +58,18 @@ import { ptBR } from 'date-fns/locale';
 import {
   useCurrentTenantForTemplates,
   useTemplates,
-  useCreateTemplate,
-  useUpdateTemplate,
   useDeleteTemplate,
   Template,
-  CreateTemplateInput,
-  TemplateVariablesSchema,
 } from '@/hooks/useTemplates';
 import { useOnboarding } from '@/hooks/useOnboarding';
+import { toast } from 'sonner';
+import { 
+  componentsToJson, 
+  variablesToSchema,
+  jsonToComponents,
+  TemplateComponent,
+  DetectedVariable,
+} from '@/utils/templateParser';
 
 // Track onboarding when a template is created
 function useTrackTemplateCreation(templatesCount: number) {
@@ -116,8 +112,8 @@ function StatusBadge({ status }: { status: string }) {
   }
 }
 
-// Template form dialog
-function TemplateFormDialog({
+// Template Builder Dialog
+function TemplateBuilderDialog({
   open,
   onOpenChange,
   template,
@@ -132,190 +128,105 @@ function TemplateFormDialog({
   providerId: string;
   onSuccess: () => void;
 }) {
-  const [name, setName] = useState('');
-  const [language, setLanguage] = useState('pt_BR');
-  const [category, setCategory] = useState('MARKETING');
-  const [status, setStatus] = useState<'approved' | 'pending' | 'rejected'>('approved');
-  const [variablesJson, setVariablesJson] = useState('');
-  const [jsonError, setJsonError] = useState('');
-  
-  const createTemplate = useCreateTemplate();
-  const updateTemplate = useUpdateTemplate();
-  
+  const [isLoading, setIsLoading] = useState(false);
   const isEditing = !!template;
-  const isLoading = createTemplate.isPending || updateTemplate.isPending;
+
+  // Parse existing template data
+  const initialComponents = template?.components 
+    ? jsonToComponents(template.components) 
+    : [];
   
-  // Reset form when dialog opens/closes or template changes
-  useEffect(() => {
-    if (open) {
-      if (template) {
-        setName(template.name);
-        setLanguage(template.language);
-        setCategory(template.category);
-        setStatus(template.status);
-        setVariablesJson(
-          template.variables_schema 
-            ? JSON.stringify(template.variables_schema, null, 2) 
-            : ''
-        );
-      } else {
-        setName('');
-        setLanguage('pt_BR');
-        setCategory('MARKETING');
-        setStatus('approved');
-        setVariablesJson('');
-      }
-      setJsonError('');
-    }
-  }, [open, template]);
-  
-  const handleSubmit = async () => {
-    // Validate JSON
-    let parsedVariables: TemplateVariablesSchema | undefined;
-    if (variablesJson.trim()) {
-      try {
-        parsedVariables = JSON.parse(variablesJson);
-        setJsonError('');
-      } catch (e) {
-        setJsonError('JSON inválido');
-        return;
-      }
-    }
-    
-    const input: CreateTemplateInput = {
-      name,
-      language,
-      category,
-      status,
-      variables_schema: parsedVariables,
-    };
-    
+  const initialVariables: DetectedVariable[] = template?.variables_schema
+    ? [
+        ...((template.variables_schema as { header?: DetectedVariable[] }).header || []).map(v => ({ ...v, section: 'HEADER' as const })),
+        ...((template.variables_schema as { body?: DetectedVariable[] }).body || []).map(v => ({ ...v, section: 'BODY' as const })),
+        ...((template.variables_schema as { button?: DetectedVariable[] }).button || []).map(v => ({ ...v, section: 'BUTTONS' as const })),
+      ]
+    : [];
+
+  const handleSave = async (data: TemplateBuilderOutput) => {
+    setIsLoading(true);
+
     try {
-      if (isEditing) {
-        await updateTemplate.mutateAsync({
-          tenantId,
-          input: { id: template.id, ...input },
-        });
+      const componentsJson = componentsToJson(data.components);
+      const variablesSchema = variablesToSchema(data.variables);
+
+      if (isEditing && template) {
+        // Update existing template
+        const { error } = await supabase
+          .from('mt_templates')
+          .update({
+            name: data.name,
+            language: data.language,
+            category: data.category,
+            status: data.status,
+            components: JSON.parse(JSON.stringify(componentsJson)),
+            variables_schema: JSON.parse(JSON.stringify(variablesSchema)),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', template.id)
+          .eq('tenant_id', tenantId);
+
+        if (error) throw error;
+        toast.success('Template atualizado com sucesso!');
       } else {
-        await createTemplate.mutateAsync({
-          tenantId,
-          providerId,
-          input,
-        });
+        // Create new template
+        const { error } = await supabase
+          .from('mt_templates')
+          .insert([{
+            tenant_id: tenantId,
+            provider_id: providerId,
+            name: data.name,
+            language: data.language,
+            category: data.category,
+            status: data.status,
+            components: JSON.parse(JSON.stringify(componentsJson)),
+            variables_schema: JSON.parse(JSON.stringify(variablesSchema)),
+          }]);
+
+        if (error) throw error;
+        toast.success('Template criado com sucesso!');
       }
-      onOpenChange(false);
+
       onSuccess();
+      onOpenChange(false);
     } catch (error) {
-      // Error handled by mutation
+      console.error('Error saving template:', error);
+      toast.error('Erro ao salvar template', {
+        description: error instanceof Error ? error.message : 'Tente novamente',
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
-  
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[700px] max-h-[90vh]">
         <DialogHeader>
-          <DialogTitle>{isEditing ? 'Editar Template' : 'Novo Template'}</DialogTitle>
+          <DialogTitle>
+            {isEditing ? 'Editar Template' : 'Novo Template'}
+          </DialogTitle>
           <DialogDescription>
             {isEditing 
-              ? 'Atualize as informações do template.'
-              : 'Cadastre um template aprovado pelo WhatsApp.'
+              ? 'Edite os componentes e variáveis do template.'
+              : 'Crie um novo template usando modelos prontos ou do zero.'
             }
           </DialogDescription>
         </DialogHeader>
         
-        <div className="grid gap-4 py-4">
-          <div className="grid gap-2">
-            <Label htmlFor="name">Nome do Template</Label>
-            <Input
-              id="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="hello_world"
-            />
-            <p className="text-xs text-muted-foreground">
-              Use o mesmo nome cadastrado no WhatsApp Business
-            </p>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="language">Idioma</Label>
-              <Select value={language} onValueChange={setLanguage}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pt_BR">Português (BR)</SelectItem>
-                  <SelectItem value="en">English</SelectItem>
-                  <SelectItem value="es">Español</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="grid gap-2">
-              <Label htmlFor="category">Categoria</Label>
-              <Select value={category} onValueChange={setCategory}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="MARKETING">Marketing</SelectItem>
-                  <SelectItem value="UTILITY">Utilitário</SelectItem>
-                  <SelectItem value="AUTHENTICATION">Autenticação</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          
-          <div className="grid gap-2">
-            <Label htmlFor="status">Status</Label>
-            <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="approved">Aprovado</SelectItem>
-                <SelectItem value="pending">Pendente</SelectItem>
-                <SelectItem value="rejected">Rejeitado</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Marque como "Aprovado" se já foi aprovado pelo WhatsApp
-            </p>
-          </div>
-          
-          <div className="grid gap-2">
-            <Label htmlFor="variables">Variáveis (JSON)</Label>
-            <Textarea
-              id="variables"
-              value={variablesJson}
-              onChange={(e) => setVariablesJson(e.target.value)}
-              placeholder={`{
-  "body": [
-    {"key": "nome", "label": "Nome", "required": true},
-    {"key": "produto", "label": "Produto", "required": false}
-  ]
-}`}
-              className="font-mono text-sm h-32"
-            />
-            {jsonError && (
-              <p className="text-xs text-destructive">{jsonError}</p>
-            )}
-            <p className="text-xs text-muted-foreground">
-              Defina as variáveis do template (header, body, button)
-            </p>
-          </div>
-        </div>
-        
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
-          </Button>
-          <Button onClick={handleSubmit} disabled={!name.trim() || isLoading}>
-            {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {isEditing ? 'Salvar' : 'Criar Template'}
-          </Button>
-        </DialogFooter>
+        <TemplateBuilder
+          initialName={template?.name || ''}
+          initialLanguage={template?.language || 'pt_BR'}
+          initialCategory={template?.category || 'MARKETING'}
+          initialStatus={template?.status || 'approved'}
+          initialComponents={initialComponents}
+          initialVariables={initialVariables}
+          onSave={handleSave}
+          onCancel={() => onOpenChange(false)}
+          isLoading={isLoading}
+          isEditing={isEditing}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -324,7 +235,8 @@ function TemplateFormDialog({
 export default function Templates() {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [deleteTemplate, setDeleteTemplate] = useState<Template | null>(null);
   
@@ -344,12 +256,12 @@ export default function Templates() {
   // Handlers
   const handleCreate = () => {
     setEditingTemplate(null);
-    setFormOpen(true);
+    setBuilderOpen(true);
   };
   
   const handleEdit = (template: Template) => {
     setEditingTemplate(template);
-    setFormOpen(true);
+    setBuilderOpen(true);
   };
   
   const handleDelete = async () => {
@@ -360,6 +272,10 @@ export default function Templates() {
       templateId: deleteTemplate.id,
     });
     setDeleteTemplate(null);
+  };
+
+  const handleImport = () => {
+    setImportOpen(true);
   };
   
   // Loading state
@@ -411,6 +327,10 @@ export default function Templates() {
               <RefreshCw className={`h-4 w-4 mr-2 ${templatesLoading ? 'animate-spin' : ''}`} />
               Atualizar
             </Button>
+            <Button variant="outline" onClick={handleImport}>
+              <Download className="h-4 w-4 mr-2" />
+              Importar
+            </Button>
             <Button onClick={handleCreate}>
               <Plus className="h-4 w-4 mr-2" />
               Novo Template
@@ -441,10 +361,16 @@ export default function Templates() {
                 <p className="text-sm text-muted-foreground mb-4">
                   Cadastre seus templates aprovados pelo WhatsApp para usar no Inbox e campanhas.
                 </p>
-                <Button onClick={handleCreate}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Criar primeiro template
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={handleImport}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Importar do NotificaMe
+                  </Button>
+                  <Button onClick={handleCreate}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Criar Template
+                  </Button>
+                </div>
               </div>
             ) : (
               <Table>
@@ -461,13 +387,20 @@ export default function Templates() {
                 </TableHeader>
                 <TableBody>
                   {templates.map((template) => {
-                    const varsCount = template.variables_schema
-                      ? Object.values(template.variables_schema).flat().length
+                    const varsSchema = template.variables_schema as { 
+                      header?: unknown[]; 
+                      body?: unknown[]; 
+                      button?: unknown[] 
+                    } | null;
+                    const varsCount = varsSchema
+                      ? (varsSchema.header?.length || 0) + 
+                        (varsSchema.body?.length || 0) + 
+                        (varsSchema.button?.length || 0)
                       : 0;
                     
                     return (
                       <TableRow key={template.id}>
-                        <TableCell className="font-medium">{template.name}</TableCell>
+                        <TableCell className="font-medium font-mono">{template.name}</TableCell>
                         <TableCell>
                           <Badge variant="outline">{template.language}</Badge>
                         </TableCell>
@@ -520,15 +453,26 @@ export default function Templates() {
           </CardContent>
         </Card>
         
-        {/* Form Dialog */}
+        {/* Template Builder Dialog */}
         {tenantData?.providerId && (
-          <TemplateFormDialog
-            open={formOpen}
-            onOpenChange={setFormOpen}
+          <TemplateBuilderDialog
+            open={builderOpen}
+            onOpenChange={setBuilderOpen}
             template={editingTemplate}
             tenantId={tenantData.tenantId}
             providerId={tenantData.providerId}
             onSuccess={() => refetch()}
+          />
+        )}
+
+        {/* Import Dialog */}
+        {tenantData?.providerId && (
+          <ImportTemplatesDialog
+            open={importOpen}
+            onOpenChange={setImportOpen}
+            tenantId={tenantData.tenantId}
+            providerId={tenantData.providerId}
+            onImportComplete={() => refetch()}
           />
         )}
         
