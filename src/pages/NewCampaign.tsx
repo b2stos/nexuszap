@@ -54,8 +54,12 @@ class ErrorBoundaryWrapper extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return { hasError: true };
   }
 
-  componentDidCatch(error: Error) {
-    console.error("[NewCampaignPage] Error caught:", error.message);
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    // Log full error with stack trace for debugging
+    console.error("[NewCampaignPage] FULL ERROR:", error);
+    console.error("[NewCampaignPage] Error message:", error.message);
+    console.error("[NewCampaignPage] Error stack:", error.stack);
+    console.error("[NewCampaignPage] Component stack:", errorInfo.componentStack);
   }
 
   render() {
