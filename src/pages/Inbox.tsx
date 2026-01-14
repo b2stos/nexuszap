@@ -233,8 +233,9 @@ export default function Inbox() {
   
   return (
     <DashboardLayout user={user}>
-      <div className="h-[calc(100vh-4rem)] flex flex-col overflow-hidden bg-muted/30">
-        <div className="flex-1 flex overflow-hidden">
+      {/* Use dvh for iOS Safari compatibility, with vh fallback */}
+      <div className="inbox-container flex flex-col overflow-hidden bg-muted/30">
+        <div className="flex-1 flex overflow-hidden min-h-0">
           {/* Left Column - Conversation List (hidden on mobile when chat is open) */}
           <div className={`
             w-full md:w-80 lg:w-96 flex-shrink-0 border-r border-border
@@ -260,7 +261,7 @@ export default function Inbox() {
           
           {/* Center Column - Chat */}
           <div className={`
-            flex-1 min-w-0 flex flex-col
+            flex-1 min-w-0 min-h-0 flex flex-col
             ${!showMobileChat ? 'hidden md:flex' : 'flex'}
           `}>
             {/* Mobile header with back button and actions menu */}

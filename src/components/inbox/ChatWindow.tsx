@@ -473,7 +473,7 @@ export function ChatWindow({
   }
   
   return (
-    <div className="flex flex-col h-full bg-background relative">
+    <div className="flex flex-col h-full min-h-0 bg-background relative">
       {/* Header */}
       <ChatHeader 
         conversation={conversation} 
@@ -484,9 +484,9 @@ export function ChatWindow({
         onTogglePin={handleTogglePin}
       />
       
-      {/* Messages */}
-      <ScrollArea className="flex-1" ref={scrollRef}>
-        <div className="p-4 min-h-full">
+      {/* Messages - iOS Safari compatible scroll */}
+      <ScrollArea className="flex-1 min-h-0 overflow-y-auto" ref={scrollRef} style={{ WebkitOverflowScrolling: 'touch' }}>
+        <div className="p-4">
           {isLoading ? (
             <MessageSkeleton />
           ) : messages.length === 0 ? (
