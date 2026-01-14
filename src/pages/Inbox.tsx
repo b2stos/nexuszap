@@ -5,7 +5,7 @@
  * PRODUCTION: Apenas dados reais do banco
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Loader2, 
@@ -86,8 +86,8 @@ export default function Inbox() {
   });
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  
-  // Track onboarding step
+  const [deleteTargetConversationId, setDeleteTargetConversationId] = useState<string | null>(null);
+  const didAutoSelectRef = useRef(false);
   useTrackInboxOpened();
   
   // Get user
@@ -131,12 +131,17 @@ export default function Inbox() {
     }, [])
   );
   
-  // Auto-select first conversation
+  // Auto-select first conversation (only once per tenant)
   useEffect(() => {
-    if (conversations.length > 0 && !activeConversation) {
+    didAutoSelectRef.current = false;
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (conversations.length > 0 && !activeConversation && !didAutoSelectRef.current) {
       setActiveConversation(conversations[0]);
+      didAutoSelectRef.current = true;
     }
-  }, [conversations, activeConversation]);
+  }, [conversations, activeConversation, tenantId]);
   
   // Mark as read when conversation is selected
   useEffect(() => {
@@ -161,18 +166,43 @@ export default function Inbox() {
     setShowMobileChat(false);
   };
   
-  // Handle delete conversation
+  const openDeleteDialog = (conversationId: string) => {
+    setDeleteTargetConversationId(conversationId);
+    setShowDeleteDialog(true);
+  };
+
+  const runDeleteConversation = (conversationId: string) => {
+    const prevActive = activeConversation;
+    const wasActive = activeConversation?.id === conversationId;
+
+    // Optimistic UI: if deleting the open conversation, clear it immediately
+    if (wasActive) {
+      setActiveConversation(null);
+      setShowMobileChat(false);
+    }
+
+    deleteConversation.mutate(
+      { conversationId },
+      {
+        onSuccess: () => {
+          setShowDeleteDialog(false);
+          setDeleteTargetConversationId(null);
+        },
+        onError: () => {
+          // Rollback local UI selection if needed (list rollback is handled in the hook)
+          if (wasActive && prevActive) {
+            setActiveConversation(prevActive);
+          }
+        },
+      }
+    );
+  };
+
+  // Handle delete conversation (from central confirmation dialog)
   const handleDeleteConversation = () => {
-    if (!activeConversation) return;
-    
-    deleteConversation.mutate({ conversationId: activeConversation.id }, {
-      onSuccess: () => {
-        // Clear active conversation and go back to list
-        setActiveConversation(null);
-        setShowMobileChat(false);
-        setShowDeleteDialog(false);
-      },
-    });
+    const targetId = deleteTargetConversationId || activeConversation?.id;
+    if (!targetId) return;
+    runDeleteConversation(targetId);
   };
   
   // Handle resolve/reopen
@@ -249,12 +279,7 @@ export default function Inbox() {
               onFilterChange={setFilter}
               onSelect={handleSelectConversation}
               onDeleteConversation={(conversationId) => {
-                // Find the conversation to delete
-                const convToDelete = conversations.find(c => c.id === conversationId);
-                if (convToDelete) {
-                  setActiveConversation(convToDelete);
-                  setShowDeleteDialog(true);
-                }
+                openDeleteDialog(conversationId);
               }}
             />
           </div>
@@ -316,7 +341,7 @@ export default function Inbox() {
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem 
-                      onClick={() => setShowDeleteDialog(true)}
+                      onClick={() => openDeleteDialog(activeConversation.id)}
                       className="text-destructive focus:text-destructive"
                     >
                       <Trash2 className="w-4 h-4 mr-2" />
@@ -332,7 +357,13 @@ export default function Inbox() {
             </div>
             
             {/* Delete confirmation dialog */}
-            <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+            <AlertDialog
+              open={showDeleteDialog}
+              onOpenChange={(open) => {
+                setShowDeleteDialog(open);
+                if (!open) setDeleteTargetConversationId(null);
+              }}
+            >
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Apagar conversa?</AlertDialogTitle>
