@@ -383,22 +383,34 @@ export const MessageBubble = memo(function MessageBubble({
             {/* Template indicator */}
             {message.type === 'template' && (
               <div>
-                {/* Determine if content is a real preview or just the template name */}
+                {/* Determine if content is a real preview or just template metadata */}
                 {(() => {
-                  const content = message.content?.trim();
-                  const templateName = message.template_name?.trim();
+                  const rawContent = message.content?.trim() || '';
+                  const templateName = message.template_name?.trim() || '';
                   
-                  // Check if content is just the template name or "Template: name" pattern
-                  const isJustTemplateName = !content || 
-                    content === templateName ||
-                    content.toLowerCase() === `template: ${templateName?.toLowerCase()}` ||
-                    content.toLowerCase().startsWith('template:');
+                  // Clean up the content - remove template metadata patterns
+                  let cleanContent = rawContent;
                   
-                  if (!isJustTemplateName && content) {
-                    // Real rendered preview available
+                  // Remove "[Template: name]" prefix pattern
+                  cleanContent = cleanContent.replace(/^\[Template:\s*[^\]]+\]\s*/i, '');
+                  
+                  // Remove "Template: name" prefix pattern
+                  cleanContent = cleanContent.replace(/^Template:\s*\S+\s*/i, '');
+                  
+                  // Remove "{{1}}=", "{{2}}=" variable assignment patterns
+                  cleanContent = cleanContent.replace(/\{\{\d+\}\}=/g, '');
+                  
+                  // Check if content is actually useful after cleaning
+                  const isUselessContent = !cleanContent || 
+                    cleanContent === templateName ||
+                    cleanContent.toLowerCase() === templateName.toLowerCase() ||
+                    cleanContent.length < 2;
+                  
+                  if (!isUselessContent && cleanContent.trim()) {
+                    // Show the cleaned, rendered content
                     return (
                       <p className="text-sm whitespace-pre-wrap break-words">
-                        {content}
+                        {cleanContent.trim()}
                       </p>
                     );
                   } else {
@@ -414,11 +426,11 @@ export const MessageBubble = memo(function MessageBubble({
                   }
                 })()}
                 
-                {/* Template name badge */}
+                {/* Template name badge - subtle indicator */}
                 {message.template_name && (
                   <p className={cn(
-                    "text-[10px] mt-1.5 flex items-center gap-1 opacity-70",
-                    isInbound ? "text-muted-foreground" : "text-white/60"
+                    "text-[10px] mt-1.5 flex items-center gap-1",
+                    isInbound ? "text-muted-foreground/60" : "text-white/50"
                   )}>
                     <span>📋</span>
                     <span className="font-mono">{message.template_name}</span>
