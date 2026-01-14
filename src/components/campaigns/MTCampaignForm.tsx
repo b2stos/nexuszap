@@ -24,11 +24,14 @@ import {
   AlertCircle,
   ChevronDown,
   Check,
+  Save,
 } from "lucide-react";
 import { useChannels } from "@/hooks/useChannels";
 import { useApprovedTemplates } from "@/hooks/useTemplates";
-import { useCreateMTCampaign, useCurrentTenantForCampaigns } from "@/hooks/useMTCampaigns";
+import { useCreateMTCampaign, useStartCampaign, useCurrentTenantForCampaigns } from "@/hooks/useMTCampaigns";
 import { CampaignRecipients } from "./CampaignRecipients";
+import { CampaignConfirmDialog } from "./CampaignConfirmDialog";
+import { useSentLast24Hours, BM_LIMIT_TIERS, type BMLimitTier } from "@/hooks/useCampaignContacts";
 
 type SendSpeed = 'slow' | 'normal' | 'fast';
 
@@ -173,13 +176,18 @@ export function MTCampaignForm() {
   const [sendSpeed, setSendSpeed] = useState<SendSpeed>("normal");
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
   const [variables, setVariables] = useState<Record<string, string>>({});
+  const [bmLimit, setBMLimit] = useState<BMLimitTier>(BM_LIMIT_TIERS[0]); // Default: 250
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   
   // Data fetching - only enable when tenantId is available
   const { data: channels, isLoading: channelsLoading } = useChannels(tenantId);
   const { data: templates, isLoading: templatesLoading } = useApprovedTemplates(tenantId);
+  const { data: sentLast24h = 0 } = useSentLast24Hours(tenantId);
   
   // Mutations
   const createCampaign = useCreateMTCampaign();
+  const startCampaign = useStartCampaign();
   
   // Filter connected channels - with safe defaults
   const connectedChannels = useMemo(() => {
@@ -246,10 +254,29 @@ export function MTCampaignForm() {
     setSelectedContactIds(ids);
   }, []);
   
-  // Handle submit
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
+  // Handle BM limit change from CampaignRecipients
+  const handleBMLimitChange = useCallback((tier: BMLimitTier) => {
+    setBMLimit(tier);
+  }, []);
+  
+  // Get selected channel for display
+  const selectedChannel = useMemo(() => {
+    if (!channels || !channelId) return null;
+    return channels.find(c => c.id === channelId) || null;
+  }, [channels, channelId]);
+  
+  // Validation: check if form is ready to submit
+  const isFormValid = useMemo(() => {
+    return (
+      name.trim().length > 0 &&
+      channelId.length > 0 &&
+      templateId.length > 0 &&
+      selectedContactIds.size > 0
+    );
+  }, [name, channelId, templateId, selectedContactIds.size]);
+  
+  // Handle "Save as Draft" - creates campaign without starting
+  const handleSaveDraft = async () => {
     if (!tenantId || !userId) {
       toast.error("Sessão inválida");
       return;
@@ -260,18 +287,8 @@ export function MTCampaignForm() {
       return;
     }
     
-    if (!channelId) {
-      toast.error("Selecione um canal");
-      return;
-    }
-    
-    if (!templateId) {
-      toast.error("Selecione um template");
-      return;
-    }
-    
-    if (selectedContactIds.size === 0) {
-      toast.error("Selecione pelo menos um contato");
+    if (!channelId || !templateId) {
+      toast.error("Selecione canal e template");
       return;
     }
     
@@ -288,10 +305,73 @@ export function MTCampaignForm() {
         },
       });
       
+      toast.success("Rascunho salvo com sucesso");
       navigate("/dashboard/campaigns");
     } catch (error) {
       // Error handled by mutation
     }
+  };
+  
+  // Handle "Start Campaign" button click - opens confirmation dialog
+  const handleStartClick = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!isFormValid) {
+      if (!name.trim()) toast.error("Nome da campanha é obrigatório");
+      else if (!channelId) toast.error("Selecione um canal");
+      else if (!templateId) toast.error("Selecione um template");
+      else if (selectedContactIds.size === 0) toast.error("Selecione pelo menos um contato");
+      return;
+    }
+    
+    setShowConfirmDialog(true);
+  };
+  
+  // Handle confirmed campaign start
+  const handleConfirmStart = async () => {
+    if (!tenantId || !userId) {
+      toast.error("Sessão inválida");
+      return;
+    }
+    
+    setIsStarting(true);
+    
+    try {
+      // 1. Create the campaign
+      const campaign = await createCampaign.mutateAsync({
+        tenantId,
+        userId,
+        input: {
+          name: name.trim(),
+          channel_id: channelId,
+          template_id: templateId,
+          template_variables: variables,
+          contact_ids: Array.from(selectedContactIds),
+        },
+      });
+      
+      // 2. Start the campaign immediately
+      await startCampaign.mutateAsync({
+        campaignId: campaign.id,
+      });
+      
+      setShowConfirmDialog(false);
+      toast.success("Campanha iniciada! Acompanhe o progresso.");
+      
+      // Navigate to campaign details page
+      navigate(`/dashboard/campaigns/${campaign.id}`);
+    } catch (error) {
+      console.error('Failed to start campaign:', error);
+      // Errors handled by mutations
+    } finally {
+      setIsStarting(false);
+    }
+  };
+  
+  // Legacy submit handler (keep for form validation)
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    handleStartClick(e);
   };
   
   // Loading state
@@ -518,51 +598,108 @@ export function MTCampaignForm() {
           tenantId={tenantId}
           selectedContactIds={selectedContactIds}
           onSelectionChange={handleSelectionChange}
+          onBMLimitChange={handleBMLimitChange}
         />
       )}
       
-      {/* Submit */}
-      <div className="flex items-center justify-between pt-4 border-t">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          {selectedContactIds.size > 0 ? (
-            <>
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
-              {selectedContactIds.size} contato(s) selecionado(s)
-            </>
-          ) : (
-            <>
-              <AlertCircle className="h-4 w-4 text-yellow-500" />
-              Selecione os destinatários
-            </>
-          )}
+      {/* Sticky Action Bar */}
+      <div className="sticky bottom-0 left-0 right-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-t shadow-lg -mx-4 px-4 py-4 mt-6">
+        <div className="flex items-center justify-between max-w-4xl mx-auto">
+          {/* Status Summary */}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 text-sm">
+              {isFormValid ? (
+                <>
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  <span className="text-muted-foreground">
+                    Pronto para enviar
+                  </span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="h-4 w-4 text-amber-500" />
+                  <span className="text-muted-foreground">
+                    Preencha os campos obrigatórios
+                  </span>
+                </>
+              )}
+            </div>
+            
+            {selectedContactIds.size > 0 && (
+              <Badge variant="secondary" className="font-medium">
+                {selectedContactIds.size.toLocaleString('pt-BR')} destinatário(s)
+              </Badge>
+            )}
+          </div>
+          
+          {/* Action Buttons */}
+          <div className="flex gap-3">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => navigate("/dashboard/campaigns")}
+            >
+              Cancelar
+            </Button>
+            
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleSaveDraft}
+              disabled={createCampaign.isPending || !name.trim() || !channelId || !templateId}
+              className="gap-2"
+            >
+              <Save className="h-4 w-4" />
+              Salvar Rascunho
+            </Button>
+            
+            <Button 
+              type="submit"
+              size="lg"
+              disabled={!isFormValid || createCampaign.isPending || isStarting}
+              className="gap-2 font-semibold"
+            >
+              {(createCampaign.isPending || isStarting) ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Processando...
+                </>
+              ) : (
+                <>
+                  <Send className="h-4 w-4" />
+                  Iniciar Campanha
+                </>
+              )}
+            </Button>
+          </div>
         </div>
         
-        <div className="flex gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => navigate("/dashboard/campaigns")}
-          >
-            Cancelar
-          </Button>
-          <Button 
-            type="submit" 
-            disabled={createCampaign.isPending || selectedContactIds.size === 0}
-          >
-            {createCampaign.isPending ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Criando...
-              </>
-            ) : (
-              <>
-                <Send className="mr-2 h-4 w-4" />
-                Criar Campanha
-              </>
-            )}
-          </Button>
-        </div>
+        {/* Helper text */}
+        <p className="text-xs text-muted-foreground text-center mt-2">
+          Mensagens serão enviadas conforme o limite da BM (24h) e velocidade selecionados
+        </p>
       </div>
+      
+      {/* Confirmation Dialog */}
+      {selectedChannel && selectedTemplate && (
+        <CampaignConfirmDialog
+          open={showConfirmDialog}
+          onOpenChange={setShowConfirmDialog}
+          summary={{
+            name: name.trim() || 'Sem nome',
+            channelName: selectedChannel.name,
+            channelPhone: selectedChannel.phone_number,
+            templateName: selectedTemplate.name,
+            templateCategory: selectedTemplate.category,
+            recipientCount: selectedContactIds.size,
+            bmLimit: bmLimit.value,
+            sentLast24h: sentLast24h,
+            sendSpeed: sendSpeed,
+          }}
+          onConfirm={handleConfirmStart}
+          isLoading={isStarting}
+        />
+      )}
     </form>
   );
 }
