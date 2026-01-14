@@ -7,8 +7,36 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Building2, ArrowLeft } from 'lucide-react';
+import { 
+  Loader2, 
+  Building2, 
+  ArrowLeft, 
+  MoreVertical,
+  CheckCircle2,
+  MessageCircle,
+  Pin,
+  PinOff,
+  Trash2,
+  Ban,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
 import { ConversationList } from '@/components/inbox/ConversationList';
 import { ChatWindow } from '@/components/inbox/ChatWindow';
@@ -24,7 +52,12 @@ import {
   useInboxRealtime,
   calculate24hWindow,
 } from '@/hooks/useInbox';
-import { useDeleteConversation } from '@/hooks/useConversationActions';
+import { 
+  useDeleteConversation, 
+  useResolveConversation, 
+  useReopenConversation,
+  useTogglePinConversation,
+} from '@/hooks/useConversationActions';
 import { InboxConversation, ConversationFilter } from '@/types/inbox';
 import { useOnboarding } from '@/hooks/useOnboarding';
 
@@ -52,6 +85,7 @@ export default function Inbox() {
     status: 'all',
   });
   const [showMobileChat, setShowMobileChat] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   
   // Track onboarding step
   useTrackInboxOpened();
@@ -81,6 +115,9 @@ export default function Inbox() {
   
   const markAsRead = useMarkAsRead();
   const deleteConversation = useDeleteConversation();
+  const resolveConversation = useResolveConversation();
+  const reopenConversation = useReopenConversation();
+  const togglePinConversation = useTogglePinConversation();
   
   // Realtime - ALWAYS enabled for production
   useInboxRealtime(
@@ -133,8 +170,32 @@ export default function Inbox() {
         // Clear active conversation and go back to list
         setActiveConversation(null);
         setShowMobileChat(false);
+        setShowDeleteDialog(false);
       },
     });
+  };
+  
+  // Handle resolve/reopen
+  const handleResolve = () => {
+    if (activeConversation) {
+      resolveConversation.mutate(activeConversation.id);
+    }
+  };
+  
+  const handleReopen = () => {
+    if (activeConversation) {
+      reopenConversation.mutate(activeConversation.id);
+    }
+  };
+  
+  // Handle pin/unpin
+  const handleTogglePin = () => {
+    if (activeConversation) {
+      togglePinConversation.mutate({
+        conversationId: activeConversation.id,
+        isPinned: !activeConversation.is_pinned,
+      });
+    }
   };
   
   // Loading state
@@ -194,21 +255,95 @@ export default function Inbox() {
             flex-1 min-w-0 flex flex-col
             ${!showMobileChat ? 'hidden md:flex' : 'flex'}
           `}>
-            {/* Mobile back button */}
-            <div className="md:hidden flex items-center gap-2 p-2 border-b border-border bg-card">
-              <Button 
-                variant="ghost" 
-                size="icon"
-                onClick={handleMobileBack}
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </Button>
+            {/* Mobile header with back button and actions menu */}
+            <div className="md:hidden flex items-center justify-between p-2 border-b border-border bg-card">
+              <div className="flex items-center gap-2 min-w-0">
+                <Button 
+                  variant="ghost" 
+                  size="icon"
+                  onClick={handleMobileBack}
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                </Button>
+                {activeConversation && (
+                  <span className="font-medium truncate">
+                    {activeConversation.contact?.name || 'Conversa'}
+                  </span>
+                )}
+              </div>
+              
+              {/* Mobile actions dropdown */}
               {activeConversation && (
-                <span className="font-medium truncate">
-                  {activeConversation.contact?.name || 'Conversa'}
-                </span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon">
+                      <MoreVertical className="w-5 h-5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48 bg-popover">
+                    {activeConversation.status === 'open' ? (
+                      <DropdownMenuItem onClick={handleResolve}>
+                        <CheckCircle2 className="w-4 h-4 mr-2" />
+                        Marcar como resolvida
+                      </DropdownMenuItem>
+                    ) : (
+                      <DropdownMenuItem onClick={handleReopen}>
+                        <MessageCircle className="w-4 h-4 mr-2" />
+                        Reabrir conversa
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem onClick={handleTogglePin}>
+                      {activeConversation.is_pinned ? (
+                        <>
+                          <PinOff className="w-4 h-4 mr-2" />
+                          Desafixar
+                        </>
+                      ) : (
+                        <>
+                          <Pin className="w-4 h-4 mr-2" />
+                          Fixar conversa
+                        </>
+                      )}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem 
+                      onClick={() => setShowDeleteDialog(true)}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Apagar conversa
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className="text-destructive focus:text-destructive">
+                      <Ban className="w-4 h-4 mr-2" />
+                      Bloquear contato
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
             </div>
+            
+            {/* Delete confirmation dialog */}
+            <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Apagar conversa?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    A conversa será arquivada e removida da sua lista. 
+                    Você poderá receber novas mensagens deste contato no futuro.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleDeleteConversation}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    disabled={deleteConversation.isPending}
+                  >
+                    {deleteConversation.isPending ? 'Apagando...' : 'Apagar'}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             
             <div className="flex-1">
               <ChatWindow
