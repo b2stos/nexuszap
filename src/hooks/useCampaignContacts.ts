@@ -33,32 +33,53 @@ export const BM_LIMIT_TIERS: BMLimitTier[] = [
   { value: null, label: 'Ilimitado', description: 'Sem limite diário' },
 ];
 
+const PAGE_SIZE = 1000; // Supabase max per request
+
 /**
  * Fetch ALL contacts from the 'contacts' table (same source as Contacts page)
+ * Uses pagination to bypass Supabase 1000 row limit
  * This is the legacy table used by /dashboard/contacts
- * No limit applied - returns all contacts for the current user
  */
 export function useAllMTContacts(_tenantId: string | undefined) {
   return useQuery({
-    queryKey: ['all-contacts-for-campaign'],
+    queryKey: ['all-contacts-for-campaign-paginated'],
     queryFn: async () => {
-      // The 'contacts' table is user-scoped via RLS, not tenant-scoped
-      // This matches exactly what ContactsTable.tsx does
-      const { data, error } = await supabase
-        .from('contacts')
-        .select('id, phone, name, created_at')
-        .order('created_at', { ascending: true }); // Oldest first for deterministic selection
+      const allContacts: CampaignContact[] = [];
+      let page = 0;
+      let hasMore = true;
       
-      if (error) throw error;
+      // Paginate through all contacts to bypass 1000 row limit
+      while (hasMore) {
+        const from = page * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+        
+        const { data, error } = await supabase
+          .from('contacts')
+          .select('id, phone, name, created_at')
+          .order('created_at', { ascending: true }) // Oldest first for deterministic selection
+          .range(from, to);
+        
+        if (error) throw error;
+        
+        if (data && data.length > 0) {
+          // Map to CampaignContact format (contacts table doesn't have email)
+          const mapped = data.map(c => ({
+            id: c.id,
+            phone: c.phone,
+            name: c.name,
+            email: null,
+            created_at: c.created_at,
+          })) as CampaignContact[];
+          
+          allContacts.push(...mapped);
+          hasMore = data.length === PAGE_SIZE; // If we got full page, there might be more
+          page++;
+        } else {
+          hasMore = false;
+        }
+      }
       
-      // Map to CampaignContact format (contacts table doesn't have email)
-      return (data || []).map(c => ({
-        id: c.id,
-        phone: c.phone,
-        name: c.name,
-        email: null,
-        created_at: c.created_at,
-      })) as CampaignContact[];
+      return allContacts;
     },
     staleTime: 30 * 1000, // 30 seconds
   });
