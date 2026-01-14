@@ -51,7 +51,7 @@ export function MTCampaignForm() {
   const navigate = useNavigate();
   
   // Tenant data
-  const { data: tenantData } = useCurrentTenantForCampaigns();
+  const { data: tenantData, isLoading: tenantLoading } = useCurrentTenantForCampaigns();
   const tenantId = tenantData?.tenantId;
   const userId = tenantData?.userId;
   
@@ -65,7 +65,7 @@ export function MTCampaignForm() {
   const [searchTerm, setSearchTerm] = useState("");
   const [variables, setVariables] = useState<Record<string, string>>({});
   
-  // Data fetching
+  // Data fetching - only enable when tenantId is available
   const { data: channels, isLoading: channelsLoading } = useChannels(tenantId);
   const { data: templates, isLoading: templatesLoading } = useApprovedTemplates(tenantId);
   const { data: contacts, isLoading: contactsLoading } = useMTContacts(tenantId, { limit: 1000 });
@@ -74,19 +74,27 @@ export function MTCampaignForm() {
   // Mutations
   const createCampaign = useCreateMTCampaign();
   
-  // Filter connected channels
-  const connectedChannels = useMemo(() => 
-    (channels || []).filter(c => c.status === 'connected'),
-    [channels]
-  );
+  // Filter connected channels - with safe defaults
+  const connectedChannels = useMemo(() => {
+    if (!channels) return [];
+    return channels.filter(c => c.status === 'connected');
+  }, [channels]);
   
-  // Get selected template
-  const selectedTemplate = useMemo(() => 
-    templates?.find(t => t.id === templateId),
-    [templates, templateId]
-  );
+  // Get selected template - with null safety
+  const selectedTemplate = useMemo(() => {
+    if (!templates || !templateId) return null;
+    return templates.find(t => t.id === templateId) || null;
+  }, [templates, templateId]);
   
-  // Extract template variables
+  // Extract template variable keys as stable reference for comparison
+  const templateVariableKeys = useMemo(() => {
+    if (!selectedTemplate?.variables_schema) return '';
+    const schema = selectedTemplate.variables_schema as { body?: Array<{ key: string; label: string }> };
+    const vars = schema.body || [];
+    return vars.map(v => v.key).join(',');
+  }, [selectedTemplate]);
+  
+  // Extract template variables for rendering
   const templateVariables = useMemo(() => {
     if (!selectedTemplate?.variables_schema) return [];
     const schema = selectedTemplate.variables_schema as { body?: Array<{ key: string; label: string }> };
@@ -96,26 +104,26 @@ export function MTCampaignForm() {
     }));
   }, [selectedTemplate]);
   
-  // Initialize variables when template changes - use ref to track processed template
+  // Initialize variables when template changes - use stable key comparison
   const processedTemplateRef = useRef<string>("");
   
   useEffect(() => {
-    // Skip if no template or already processed this template
-    if (!templateId || templateId === processedTemplateRef.current) return;
+    // Create a stable key from templateId + variable keys
+    const currentKey = `${templateId}:${templateVariableKeys}`;
     
-    // Mark as processed BEFORE setting state to prevent re-runs
-    processedTemplateRef.current = templateId;
+    // Skip if no template or already processed this exact combination
+    if (!templateId || currentKey === processedTemplateRef.current) return;
     
-    if (templateVariables.length > 0) {
-      const next: Record<string, string> = {};
-      templateVariables.forEach(v => {
-        next[v.key] = '';
-      });
-      setVariables(next);
-    } else {
-      setVariables({});
-    }
-  }, [templateId, templateVariables]);
+    // Mark as processed BEFORE setting state
+    processedTemplateRef.current = currentKey;
+    
+    // Initialize with empty values
+    const next: Record<string, string> = {};
+    templateVariables.forEach(v => {
+      next[v.key] = '';
+    });
+    setVariables(next);
+  }, [templateId, templateVariableKeys, templateVariables]);
   
   // Filter contacts by search
   const filteredContacts = useMemo(() => {
@@ -209,7 +217,37 @@ export function MTCampaignForm() {
     }
   };
   
-  const isLoading = channelsLoading || templatesLoading || contactsLoading;
+  // Loading state - include tenant loading
+  const isLoading = tenantLoading || channelsLoading || templatesLoading || contactsLoading;
+  
+  // Show loading spinner while tenant data is loading
+  if (tenantLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-muted-foreground">Carregando...</span>
+      </div>
+    );
+  }
+  
+  // Show error if no tenant found
+  if (!tenantId) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center justify-center py-12">
+          <AlertCircle className="h-12 w-12 text-destructive mb-4" />
+          <p className="text-muted-foreground">Sessão inválida. Faça login novamente.</p>
+          <Button 
+            variant="outline" 
+            className="mt-4"
+            onClick={() => navigate("/auth")}
+          >
+            Fazer Login
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
   
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
