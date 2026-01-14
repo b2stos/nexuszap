@@ -24,6 +24,7 @@ import {
   useInboxRealtime,
   calculate24hWindow,
 } from '@/hooks/useInbox';
+import { useDeleteConversation } from '@/hooks/useConversationActions';
 import { InboxConversation, ConversationFilter } from '@/types/inbox';
 import { useOnboarding } from '@/hooks/useOnboarding';
 
@@ -79,6 +80,7 @@ export default function Inbox() {
   } = useContact(activeConversation?.contact_id);
   
   const markAsRead = useMarkAsRead();
+  const deleteConversation = useDeleteConversation();
   
   // Realtime - ALWAYS enabled for production
   useInboxRealtime(
@@ -120,6 +122,19 @@ export default function Inbox() {
   // Handle back on mobile
   const handleMobileBack = () => {
     setShowMobileChat(false);
+  };
+  
+  // Handle delete conversation
+  const handleDeleteConversation = () => {
+    if (!activeConversation) return;
+    
+    deleteConversation.mutate(activeConversation.id, {
+      onSuccess: () => {
+        // Clear active conversation and go back to list
+        setActiveConversation(null);
+        setShowMobileChat(false);
+      },
+    });
   };
   
   // Loading state
@@ -212,6 +227,8 @@ export default function Inbox() {
               conversation={activeConversation}
               contact={contact || activeConversation?.contact || null}
               windowStatus={windowStatus}
+              onDeleteConversation={handleDeleteConversation}
+              isDeletingConversation={deleteConversation.isPending}
             />
           </div>
         </div>

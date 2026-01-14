@@ -1,7 +1,7 @@
 /**
  * useConversationActions Hook
  * 
- * Gerencia ações em conversas: resolver, reabrir, atribuir, transferir
+ * Gerencia ações em conversas: resolver, reabrir, atribuir, transferir, apagar
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -129,6 +129,39 @@ export function useTogglePinConversation() {
     },
     onError: () => {
       toast.error('Erro ao fixar conversa');
+    },
+  });
+}
+
+/**
+ * Soft delete de conversa - arquiva a conversa e suas mensagens
+ * A conversa passa para status 'archived' e é removida da lista ativa
+ */
+export function useDeleteConversation() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (conversationId: string) => {
+      // Soft delete: change status to 'archived'
+      const { error } = await supabase
+        .from('conversations')
+        .update({ 
+          status: 'archived',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conversationId);
+      
+      if (error) throw error;
+      
+      return conversationId;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['inbox-messages'] });
+      toast.success('Conversa apagada');
+    },
+    onError: () => {
+      toast.error('Erro ao apagar conversa');
     },
   });
 }
