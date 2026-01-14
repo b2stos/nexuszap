@@ -127,6 +127,94 @@ export type Database = {
           },
         ]
       }
+      campaign_send_attempts: {
+        Row: {
+          campaign_id: string | null
+          channel_id: string | null
+          created_at: string
+          duration_ms: number | null
+          error_code: string | null
+          error_message: string | null
+          error_stack: string | null
+          failed_count: number | null
+          id: string
+          provider_response_raw: string | null
+          provider_status: number | null
+          recipients_count: number | null
+          request_payload: Json | null
+          step: string
+          success_count: number | null
+          template_name: string | null
+          tenant_id: string | null
+          trace_id: string
+          updated_at: string
+        }
+        Insert: {
+          campaign_id?: string | null
+          channel_id?: string | null
+          created_at?: string
+          duration_ms?: number | null
+          error_code?: string | null
+          error_message?: string | null
+          error_stack?: string | null
+          failed_count?: number | null
+          id?: string
+          provider_response_raw?: string | null
+          provider_status?: number | null
+          recipients_count?: number | null
+          request_payload?: Json | null
+          step?: string
+          success_count?: number | null
+          template_name?: string | null
+          tenant_id?: string | null
+          trace_id: string
+          updated_at?: string
+        }
+        Update: {
+          campaign_id?: string | null
+          channel_id?: string | null
+          created_at?: string
+          duration_ms?: number | null
+          error_code?: string | null
+          error_message?: string | null
+          error_stack?: string | null
+          failed_count?: number | null
+          id?: string
+          provider_response_raw?: string | null
+          provider_status?: number | null
+          recipients_count?: number | null
+          request_payload?: Json | null
+          step?: string
+          success_count?: number | null
+          template_name?: string | null
+          tenant_id?: string | null
+          trace_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_send_attempts_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "mt_campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_send_attempts_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_send_attempts_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaigns: {
         Row: {
           completed_at: string | null
