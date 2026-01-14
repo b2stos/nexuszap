@@ -154,28 +154,16 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName, isS
 
               {/* Campaigns - Admin only */}
               {showAdminItems && (
-                <>
-                  <li>
-                    <NavLink
-                      to="/dashboard/campaigns"
-                      className="group flex gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold hover:bg-muted"
-                      activeClassName="bg-muted text-primary"
-                    >
-                      <Send className="h-6 w-6 shrink-0" />
-                      Campanhas
-                    </NavLink>
-                  </li>
-                  <li>
-                    <NavLink
-                      to="/dashboard/campaigns/new"
-                      className="group flex gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold hover:bg-muted"
-                      activeClassName="bg-muted text-primary"
-                    >
-                      <PlusCircle className="h-6 w-6 shrink-0" />
-                      Nova Campanha
-                    </NavLink>
-                  </li>
-                </>
+                <li>
+                  <NavLink
+                    to="/dashboard/campaigns"
+                    className="group flex gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold hover:bg-muted"
+                    activeClassName="bg-muted text-primary"
+                  >
+                    <Send className="h-6 w-6 shrink-0" />
+                    Campanhas
+                  </NavLink>
+                </li>
               )}
 
               {/* Channels - Admin only */}

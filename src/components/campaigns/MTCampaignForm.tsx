@@ -4,7 +4,7 @@
  * Baseado exclusivamente em templates aprovados
  */
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -96,23 +96,26 @@ export function MTCampaignForm() {
     }));
   }, [selectedTemplate]);
   
-  // Initialize variables when template changes
-  // Use templateId as dependency to avoid re-running when variables object changes
+  // Initialize variables when template changes - use ref to track processed template
+  const processedTemplateRef = useRef<string>("");
+  
   useEffect(() => {
+    // Skip if no template or already processed this template
+    if (!templateId || templateId === processedTemplateRef.current) return;
+    
+    // Mark as processed BEFORE setting state to prevent re-runs
+    processedTemplateRef.current = templateId;
+    
     if (templateVariables.length > 0) {
-      setVariables(prev => {
-        const next: Record<string, string> = {};
-        templateVariables.forEach(v => {
-          next[v.key] = prev[v.key] || '';
-        });
-        // Only update if keys changed
-        const prevKeys = Object.keys(prev).sort().join(',');
-        const nextKeys = Object.keys(next).sort().join(',');
-        if (prevKeys === nextKeys) return prev;
-        return next;
+      const next: Record<string, string> = {};
+      templateVariables.forEach(v => {
+        next[v.key] = '';
       });
+      setVariables(next);
+    } else {
+      setVariables({});
     }
-  }, [templateId]); // Only run when template changes, not on every templateVariables recalc
+  }, [templateId, templateVariables]);
   
   // Filter contacts by search
   const filteredContacts = useMemo(() => {
@@ -125,16 +128,16 @@ export function MTCampaignForm() {
     );
   }, [contacts, searchTerm]);
   
-  // Track if initial selection has been made to avoid re-running on refetch
-  const [initialSelectionDone, setInitialSelectionDone] = useState(false);
+  // Track if initial selection has been made - use ref to avoid re-runs
+  const initialSelectionRef = useRef(false);
   
   // Handle initial select all - only run once when contacts first load
   useEffect(() => {
-    if (selectAll && contacts && contacts.length > 0 && !initialSelectionDone) {
+    if (selectAll && contacts && contacts.length > 0 && !initialSelectionRef.current) {
+      initialSelectionRef.current = true;
       setSelectedContactIds(contacts.map(c => c.id));
-      setInitialSelectionDone(true);
     }
-  }, [selectAll, contacts, initialSelectionDone]);
+  }, [selectAll, contacts]);
   
   // Toggle contact selection
   const toggleContact = (contactId: string) => {
@@ -155,7 +158,7 @@ export function MTCampaignForm() {
       setSelectedContactIds([]);
     }
     // Mark as done since user manually interacted
-    setInitialSelectionDone(true);
+    initialSelectionRef.current = true;
   };
   
   // Handle submit
