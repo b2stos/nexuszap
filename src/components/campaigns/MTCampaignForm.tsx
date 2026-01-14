@@ -2,22 +2,18 @@
  * MTCampaignForm - Formulário de criação de campanha multi-tenant
  * 
  * Baseado exclusivamente em templates aprovados
+ * 
+ * HOTFIX: Evita loop infinito de refs ao NÃO renderizar Select com .map()
+ * até que os dados estejam completamente carregados e estáveis.
  */
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { 
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -40,6 +36,66 @@ import { useMTContacts, useMTContactsCount } from "@/hooks/useMTContacts";
 import { useCreateMTCampaign, useCurrentTenantForCampaigns } from "@/hooks/useMTCampaigns";
 
 type SendSpeed = 'slow' | 'normal' | 'fast';
+
+// Memoized select option to prevent ref instability
+const ChannelOption = memo(function ChannelOption({ 
+  channel, 
+  isSelected, 
+  onSelect 
+}: { 
+  channel: { id: string; name: string; phone_number: string | null }; 
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div
+      onClick={() => onSelect(channel.id)}
+      className={`p-3 rounded-md cursor-pointer transition-colors ${
+        isSelected 
+          ? 'bg-primary text-primary-foreground' 
+          : 'bg-muted/50 hover:bg-muted'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <CheckCircle2 className={`h-4 w-4 ${isSelected ? 'opacity-100' : 'opacity-0'}`} />
+        <span className="font-medium">{channel.name}</span>
+      </div>
+      {channel.phone_number && (
+        <span className="text-xs opacity-70 ml-6">{channel.phone_number}</span>
+      )}
+    </div>
+  );
+});
+
+// Memoized template option
+const TemplateOption = memo(function TemplateOption({
+  template,
+  isSelected,
+  onSelect
+}: {
+  template: { id: string; name: string; category: string };
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div
+      onClick={() => onSelect(template.id)}
+      className={`p-3 rounded-md cursor-pointer transition-colors ${
+        isSelected 
+          ? 'bg-primary text-primary-foreground' 
+          : 'bg-muted/50 hover:bg-muted'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <CheckCircle2 className={`h-4 w-4 ${isSelected ? 'opacity-100' : 'opacity-0'}`} />
+        <Badge variant="outline" className={isSelected ? 'border-primary-foreground' : ''}>
+          {template.category}
+        </Badge>
+        <span className="font-medium">{template.name}</span>
+      </div>
+    </div>
+  );
+});
 
 export function MTCampaignForm() {
   const navigate = useNavigate();
@@ -141,18 +197,27 @@ export function MTCampaignForm() {
     }
   }, [selectAll, contacts]);
   
+  // Memoized callbacks for channel/template selection - prevents ref instability
+  const handleChannelSelect = useCallback((id: string) => {
+    setChannelId(id);
+  }, []);
+  
+  const handleTemplateSelect = useCallback((id: string) => {
+    setTemplateId(id);
+  }, []);
+  
   // Toggle contact selection
-  const toggleContact = (contactId: string) => {
+  const toggleContact = useCallback((contactId: string) => {
     setSelectAll(false);
     setSelectedContactIds(prev => 
       prev.includes(contactId)
         ? prev.filter(id => id !== contactId)
         : [...prev, contactId]
     );
-  };
+  }, []);
   
   // Toggle all - manual action by user
-  const handleSelectAllChange = (checked: boolean) => {
+  const handleSelectAllChange = useCallback((checked: boolean) => {
     setSelectAll(checked);
     if (checked && contacts) {
       setSelectedContactIds(contacts.map(c => c.id));
@@ -161,7 +226,7 @@ export function MTCampaignForm() {
     }
     // Mark as done since user manually interacted
     initialSelectionRef.current = true;
-  };
+  }, [contacts]);
   
   // Handle submit
   const handleSubmit = async (e: React.FormEvent) => {
@@ -212,7 +277,7 @@ export function MTCampaignForm() {
   };
   
   // Loading state - include tenant loading
-  const isLoading = tenantLoading || channelsLoading || templatesLoading || contactsLoading;
+  const isDataLoading = channelsLoading || templatesLoading || contactsLoading;
   
   // Show loading spinner while tenant data is loading
   if (tenantLoading) {
@@ -269,25 +334,28 @@ export function MTCampaignForm() {
           </div>
           
           <div className="space-y-2">
-            <Label htmlFor="channel">Canal WhatsApp *</Label>
-            <Select value={channelId} onValueChange={setChannelId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione um canal" />
-              </SelectTrigger>
-              <SelectContent>
-                {connectedChannels.length === 0 ? (
-                  <div className="p-4 text-center text-sm text-muted-foreground">
-                    Nenhum canal conectado
-                  </div>
-                ) : (
-                  connectedChannels.map((channel) => (
-                    <SelectItem key={channel.id} value={channel.id}>
-                      ✓ {channel.name}{channel.phone_number ? ` (${channel.phone_number})` : ''}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
+            <Label>Canal WhatsApp *</Label>
+            {channelsLoading ? (
+              <div className="flex items-center gap-2 p-4 bg-muted/30 rounded-md">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-sm text-muted-foreground">Carregando canais...</span>
+              </div>
+            ) : connectedChannels.length === 0 ? (
+              <div className="p-4 text-center text-sm text-muted-foreground bg-muted/30 rounded-md">
+                Nenhum canal conectado
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                {connectedChannels.map((channel) => (
+                  <ChannelOption
+                    key={channel.id}
+                    channel={channel}
+                    isSelected={channelId === channel.id}
+                    onSelect={handleChannelSelect}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -301,24 +369,27 @@ export function MTCampaignForm() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Select value={templateId} onValueChange={setTemplateId}>
-            <SelectTrigger>
-              <SelectValue placeholder="Selecione um template" />
-            </SelectTrigger>
-            <SelectContent>
-              {(templates ?? []).length === 0 ? (
-                <div className="p-4 text-center text-sm text-muted-foreground">
-                  Nenhum template aprovado encontrado
-                </div>
-              ) : (
-                (templates ?? []).map((template) => (
-                  <SelectItem key={template.id} value={template.id}>
-                    [{template.category}] {template.name}
-                  </SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
+          {templatesLoading ? (
+            <div className="flex items-center gap-2 p-4 bg-muted/30 rounded-md">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-sm text-muted-foreground">Carregando templates...</span>
+            </div>
+          ) : (templates ?? []).length === 0 ? (
+            <div className="p-4 text-center text-sm text-muted-foreground bg-muted/30 rounded-md">
+              Nenhum template aprovado encontrado
+            </div>
+          ) : (
+            <div className="grid gap-2 max-h-[300px] overflow-y-auto">
+              {(templates ?? []).map((template) => (
+                <TemplateOption
+                  key={template.id}
+                  template={template}
+                  isSelected={templateId === template.id}
+                  onSelect={handleTemplateSelect}
+                />
+              ))}
+            </div>
+          )}
           
           {/* Template Preview & Variables */}
           {selectedTemplate && (
@@ -475,7 +546,7 @@ export function MTCampaignForm() {
           
           {/* Contact List */}
           <ScrollArea className="h-[300px] rounded-md border">
-            {isLoading ? (
+            {contactsLoading ? (
               <div className="flex items-center justify-center h-full">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
