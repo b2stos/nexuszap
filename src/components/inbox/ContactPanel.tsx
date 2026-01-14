@@ -265,8 +265,8 @@ function QuickActions({
             <AlertDialogHeader>
               <AlertDialogTitle>Apagar conversa?</AlertDialogTitle>
               <AlertDialogDescription>
-                A conversa será arquivada e removida da sua lista. 
-                Você poderá receber novas mensagens deste contato no futuro.
+                Isso remove esta conversa e todas as mensagens do Nexus Zap. 
+                (Não apaga do WhatsApp do cliente.)
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

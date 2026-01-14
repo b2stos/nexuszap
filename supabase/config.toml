@@ -12,6 +12,9 @@ verify_jwt = false
 [functions.inbox-send-template]
 verify_jwt = false
 
+[functions.inbox-delete-conversation]
+verify_jwt = false
+
 [functions.campaign-process-queue]
 verify_jwt = false
 

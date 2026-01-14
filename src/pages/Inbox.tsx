@@ -165,7 +165,7 @@ export default function Inbox() {
   const handleDeleteConversation = () => {
     if (!activeConversation) return;
     
-    deleteConversation.mutate(activeConversation.id, {
+    deleteConversation.mutate({ conversationId: activeConversation.id }, {
       onSuccess: () => {
         // Clear active conversation and go back to list
         setActiveConversation(null);
@@ -328,8 +328,8 @@ export default function Inbox() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Apagar conversa?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    A conversa será arquivada e removida da sua lista. 
-                    Você poderá receber novas mensagens deste contato no futuro.
+                    Isso remove esta conversa e todas as mensagens do Nexus Zap. 
+                    (Não apaga do WhatsApp do cliente.)
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>

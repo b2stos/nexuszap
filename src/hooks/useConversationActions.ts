@@ -134,24 +134,27 @@ export function useTogglePinConversation() {
 }
 
 /**
- * Soft delete de conversa - arquiva a conversa e suas mensagens
- * A conversa passa para status 'archived' e é removida da lista ativa
+ * Soft delete de conversa - define deleted_at para remover da lista
+ * Usa edge function para garantir que mensagens também sejam marcadas
  */
 export function useDeleteConversation() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: async (conversationId: string) => {
-      // Soft delete: change status to 'archived'
-      const { error } = await supabase
-        .from('conversations')
-        .update({ 
-          status: 'archived',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', conversationId);
+    mutationFn: async ({ 
+      conversationId, 
+      hardDelete = false 
+    }: { 
+      conversationId: string; 
+      hardDelete?: boolean;
+    }) => {
+      const { data, error } = await supabase.functions.invoke('inbox-delete-conversation', {
+        method: 'DELETE',
+        body: { conversationId, hardDelete },
+      });
       
       if (error) throw error;
+      if (data?.error) throw new Error(data.error);
       
       return conversationId;
     },
@@ -160,8 +163,8 @@ export function useDeleteConversation() {
       queryClient.invalidateQueries({ queryKey: ['inbox-messages'] });
       toast.success('Conversa apagada');
     },
-    onError: () => {
-      toast.error('Erro ao apagar conversa');
+    onError: (error: Error) => {
+      toast.error(error.message || 'Erro ao apagar conversa');
     },
   });
 }
