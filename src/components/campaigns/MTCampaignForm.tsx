@@ -35,17 +35,11 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { useChannels } from "@/hooks/useChannels";
-import { useApprovedTemplates, useCurrentTenantForTemplates } from "@/hooks/useTemplates";
+import { useApprovedTemplates } from "@/hooks/useTemplates";
 import { useMTContacts, useMTContactsCount } from "@/hooks/useMTContacts";
 import { useCreateMTCampaign, useCurrentTenantForCampaigns } from "@/hooks/useMTCampaigns";
 
 type SendSpeed = 'slow' | 'normal' | 'fast';
-
-interface VariableInput {
-  key: string;
-  value: string;
-  label: string;
-}
 
 export function MTCampaignForm() {
   const navigate = useNavigate();
@@ -288,15 +282,7 @@ export function MTCampaignForm() {
                 ) : (
                   connectedChannels.map((channel) => (
                     <SelectItem key={channel.id} value={channel.id}>
-                      <div className="flex items-center gap-2">
-                        <CheckCircle2 className="h-4 w-4 text-green-500" />
-                        {channel.name}
-                        {channel.phone_number && (
-                          <span className="text-muted-foreground">
-                            ({channel.phone_number})
-                          </span>
-                        )}
-                      </div>
+                      ✓ {channel.name}{channel.phone_number ? ` (${channel.phone_number})` : ''}
                     </SelectItem>
                   ))
                 )}
@@ -320,19 +306,14 @@ export function MTCampaignForm() {
               <SelectValue placeholder="Selecione um template" />
             </SelectTrigger>
             <SelectContent>
-              {!templates || templates.length === 0 ? (
+              {(templates ?? []).length === 0 ? (
                 <div className="p-4 text-center text-sm text-muted-foreground">
                   Nenhum template aprovado encontrado
                 </div>
               ) : (
-                templates.map((template) => (
+                (templates ?? []).map((template) => (
                   <SelectItem key={template.id} value={template.id}>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs">
-                        {template.category}
-                      </Badge>
-                      {template.name}
-                    </div>
+                    [{template.category}] {template.name}
                   </SelectItem>
                 ))
               )}
