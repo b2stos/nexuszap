@@ -32,7 +32,7 @@ import {
 } from "@/hooks/useMTCampaigns";
 
 interface CampaignDetailDialogProps {
-  campaign: MTCampaign | null;
+  campaign: MTCampaign;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -71,31 +71,16 @@ export function CampaignDetailDialog({
 }: CampaignDetailDialogProps) {
   const [activeTab, setActiveTab] = useState("overview");
   
-  // Only fetch data when we have a valid campaign
-  const campaignId = campaign?.id;
-  
+  // Only fetch data when dialog is open
   const { data: allRecipients, isLoading: loadingAll } = useCampaignRecipients(
-    open ? campaignId : undefined
+    open ? campaign.id : undefined
   );
   const { data: failedRecipients, isLoading: loadingFailed } = useCampaignRecipients(
-    open ? campaignId : undefined, 
+    open ? campaign.id : undefined, 
     'failed'
   );
   
   const retryFailed = useRetryFailedRecipients();
-  
-  // Early return if no campaign, but still render Dialog for controlled behavior
-  if (!campaign) {
-    return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-2xl max-h-[80vh]">
-          <DialogHeader>
-            <DialogTitle>Carregando...</DialogTitle>
-          </DialogHeader>
-        </DialogContent>
-      </Dialog>
-    );
-  }
   
   const total = campaign.total_recipients || 0;
   const sent = campaign.sent_count || 0;

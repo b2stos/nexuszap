@@ -328,14 +328,16 @@ export function MTCampaignsGrid() {
         })}
       </div>
       
-      {/* Detail Dialog */}
-      <CampaignDetailDialog
-        campaign={selectedCampaign}
-        open={selectedCampaign !== null}
-        onOpenChange={(open) => {
-          if (!open) setSelectedCampaign(null);
-        }}
-      />
+      {/* Detail Dialog - only render when a campaign is selected */}
+      {selectedCampaign && (
+        <CampaignDetailDialog
+          campaign={selectedCampaign}
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) setSelectedCampaign(null);
+          }}
+        />
+      )}
     </>
   );
 }
