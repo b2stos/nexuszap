@@ -269,7 +269,7 @@ export function ImportTemplatesDialog({
           };
         }
 
-        // Insert template
+        // Insert template with source='meta'
         const { error: insertError } = await supabase
           .from('mt_templates')
           .insert({
@@ -282,6 +282,8 @@ export function ImportTemplatesDialog({
             components: JSON.parse(JSON.stringify(template.components || [])),
             variables_schema: variablesSchema ? JSON.parse(JSON.stringify(variablesSchema)) : null,
             provider_template_id: template.external_id,
+            source: 'meta', // Mark as Meta template
+            last_synced_at: new Date().toISOString(),
           });
 
         if (insertError) {
