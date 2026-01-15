@@ -356,18 +356,18 @@ export default function Inbox() {
   
   return (
     <DashboardLayout user={user}>
-      {/* Use dvh for iOS Safari compatibility, with vh fallback */}
+      {/* Use dvh for iOS Safari compatibility */}
       <div className="inbox-container flex flex-col overflow-hidden bg-muted/30">
-        <div className="flex-1 flex overflow-hidden min-h-0">
-          {/* Left Column - Conversation List (always visible on desktop, hidden on mobile when chat is open) */}
-          <div 
+        <div className="flex-1 flex overflow-hidden min-h-0 w-full">
+          {/* Left Column - Conversation List */}
+          <aside 
             className={`
-              w-full md:w-80 lg:w-96 flex-shrink-0 border-r border-border bg-card
-              ${showMobileChat ? 'hidden md:block' : 'block'}
+              w-full md:w-80 lg:w-96 flex-shrink-0 flex-grow-0 border-r border-border bg-card
+              ${showMobileChat ? 'hidden md:flex' : 'flex'}
             `}
-            style={{ minWidth: 'auto' }}
+            style={{ minWidth: 320, maxWidth: 384 }}
           >
-            <div className="h-full flex flex-col md:min-w-[320px]">
+            <div className="h-full w-full flex flex-col">
               <ConversationList
                 conversations={conversations}
                 isLoading={conversationsLoading}
@@ -380,10 +380,10 @@ export default function Inbox() {
                 }}
               />
             </div>
-          </div>
+          </aside>
           
-          {/* Center Column - Chat */}
-          <div 
+          {/* Center Column - Chat (MUST have flex-1 and min-w-0) */}
+          <main 
             className={`
               flex-1 min-w-0 min-h-0 flex flex-col bg-background
               ${!showMobileChat ? 'hidden md:flex' : 'flex'}
@@ -503,7 +503,7 @@ export default function Inbox() {
               </AlertDialogContent>
             </AlertDialog>
             
-            <div className="flex-1">
+            <div className="flex-1 min-h-0 overflow-hidden">
               <InboxErrorBoundary onReset={() => setActiveConversation(null)}>
                 <ChatWindow
                   conversation={activeConversation}
@@ -514,18 +514,20 @@ export default function Inbox() {
                 />
               </InboxErrorBoundary>
             </div>
-          </div>
+          </main>
           
-          {/* Right Column - Contact Panel (hidden on mobile, visible on lg+) */}
-          <div className="w-72 lg:w-80 flex-shrink-0 hidden lg:block">
-            <ContactPanel
-              conversation={activeConversation}
-              contact={contact || activeConversation?.contact || null}
-              windowStatus={windowStatus}
-              onDeleteConversation={handleDeleteConversation}
-              isDeletingConversation={deleteConversation.isPending}
-            />
-          </div>
+          {/* Right Column - Contact Panel (only visible when conversation selected on lg+) */}
+          {activeConversation && (
+            <aside className="w-72 lg:w-80 flex-shrink-0 flex-grow-0 hidden lg:block border-l border-border">
+              <ContactPanel
+                conversation={activeConversation}
+                contact={contact || activeConversation?.contact || null}
+                windowStatus={windowStatus}
+                onDeleteConversation={handleDeleteConversation}
+                isDeletingConversation={deleteConversation.isPending}
+              />
+            </aside>
+          )}
         </div>
       </div>
     </DashboardLayout>
