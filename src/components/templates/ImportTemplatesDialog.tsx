@@ -85,7 +85,27 @@ interface Channel {
     access_token?: string;
     api_key?: string;
     phone_number_id?: string;
+    business_id?: string;
   } | null;
+}
+
+// Diagnostics info from API response
+interface DiagnosticsInfo {
+  request_id?: string;
+  waba_id?: string | null;
+  phone_number_id?: string | null;
+  business_id?: string | null;
+  display_phone_number?: string | null;
+  last_sync_at?: string;
+  source?: string;
+  provider_type?: string;
+}
+
+// Error structure from API
+interface ApiError {
+  code: string;
+  message: string;
+  details?: string;
 }
 
 interface ImportTemplatesDialogProps {
@@ -112,7 +132,9 @@ export function ImportTemplatesDialog({
   
   // State machine for fetch state
   const [fetchState, setFetchState] = useState<FetchState>('idle');
-  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [errorInfo, setErrorInfo] = useState<ApiError | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsInfo | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const selectedChannel = channels.find(c => c.id === selectedChannelId);
   const hasWabaId = !!selectedChannel?.provider_config?.waba_id;
@@ -128,7 +150,9 @@ export function ImportTemplatesDialog({
     // Reset state when dialog closes
     if (!open) {
       setFetchState('idle');
-      setErrorMessage('');
+      setErrorInfo(null);
+      setDiagnostics(null);
+      setShowDiagnostics(false);
       setTemplates([]);
       setSelectedTemplates(new Set());
     }
@@ -147,7 +171,6 @@ export function ImportTemplatesDialog({
 
   const loadChannels = async () => {
     setIsLoadingChannels(true);
-    setErrorMessage('');
 
     try {
       const { data, error: queryError } = await supabase
@@ -169,7 +192,7 @@ export function ImportTemplatesDialog({
       }
     } catch (err) {
       console.error('Error loading channels:', err);
-      setErrorMessage('Erro ao carregar canais');
+      toast.error('Erro ao carregar canais');
     } finally {
       setIsLoadingChannels(false);
     }
@@ -180,7 +203,7 @@ export function ImportTemplatesDialog({
 
     // Reset state machine to loading
     setFetchState('loading');
-    setErrorMessage('');
+    setErrorInfo(null);
     setTemplates([]);
     setSelectedTemplates(new Set());
 
@@ -188,7 +211,7 @@ export function ImportTemplatesDialog({
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         setFetchState('error');
-        setErrorMessage('Sessão expirada. Faça login novamente.');
+        setErrorInfo({ code: 'SESSION_EXPIRED', message: 'Sessão expirada. Faça login novamente.' });
         return;
       }
 
@@ -200,17 +223,29 @@ export function ImportTemplatesDialog({
       if (response.error) {
         console.error('Edge function error:', response.error);
         setFetchState('error');
-        setErrorMessage(getErrorMessage(response.error.message || 'Erro ao buscar templates'));
+        setErrorInfo({ 
+          code: 'EDGE_FUNCTION_ERROR', 
+          message: 'Erro ao buscar templates',
+          details: response.error.message 
+        });
         return;
       }
 
       const result = response.data;
 
-      // Check for API errors in response body
-      if (!result.success) {
+      // Store diagnostics info
+      if (result.meta) {
+        setDiagnostics(result.meta);
+      }
+
+      // Check for API errors in response body - use new "ok" field
+      if (result.ok === false || result.success === false) {
         console.error('API error:', result);
         setFetchState('error');
-        setErrorMessage(getErrorMessage(result.error || 'Erro ao buscar templates'));
+        setErrorInfo(result.error || { 
+          code: 'UNKNOWN', 
+          message: 'Erro ao buscar templates' 
+        });
         return;
       }
 
@@ -226,34 +261,29 @@ export function ImportTemplatesDialog({
     } catch (err) {
       console.error('Error loading templates:', err);
       setFetchState('error');
-      setErrorMessage(getErrorMessage(err instanceof Error ? err.message : 'Erro desconhecido'));
+      setErrorInfo({ 
+        code: 'NETWORK_ERROR', 
+        message: err instanceof Error ? err.message : 'Erro desconhecido' 
+      });
     }
   }, [selectedChannelId]);
 
-  // Map error messages to user-friendly text
-  const getErrorMessage = (error: string): string => {
-    const errorLower = error.toLowerCase();
+  // Get user-friendly error message based on error code
+  const getErrorDisplayMessage = (error: ApiError): string => {
+    const codeMap: Record<string, string> = {
+      'AUTH_ERROR': 'Token inválido ou expirado. Verifique as credenciais do canal.',
+      'TOKEN_INVALID': 'Access Token da Meta inválido ou expirado.',
+      'INVALID_WABA': 'WABA ID inválido ou sem permissão para esta conta.',
+      'RATE_LIMIT': 'Limite de requisições atingido. Aguarde alguns minutos.',
+      'NO_CREDENTIALS': 'Credenciais não configuradas no canal.',
+      'NO_TEMPLATE_SOURCE': 'Não foi possível acessar os templates.',
+      'NO_TEMPLATE_ENDPOINT': 'O provedor não suporta listagem de templates.',
+      'NETWORK_ERROR': 'Erro de conexão. Verifique sua internet.',
+      'FORBIDDEN': 'Sem permissão para acessar este canal.',
+      'SESSION_EXPIRED': 'Sessão expirada. Faça login novamente.',
+    };
     
-    if (errorLower.includes('401') || errorLower.includes('unauthorized') || errorLower.includes('token inválido')) {
-      return 'Token inválido ou expirado. Verifique as credenciais do canal.';
-    }
-    if (errorLower.includes('403') || errorLower.includes('forbidden')) {
-      return 'Acesso negado. Verifique as permissões do token.';
-    }
-    if (errorLower.includes('404')) {
-      return 'Recurso não encontrado. Verifique o WABA ID configurado.';
-    }
-    if (errorLower.includes('429') || errorLower.includes('rate limit')) {
-      return 'Limite de requisições atingido. Aguarde alguns minutos.';
-    }
-    if (errorLower.includes('500') || errorLower.includes('502') || errorLower.includes('503')) {
-      return 'Erro no servidor da API. Tente novamente em alguns minutos.';
-    }
-    if (errorLower.includes('network') || errorLower.includes('fetch')) {
-      return 'Erro de conexão. Verifique sua internet.';
-    }
-    
-    return error || 'Não foi possível buscar templates. Verifique conexão do canal e credenciais.';
+    return codeMap[error.code] || error.message || 'Erro ao buscar templates.';
   };
 
   const handleCopy = (value: string, label: string) => {
@@ -567,18 +597,41 @@ export function ImportTemplatesDialog({
               )}
 
               {/* State: Error - ONLY show error, never empty state */}
-              {fetchState === 'error' && (
+              {fetchState === 'error' && errorInfo && (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription className="space-y-2">
                     <p className="font-medium">Erro ao buscar templates</p>
-                    <p className="text-sm">{errorMessage}</p>
-                    <div className="pt-2">
+                    <p className="text-sm">{getErrorDisplayMessage(errorInfo)}</p>
+                    {errorInfo.details && (
+                      <p className="text-xs text-muted-foreground">{errorInfo.details}</p>
+                    )}
+                    <div className="pt-2 flex gap-2">
                       <Button variant="outline" size="sm" onClick={loadTemplates}>
                         <RefreshCw className="h-3 w-3 mr-1" />
                         Tentar novamente
                       </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => setShowDiagnostics(!showDiagnostics)}
+                      >
+                        {showDiagnostics ? 'Ocultar' : 'Ver'} diagnóstico
+                      </Button>
                     </div>
+                    {/* Diagnostics panel */}
+                    {showDiagnostics && diagnostics && (
+                      <div className="mt-2 p-2 bg-muted/50 rounded text-xs font-mono space-y-1">
+                        <p><strong>Request ID:</strong> {diagnostics.request_id || 'N/A'}</p>
+                        <p><strong>WABA ID:</strong> {diagnostics.waba_id || 'Não configurado'}</p>
+                        <p><strong>Phone Number ID:</strong> {diagnostics.phone_number_id || 'Não configurado'}</p>
+                        <p><strong>Business ID:</strong> {diagnostics.business_id || 'N/A'}</p>
+                        <p><strong>Provedor:</strong> {diagnostics.provider_type || 'N/A'}</p>
+                        <p><strong>Fonte:</strong> {diagnostics.source || 'N/A'}</p>
+                        <p><strong>Código erro:</strong> {errorInfo.code}</p>
+                        <p><strong>Última tentativa:</strong> {diagnostics.last_sync_at ? new Date(diagnostics.last_sync_at).toLocaleString('pt-BR') : 'N/A'}</p>
+                      </div>
+                    )}
                   </AlertDescription>
                 </Alert>
               )}
@@ -587,10 +640,16 @@ export function ImportTemplatesDialog({
               {fetchState === 'empty' && (
                 <div className="text-center py-8 text-muted-foreground border rounded-lg bg-muted/30">
                   <Download className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm font-medium">Nenhum template APPROVED encontrado</p>
+                  <p className="text-sm font-medium">Nenhum template aprovado encontrado</p>
                   <p className="text-xs mt-1 max-w-sm mx-auto">
-                    Certifique-se de que existem templates com status "APPROVED" na sua conta WhatsApp Business no Meta Business Suite.
+                    Não existe template com status APPROVED na sua conta WhatsApp Business para este WABA.
+                    Crie e aprove um template no Meta Business Suite e clique em "Atualizar".
                   </p>
+                  {diagnostics?.last_sync_at && (
+                    <p className="text-xs mt-3 text-muted-foreground/70">
+                      Última sincronização: {new Date(diagnostics.last_sync_at).toLocaleString('pt-BR')}
+                    </p>
+                  )}
                 </div>
               )}
 

@@ -7,8 +7,13 @@
  * 1. Primeiro tenta via API do NotificaMe (BSP) - usa token do canal
  * 2. Se o canal tem access_token da Meta configurado, tenta API da Meta diretamente
  * 
- * NotificaMe como BSP gerencia os templates, então a maioria dos clientes
- * obterá templates via API do NotificaMe, não diretamente da Meta.
+ * RESPONSE FORMAT:
+ * {
+ *   ok: boolean,
+ *   templates: [...],
+ *   error?: { code: string, message: string, details?: string },
+ *   meta: { waba_id, phone_number_id, business_id, last_sync_at, source, request_id }
+ * }
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -47,6 +52,21 @@ interface TemplateListResponse {
   data?: NotificaMeTemplate[];
   templates?: NotificaMeTemplate[];
   message_templates?: NotificaMeTemplate[];
+  error?: {
+    message?: string;
+    code?: string;
+    type?: string;
+  };
+}
+
+interface FetchResult {
+  success: boolean;
+  templates: NotificaMeTemplate[];
+  error?: {
+    code: string;
+    message: string;
+    details?: string;
+  };
 }
 
 /**
@@ -116,20 +136,19 @@ function generateVariablesSchema(components: TemplateComponent[]): Record<string
 /**
  * Busca templates via API do NotificaMe (BSP)
  * 
- * O NotificaMe usa subscriptions (channel IDs). Precisamos tentar endpoints
- * baseados na subscription_id quando disponível.
+ * IMPORTANTE: NotificaMe retorna status 200 mesmo em erro, com body { error: {...} }
+ * Precisamos verificar o body para detectar erros reais.
  */
 async function fetchTemplatesFromNotificaMe(
   token: string, 
   subscriptionId?: string
-): Promise<{ success: boolean; templates: NotificaMeTemplate[]; error?: string }> {
+): Promise<FetchResult> {
   console.log('[list-templates] Trying NotificaMe API...');
   
   // Build endpoints to try - subscription-specific endpoints first
   const endpoints: string[] = [];
   
   if (subscriptionId) {
-    // Subscription-based endpoints (most likely to work)
     endpoints.push(
       `/subscriptions/${subscriptionId}/templates`,
       `/subscriptions/${subscriptionId}/message-templates`,
@@ -146,6 +165,8 @@ async function fetchTemplatesFromNotificaMe(
     '/whatsapp/templates'
   );
 
+  let lastError: { code: string; message: string; details?: string } | undefined;
+
   for (const endpoint of endpoints) {
     console.log(`[list-templates] Trying NotificaMe endpoint: ${endpoint}`);
     
@@ -155,51 +176,105 @@ async function fetchTemplatesFromNotificaMe(
       token
     );
 
-    if (result.success && result.data) {
-      let templates: NotificaMeTemplate[] = [];
-      const data = result.data;
-      
-      // Handle different response formats
-      if (Array.isArray(data)) {
-        templates = data;
-      } else if (data.data) {
-        templates = data.data;
-      } else if (data.templates) {
-        templates = data.templates;
-      } else if (data.message_templates) {
-        templates = data.message_templates;
-      }
-
-      if (templates.length > 0) {
-        console.log(`[list-templates] Found ${templates.length} templates at NotificaMe ${endpoint}`);
-        return { success: true, templates };
-      }
-    } else {
-      const errorMsg = result.error?.message || 'Unknown';
+    // Check for HTTP-level errors
+    if (!result.success) {
+      const errorMsg = result.error?.message || 'Unknown error';
       console.log(`[list-templates] NotificaMe ${endpoint} failed: ${errorMsg}`);
       
-      // Stop trying if it's an auth error
       if (result.status === 401 || result.status === 403) {
         return { 
           success: false, 
           templates: [], 
-          error: 'Token NotificaMe inválido ou expirado. Reconecte o canal.' 
+          error: {
+            code: 'AUTH_ERROR',
+            message: 'Token NotificaMe inválido ou expirado',
+            details: 'Reconecte o canal nas configurações.'
+          }
         };
       }
+      
+      lastError = {
+        code: `HTTP_${result.status || 'ERROR'}`,
+        message: errorMsg,
+        details: endpoint
+      };
+      continue;
+    }
+
+    const data = result.data;
+    
+    // Check for error in response body (NotificaMe returns 200 with error body)
+    if (data && typeof data === 'object' && 'error' in data && (data as TemplateListResponse).error) {
+      const apiError = (data as TemplateListResponse).error!;
+      console.log(`[list-templates] NotificaMe ${endpoint} returned error in body: ${apiError.message}`);
+      
+      // Hub404 means endpoint doesn't exist - try next
+      if (apiError.code === 'Hub404') {
+        lastError = {
+          code: 'ENDPOINT_NOT_FOUND',
+          message: 'Endpoint não suportado pelo NotificaMe',
+          details: endpoint
+        };
+        continue;
+      }
+      
+      // Other API errors
+      lastError = {
+        code: apiError.code || 'API_ERROR',
+        message: apiError.message || 'Erro na API do NotificaMe',
+        details: apiError.type
+      };
+      continue;
+    }
+
+    // Parse templates from various response formats
+    let templates: NotificaMeTemplate[] = [];
+    
+    if (Array.isArray(data)) {
+      templates = data;
+    } else if (data && typeof data === 'object') {
+      const responseData = data as TemplateListResponse;
+      if (responseData.data) {
+        templates = responseData.data;
+      } else if (responseData.templates) {
+        templates = responseData.templates;
+      } else if (responseData.message_templates) {
+        templates = responseData.message_templates;
+      }
+    }
+
+    if (templates.length > 0) {
+      console.log(`[list-templates] Found ${templates.length} templates at NotificaMe ${endpoint}`);
+      return { success: true, templates };
     }
   }
 
+  // No templates found via NotificaMe - this is NOT an error, just empty
+  // But if we had API errors, report them
+  if (lastError && lastError.code !== 'ENDPOINT_NOT_FOUND') {
+    return { 
+      success: false, 
+      templates: [], 
+      error: lastError
+    };
+  }
+
+  // NotificaMe doesn't have templates endpoint exposed
   return { 
     success: false, 
     templates: [], 
-    error: 'API do NotificaMe não retornou templates. Pode ser necessário configurar o Access Token da Meta para buscar diretamente.' 
+    error: {
+      code: 'NO_TEMPLATE_ENDPOINT',
+      message: 'API do NotificaMe não suporta listagem de templates',
+      details: 'Configure o Access Token da Meta para buscar diretamente.'
+    }
   };
 }
 
 /**
  * Busca templates via API da Meta (requer access_token específico)
  */
-async function fetchTemplatesFromMeta(wabaId: string, accessToken: string): Promise<{ success: boolean; templates: NotificaMeTemplate[]; error?: string }> {
+async function fetchTemplatesFromMeta(wabaId: string, accessToken: string): Promise<FetchResult> {
   console.log(`[list-templates] Trying Meta API for WABA: ${wabaId}`);
   
   const metaUrl = `${META_GRAPH_API_URL}/${wabaId}/message_templates?status=APPROVED&limit=100`;
@@ -216,18 +291,33 @@ async function fetchTemplatesFromMeta(wabaId: string, accessToken: string): Prom
     const data = await response.json();
 
     if (data.error) {
-      console.error('[list-templates] Meta API error:', data.error);
+      console.error('[list-templates] Meta API error:', JSON.stringify(data.error));
       
+      let errorCode = 'META_API_ERROR';
       let errorMessage = 'Erro ao buscar templates da Meta';
+      let details: string | undefined;
+      
       if (data.error.code === 190 || data.error.code === 102) {
-        errorMessage = 'Access Token da Meta inválido ou expirado. Configure um token válido nas configurações do canal.';
+        errorCode = 'TOKEN_INVALID';
+        errorMessage = 'Access Token da Meta inválido ou expirado';
+        details = 'Configure um token válido nas configurações do canal.';
       } else if (data.error.code === 100) {
-        errorMessage = 'WABA_ID inválido. Verifique o ID da conta WhatsApp Business.';
+        errorCode = 'INVALID_WABA';
+        errorMessage = 'WABA ID inválido ou sem permissão';
+        details = 'Verifique se o WABA ID está correto e se o token tem acesso a esta conta.';
+      } else if (data.error.code === 4) {
+        errorCode = 'RATE_LIMIT';
+        errorMessage = 'Limite de requisições atingido';
+        details = 'Aguarde alguns minutos e tente novamente.';
       } else if (data.error.message) {
-        errorMessage = data.error.message;
+        details = data.error.message;
       }
       
-      return { success: false, templates: [], error: errorMessage };
+      return { 
+        success: false, 
+        templates: [], 
+        error: { code: errorCode, message: errorMessage, details }
+      };
     }
 
     const templates = data.data || [];
@@ -247,11 +337,22 @@ async function fetchTemplatesFromMeta(wabaId: string, accessToken: string): Prom
     };
   } catch (error) {
     console.error('[list-templates] Meta API fetch error:', error);
-    return { success: false, templates: [], error: 'Erro de conexão com a API da Meta' };
+    return { 
+      success: false, 
+      templates: [], 
+      error: {
+        code: 'NETWORK_ERROR',
+        message: 'Erro de conexão com a API da Meta',
+        details: error instanceof Error ? error.message : 'Verifique sua conexão.'
+      }
+    };
   }
 }
 
 Deno.serve(async (req: Request) => {
+  const requestId = crypto.randomUUID().slice(0, 8);
+  console.log(`[list-templates][${requestId}] Request started`);
+  
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -272,7 +373,12 @@ Deno.serve(async (req: Request) => {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
       return new Response(
-        JSON.stringify({ success: false, error: 'Não autenticado' }),
+        JSON.stringify({ 
+          ok: false, 
+          templates: [],
+          error: { code: 'UNAUTHORIZED', message: 'Não autenticado' },
+          meta: { request_id: requestId }
+        }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -283,7 +389,12 @@ Deno.serve(async (req: Request) => {
 
     if (authError || !user) {
       return new Response(
-        JSON.stringify({ success: false, error: 'Token inválido' }),
+        JSON.stringify({ 
+          ok: false, 
+          templates: [],
+          error: { code: 'INVALID_TOKEN', message: 'Token inválido' },
+          meta: { request_id: requestId }
+        }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -294,22 +405,34 @@ Deno.serve(async (req: Request) => {
 
     if (!channel_id) {
       return new Response(
-        JSON.stringify({ success: false, error: 'channel_id é obrigatório' }),
+        JSON.stringify({ 
+          ok: false, 
+          templates: [],
+          error: { code: 'MISSING_CHANNEL', message: 'channel_id é obrigatório' },
+          meta: { request_id: requestId }
+        }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    console.log(`[list-templates][${requestId}] Channel: ${channel_id}`);
+
     // Get channel config
     const { data: channel, error: channelError } = await supabase
       .from('channels')
-      .select('id, tenant_id, provider_config, provider_id')
+      .select('id, tenant_id, provider_config, provider_id, phone_number')
       .eq('id', channel_id)
       .single();
 
     if (channelError || !channel) {
-      console.error('[list-templates] Channel not found:', channelError);
+      console.error(`[list-templates][${requestId}] Channel not found:`, channelError);
       return new Response(
-        JSON.stringify({ success: false, error: 'Canal não encontrado' }),
+        JSON.stringify({ 
+          ok: false, 
+          templates: [],
+          error: { code: 'CHANNEL_NOT_FOUND', message: 'Canal não encontrado' },
+          meta: { request_id: requestId, channel_id }
+        }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -325,7 +448,12 @@ Deno.serve(async (req: Request) => {
 
     if (!tenantUser) {
       return new Response(
-        JSON.stringify({ success: false, error: 'Sem permissão para este canal' }),
+        JSON.stringify({ 
+          ok: false, 
+          templates: [],
+          error: { code: 'FORBIDDEN', message: 'Sem permissão para este canal' },
+          meta: { request_id: requestId, channel_id }
+        }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -336,52 +464,77 @@ Deno.serve(async (req: Request) => {
       subscription_id?: string;
       waba_id?: string;
       access_token?: string;
+      phone_number_id?: string;
+      business_id?: string;
     } | null;
 
     const notificameToken = resolveToken(providerConfig);
     const wabaId = providerConfig?.waba_id;
     const metaAccessToken = providerConfig?.access_token;
+    const phoneNumberId = providerConfig?.phone_number_id;
+    const businessId = providerConfig?.business_id;
+
+    // Build meta info for response
+    const metaInfo = {
+      request_id: requestId,
+      channel_id,
+      waba_id: wabaId || null,
+      phone_number_id: phoneNumberId || null,
+      business_id: businessId || null,
+      display_phone_number: channel.phone_number || null,
+      last_sync_at: new Date().toISOString(),
+      source: 'none' as string,
+      provider_type: notificameToken ? 'notificame' : (metaAccessToken ? 'meta' : 'none'),
+    };
 
     if (!notificameToken && !metaAccessToken) {
+      console.log(`[list-templates][${requestId}] No credentials configured`);
       return new Response(
         JSON.stringify({ 
-          success: false, 
-          error: 'Token do NotificaMe ou Access Token da Meta não configurado. Configure em Canais → Editar.',
-          templates: []
+          ok: false, 
+          templates: [],
+          error: { 
+            code: 'NO_CREDENTIALS', 
+            message: 'Credenciais não configuradas',
+            details: 'Configure o Token do NotificaMe ou Access Token da Meta nas configurações do canal.'
+          },
+          meta: metaInfo
         }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     let templates: NotificaMeTemplate[] = [];
-    let fetchError: string | undefined;
-    let source = 'none';
+    let fetchError: { code: string; message: string; details?: string } | undefined;
 
     // Strategy 1: Try NotificaMe API first (most common for BSP users)
     if (notificameToken) {
-      console.log(`[list-templates] Attempting NotificaMe API with token: ${maskToken(notificameToken)}`);
+      console.log(`[list-templates][${requestId}] Attempting NotificaMe API with token: ${maskToken(notificameToken)}`);
       const subscriptionId = providerConfig?.subscription_id;
       const notificameResult = await fetchTemplatesFromNotificaMe(notificameToken, subscriptionId);
       
       if (notificameResult.success && notificameResult.templates.length > 0) {
         templates = notificameResult.templates;
-        source = 'notificame';
+        metaInfo.source = 'notificame';
       } else {
         fetchError = notificameResult.error;
+        console.log(`[list-templates][${requestId}] NotificaMe result: ${JSON.stringify(notificameResult.error)}`);
       }
     }
 
     // Strategy 2: If NotificaMe didn't return templates and we have Meta credentials, try Meta API
     if (templates.length === 0 && wabaId && metaAccessToken) {
-      console.log(`[list-templates] Attempting Meta API for WABA: ${wabaId}`);
+      console.log(`[list-templates][${requestId}] Attempting Meta API for WABA: ${wabaId}`);
       const metaResult = await fetchTemplatesFromMeta(wabaId, metaAccessToken);
       
-      if (metaResult.success && metaResult.templates.length > 0) {
+      if (metaResult.success) {
         templates = metaResult.templates;
-        source = 'meta';
-        fetchError = undefined;
-      } else if (!fetchError) {
+        metaInfo.source = 'meta';
+        fetchError = undefined; // Clear previous error since Meta succeeded
+      } else {
+        // Only override error if we didn't have templates from NotificaMe
         fetchError = metaResult.error;
+        console.log(`[list-templates][${requestId}] Meta result: ${JSON.stringify(metaResult.error)}`);
       }
     }
 
@@ -390,7 +543,7 @@ Deno.serve(async (req: Request) => {
       !t.status || t.status.toLowerCase() === 'approved'
     );
 
-    console.log(`[list-templates] Returning ${approvedTemplates.length} approved templates from ${source}`);
+    console.log(`[list-templates][${requestId}] Returning ${approvedTemplates.length} approved templates from ${metaInfo.source}`);
 
     // Transform templates to our format with auto-extracted variables
     const transformedTemplates = approvedTemplates.map((t) => ({
@@ -403,34 +556,89 @@ Deno.serve(async (req: Request) => {
       variables_schema: generateVariablesSchema(t.components || []),
     }));
 
-    // Build response message
-    let message = '';
+    // Determine response based on results
+    // IMPORTANT: 
+    // - If we got templates: ok = true, no error
+    // - If no templates but no error (just empty list): ok = true, empty = true
+    // - If no templates and error: ok = false, error present
+    
     if (transformedTemplates.length > 0) {
-      message = `Encontrados ${transformedTemplates.length} template(s) aprovados via ${source === 'meta' ? 'API da Meta' : 'NotificaMe'}`;
-    } else if (fetchError) {
-      message = fetchError;
-    } else {
-      message = 'Nenhum template aprovado encontrado. Verifique se existem templates com status APPROVED.';
+      // Success with templates
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          success: true, // Keep for backwards compatibility
+          templates: transformedTemplates,
+          meta: metaInfo,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
+    // No templates found
+    if (fetchError) {
+      // Real error occurred - return as error
+      console.log(`[list-templates][${requestId}] Returning error: ${fetchError.code}`);
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          success: false,
+          templates: [],
+          error: fetchError,
+          meta: metaInfo,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // No error, just empty - could be:
+    // 1. Meta returned 0 approved templates (legitimate empty)
+    // 2. We have no way to fetch (NotificaMe without template endpoint and no Meta credentials)
+    
+    // Check if we actually successfully queried something
+    if (metaInfo.source !== 'none') {
+      // We queried successfully but got 0 templates
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          success: true,
+          templates: [],
+          empty: true,
+          message: 'Nenhum template com status APPROVED encontrado nesta conta.',
+          meta: metaInfo,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // We have NotificaMe token but no template endpoint, and no Meta credentials
     return new Response(
       JSON.stringify({
-        success: transformedTemplates.length > 0 || !fetchError,
-        templates: transformedTemplates,
-        message,
-        source,
-        ...(wabaId && { waba_id: wabaId }),
+        ok: false,
+        success: false,
+        templates: [],
+        error: {
+          code: 'NO_TEMPLATE_SOURCE',
+          message: 'Não foi possível buscar templates',
+          details: 'O provedor NotificaMe não expõe endpoint de templates. Configure WABA ID e Access Token da Meta para buscar diretamente.'
+        },
+        meta: metaInfo,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error) {
-    console.error('[list-templates] Error:', error);
+    console.error(`[list-templates][${requestId}] Error:`, error);
     return new Response(
       JSON.stringify({
+        ok: false,
         success: false,
-        error: error instanceof Error ? error.message : 'Erro interno',
+        error: { 
+          code: 'INTERNAL_ERROR', 
+          message: error instanceof Error ? error.message : 'Erro interno',
+        },
         templates: [],
+        meta: { request_id: requestId }
       }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
