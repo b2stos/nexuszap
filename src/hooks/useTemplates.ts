@@ -166,6 +166,8 @@ export function useCreateTemplate() {
     onSuccess: (_, { tenantId }) => {
       queryClient.invalidateQueries({ queryKey: ['templates', tenantId] });
       queryClient.invalidateQueries({ queryKey: ['templates-approved', tenantId] });
+      // Invalidate onboarding status to recalculate in real-time
+      queryClient.invalidateQueries({ queryKey: ['onboarding-status'] });
       toast.success('Template criado com sucesso');
     },
     onError: (error) => {
@@ -246,6 +248,8 @@ export function useDeleteTemplate() {
     onSuccess: (_, { tenantId }) => {
       queryClient.invalidateQueries({ queryKey: ['templates', tenantId] });
       queryClient.invalidateQueries({ queryKey: ['templates-approved', tenantId] });
+      // Invalidate onboarding status to recalculate in real-time
+      queryClient.invalidateQueries({ queryKey: ['onboarding-status'] });
       toast.success('Template excluído com sucesso');
     },
     onError: (error) => {

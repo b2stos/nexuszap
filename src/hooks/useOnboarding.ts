@@ -1,23 +1,19 @@
 /**
  * useOnboarding Hook
  * 
- * Gerencia o estado do onboarding do tenant
+ * Calcula o status do onboarding em TEMPO REAL baseado nos dados do banco.
+ * NÃO usa timestamps salvos - sempre verifica o estado atual.
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 
-export interface OnboardingState {
-  id: string;
-  tenant_id: string;
-  welcome_completed_at: string | null;
-  channel_connected_at: string | null;
-  template_created_at: string | null;
-  first_message_sent_at: string | null;
-  inbox_opened_at: string | null;
-  onboarding_completed: boolean;
-  onboarding_completed_at: string | null;
+export interface OnboardingStatus {
+  whatsappConnected: boolean;
+  hasApprovedTemplate: boolean;
+  hasSentMessage: boolean;
+  hasInboxConversation: boolean;
 }
 
 export type OnboardingStep = 
@@ -26,14 +22,6 @@ export type OnboardingStep =
   | 'template_created'
   | 'first_message_sent'
   | 'inbox_opened';
-
-const STEP_COLUMNS: Record<OnboardingStep, string> = {
-  welcome: 'welcome_completed_at',
-  channel_connected: 'channel_connected_at',
-  template_created: 'template_created_at',
-  first_message_sent: 'first_message_sent_at',
-  inbox_opened: 'inbox_opened_at',
-};
 
 // Get current tenant for user
 async function getCurrentTenantId(): Promise<string | null> {
@@ -51,41 +39,99 @@ async function getCurrentTenantId(): Promise<string | null> {
   return data?.tenant_id || null;
 }
 
-// Fetch onboarding state
-async function fetchOnboarding(): Promise<OnboardingState | null> {
+// Fetch onboarding status in REAL-TIME from actual data
+async function fetchOnboardingStatus(): Promise<OnboardingStatus | null> {
   const tenantId = await getCurrentTenantId();
   if (!tenantId) return null;
 
-  const { data, error } = await supabase
+  // Run all queries in parallel for performance
+  const [
+    channelsResult,
+    templatesResult,
+    messagesResult,
+    conversationsResult
+  ] = await Promise.all([
+    // 1. Check if there's at least 1 connected channel
+    supabase
+      .from('channels')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId)
+      .eq('status', 'connected'),
+    
+    // 2. Check if there's at least 1 approved template (from Meta)
+    supabase
+      .from('mt_templates')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId)
+      .eq('status', 'approved')
+      .eq('source', 'meta'),
+    
+    // 3. Check if there's at least 1 successfully sent outbound message
+    supabase
+      .from('mt_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId)
+      .eq('direction', 'outbound')
+      .in('status', ['sent', 'delivered', 'read']),
+    
+    // 4. Check if there's at least 1 conversation (inbox activity)
+    supabase
+      .from('conversations')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId)
+      .is('deleted_at', null)
+  ]);
+
+  return {
+    whatsappConnected: (channelsResult.count || 0) > 0,
+    hasApprovedTemplate: (templatesResult.count || 0) > 0,
+    hasSentMessage: (messagesResult.count || 0) > 0,
+    hasInboxConversation: (conversationsResult.count || 0) > 0,
+  };
+}
+
+// Check if welcome was completed (this one we keep from db as it's a one-time action)
+async function fetchWelcomeCompleted(): Promise<boolean> {
+  const tenantId = await getCurrentTenantId();
+  if (!tenantId) return true; // Default to completed if no tenant
+
+  const { data } = await supabase
     .from('tenant_onboarding')
-    .select('*')
+    .select('welcome_completed_at, onboarding_completed')
     .eq('tenant_id', tenantId)
     .single();
   
-  if (error) {
-    console.error('Error fetching onboarding:', error);
-    return null;
-  }
-  
-  return data as OnboardingState;
+  return !!data?.welcome_completed_at;
 }
 
-// Complete a step
-async function completeStep(step: OnboardingStep): Promise<void> {
+// Check if onboarding was manually marked complete
+async function fetchOnboardingManuallyCompleted(): Promise<boolean> {
+  const tenantId = await getCurrentTenantId();
+  if (!tenantId) return false;
+
+  const { data } = await supabase
+    .from('tenant_onboarding')
+    .select('onboarding_completed')
+    .eq('tenant_id', tenantId)
+    .single();
+  
+  return !!data?.onboarding_completed;
+}
+
+// Complete welcome step
+async function completeWelcome(): Promise<void> {
   const tenantId = await getCurrentTenantId();
   if (!tenantId) throw new Error('No tenant found');
 
-  const column = STEP_COLUMNS[step];
-  
   const { error } = await supabase
     .from('tenant_onboarding')
-    .update({ [column]: new Date().toISOString() })
+    .update({ welcome_completed_at: new Date().toISOString() })
     .eq('tenant_id', tenantId);
   
   if (error) throw error;
 }
 
-// Mark onboarding as complete
+// Mark onboarding as complete (dismiss the checklist)
 async function completeOnboarding(): Promise<void> {
   const tenantId = await getCurrentTenantId();
   if (!tenantId) throw new Error('No tenant found');
@@ -101,72 +147,134 @@ async function completeOnboarding(): Promise<void> {
   if (error) throw error;
 }
 
+// Reset onboarding (make checklist visible again)
+async function resetOnboarding(): Promise<void> {
+  const tenantId = await getCurrentTenantId();
+  if (!tenantId) throw new Error('No tenant found');
+
+  const { error } = await supabase
+    .from('tenant_onboarding')
+    .update({
+      onboarding_completed: false,
+      onboarding_completed_at: null,
+    })
+    .eq('tenant_id', tenantId);
+  
+  if (error) throw error;
+}
+
 export function useOnboarding() {
   const queryClient = useQueryClient();
   
-  const query = useQuery({
-    queryKey: ['onboarding'],
-    queryFn: fetchOnboarding,
+  // Fetch real-time status from actual data
+  const statusQuery = useQuery({
+    queryKey: ['onboarding-status'],
+    queryFn: fetchOnboardingStatus,
+    staleTime: 1000 * 30, // 30 seconds - refresh often for real-time feel
+    refetchOnWindowFocus: true,
+  });
+
+  // Fetch welcome completion status
+  const welcomeQuery = useQuery({
+    queryKey: ['onboarding-welcome'],
+    queryFn: fetchWelcomeCompleted,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+
+  // Fetch manual completion status
+  const manualCompleteQuery = useQuery({
+    queryKey: ['onboarding-manual-complete'],
+    queryFn: fetchOnboardingManuallyCompleted,
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
   
-  const completeStepMutation = useMutation({
-    mutationFn: completeStep,
+  const completeWelcomeMutation = useMutation({
+    mutationFn: completeWelcome,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['onboarding'] });
-    },
-    onError: (error) => {
-      console.error('Error completing step:', error);
+      queryClient.invalidateQueries({ queryKey: ['onboarding-welcome'] });
     },
   });
   
   const completeOnboardingMutation = useMutation({
     mutationFn: completeOnboarding,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['onboarding'] });
+      queryClient.invalidateQueries({ queryKey: ['onboarding-manual-complete'] });
       toast({
         title: '🎉 Tudo pronto!',
         description: 'Você já pode usar o WhatsApp Oficial.',
       });
     },
   });
+
+  const resetOnboardingMutation = useMutation({
+    mutationFn: resetOnboarding,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['onboarding-manual-complete'] });
+    },
+  });
   
-  // Calculate progress
-  const state = query.data;
+  // Calculate steps from REAL data
+  const status = statusQuery.data;
+  const welcomeCompleted = welcomeQuery.data ?? true;
+  const manuallyCompleted = manualCompleteQuery.data ?? false;
+
   const steps = [
-    { id: 'welcome' as const, completed: !!state?.welcome_completed_at },
-    { id: 'channel_connected' as const, completed: !!state?.channel_connected_at },
-    { id: 'template_created' as const, completed: !!state?.template_created_at },
-    { id: 'first_message_sent' as const, completed: !!state?.first_message_sent_at },
-    { id: 'inbox_opened' as const, completed: !!state?.inbox_opened_at },
+    { id: 'welcome' as const, completed: welcomeCompleted },
+    { id: 'channel_connected' as const, completed: status?.whatsappConnected ?? false },
+    { id: 'template_created' as const, completed: status?.hasApprovedTemplate ?? false },
+    { id: 'first_message_sent' as const, completed: status?.hasSentMessage ?? false },
+    { id: 'inbox_opened' as const, completed: status?.hasInboxConversation ?? false },
   ];
   
-  const completedCount = steps.filter(s => s.completed).length;
-  const progress = Math.round((completedCount / steps.length) * 100);
-  const isComplete = state?.onboarding_completed || progress === 100;
+  // Calculate progress (excluding welcome step for the percentage)
+  const mainSteps = steps.filter(s => s.id !== 'welcome');
+  const completedCount = mainSteps.filter(s => s.completed).length;
+  const progress = Math.round((completedCount / mainSteps.length) * 100);
   
-  // Check if should show welcome
-  const showWelcome = state && !state.welcome_completed_at;
+  // Onboarding is complete if manually marked OR all steps are done
+  const isComplete = manuallyCompleted || progress === 100;
+  
+  // Show welcome if not completed
+  const showWelcome = !welcomeCompleted;
   
   return {
-    state,
-    isLoading: query.isLoading,
+    status,
+    isLoading: statusQuery.isLoading,
     steps,
     progress,
     isComplete,
     showWelcome,
-    completeStep: completeStepMutation.mutate,
+    completeStep: (step: OnboardingStep) => {
+      if (step === 'welcome') {
+        completeWelcomeMutation.mutate();
+      }
+      // Other steps are auto-detected from real data, no manual marking needed
+    },
     completeOnboarding: completeOnboardingMutation.mutate,
-    refetch: query.refetch,
+    resetOnboarding: resetOnboardingMutation.mutate,
+    refetch: () => {
+      queryClient.invalidateQueries({ queryKey: ['onboarding-status'] });
+      queryClient.invalidateQueries({ queryKey: ['onboarding-welcome'] });
+      queryClient.invalidateQueries({ queryKey: ['onboarding-manual-complete'] });
+    },
   };
 }
 
-// Hook to mark a step as complete when component mounts
-export function useMarkOnboardingStep(step: OnboardingStep) {
-  const { state, completeStep } = useOnboarding();
+// Utility to invalidate onboarding status from other parts of the app
+export function useInvalidateOnboarding() {
+  const queryClient = useQueryClient();
   
-  // Check if step needs to be marked
-  const needsMarking = state && !state[STEP_COLUMNS[step] as keyof OnboardingState];
+  return () => {
+    queryClient.invalidateQueries({ queryKey: ['onboarding-status'] });
+  };
+}
+
+// Hook to mark a step as complete when component mounts (legacy support)
+export function useMarkOnboardingStep(step: OnboardingStep) {
+  const { steps, completeStep } = useOnboarding();
+  
+  const currentStep = steps.find(s => s.id === step);
+  const needsMarking = step === 'welcome' && !currentStep?.completed;
   
   return {
     markComplete: () => {

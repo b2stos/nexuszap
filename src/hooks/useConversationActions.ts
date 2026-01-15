@@ -265,6 +265,8 @@ export function useDeleteConversation() {
       // Ensure backend truth wins
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] });
       queryClient.invalidateQueries({ queryKey: ['inbox-messages', variables.conversationId] });
+      // Invalidate onboarding status to recalculate in real-time
+      queryClient.invalidateQueries({ queryKey: ['onboarding-status'] });
     },
   });
 }

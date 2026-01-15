@@ -67,19 +67,13 @@ import {
   ChannelProviderConfig,
   DiscoveredChannel,
 } from '@/hooks/useChannels';
-import { useOnboarding } from '@/hooks/useOnboarding';
+import { useInvalidateOnboarding } from '@/hooks/useOnboarding';
 import { WebhookMonitorMT } from '@/components/dashboard/WebhookMonitorMT';
 
-// Track onboarding when a channel is created
-function useTrackChannelCreation(channelsCount: number) {
-  const { state, completeStep } = useOnboarding();
-  
-  useEffect(() => {
-    // Mark channel_connected step when there's at least one channel
-    if (channelsCount > 0 && state && !state.channel_connected_at) {
-      completeStep('channel_connected');
-    }
-  }, [channelsCount, state?.channel_connected_at]);
+// Onboarding is now calculated in real-time from actual data
+// No need to manually track - useOnboarding queries channels table directly
+function useTrackChannelCreation(_channelsCount: number) {
+  // Legacy function - onboarding now auto-detects from real data
 }
 
 
