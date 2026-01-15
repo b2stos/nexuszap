@@ -14,8 +14,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { 
   Users, Search, MoreVertical, Crown, Shield, UserCog, 
-  UserMinus, UserX, Loader2, ChevronLeft, ChevronRight,
-  UserPlus
+  UserX, Loader2, ChevronLeft, ChevronRight,
+  UserPlus, AlertTriangle
 } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -59,6 +59,7 @@ export function UserManagementDialog({
   const [roleChangeUser, setRoleChangeUser] = useState<UserWithStats | null>(null);
   const [deleteUser, setDeleteUser] = useState<UserWithStats | null>(null);
   const [selectedRole, setSelectedRole] = useState<"admin" | "user">("user");
+  const [isDeleting, setIsDeleting] = useState(false);
   
   // Check if current user is Super Admin (Owner)
   const isSuperAdmin = currentUserEmail === "bbastosb2@gmail.com";
@@ -107,7 +108,7 @@ export function UserManagementDialog({
       return {
         ...profile,
         role: (userRole?.role as "admin" | "user") || "user",
-        is_active: true, // Default, would need tenant_users for real status
+        is_active: true,
       };
     }) || [];
 
@@ -150,28 +151,54 @@ export function UserManagementDialog({
   async function handleDeleteUser() {
     if (!deleteUser) return;
     
-    setUpdatingUser(deleteUser.id);
+    setIsDeleting(true);
     
-    // Delete user role first
-    await supabase
-      .from("user_roles")
-      .delete()
-      .eq("user_id", deleteUser.id);
-    
-    // Note: In a real app, you'd also need to handle auth.users deletion
-    // which requires service_role or admin API
-    
-    toast({
-      title: "Sucesso",
-      description: "Usuário removido com sucesso.",
-    });
-    
-    setUsers(prev => prev.filter(u => u.id !== deleteUser.id));
-    setTotalCount(prev => prev - 1);
-    onUserUpdated?.();
-    
-    setUpdatingUser(null);
-    setDeleteUser(null);
+    try {
+      // Call edge function for permanent deletion
+      const { data, error } = await supabase.functions.invoke('admin-delete-user', {
+        body: { userId: deleteUser.id }
+      });
+
+      if (error) {
+        console.error("Delete user error:", error);
+        toast({
+          title: "Erro ao excluir",
+          description: error.message || "Não foi possível excluir o usuário.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (data?.error) {
+        toast({
+          title: "Erro ao excluir",
+          description: data.error,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Usuário excluído",
+        description: "O usuário foi removido permanentemente do sistema e pode criar uma nova conta no futuro.",
+      });
+      
+      // Remove from local state
+      setUsers(prev => prev.filter(u => u.id !== deleteUser.id));
+      setTotalCount(prev => prev - 1);
+      onUserUpdated?.();
+      
+    } catch (err: any) {
+      console.error("Delete user exception:", err);
+      toast({
+        title: "Erro",
+        description: "Erro inesperado ao excluir usuário.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+      setDeleteUser(null);
+    }
   }
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
@@ -464,19 +491,41 @@ export function UserManagementDialog({
       <AlertDialog open={!!deleteUser} onOpenChange={(open) => !open && setDeleteUser(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Excluir usuário?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Esta ação removerá o acesso de <strong>{deleteUser?.full_name || deleteUser?.email}</strong> ao sistema. 
-              Esta ação não pode ser desfeita.
+            <div className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              <AlertDialogTitle>Excluir usuário?</AlertDialogTitle>
+            </div>
+            <AlertDialogDescription className="space-y-3">
+              <div className="bg-muted p-3 rounded-lg space-y-1">
+                <p className="text-sm">
+                  <span className="text-muted-foreground">Nome:</span>{" "}
+                  <span className="font-medium text-foreground">{deleteUser?.full_name || "Sem nome"}</span>
+                </p>
+                <p className="text-sm">
+                  <span className="text-muted-foreground">Email:</span>{" "}
+                  <span className="font-medium text-foreground">{deleteUser?.email}</span>
+                </p>
+              </div>
+              <p className="text-sm">
+                Esse usuário será <strong>removido permanentemente</strong> do sistema e poderá criar uma nova conta no futuro com o mesmo email.
+              </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel disabled={isDeleting}>Cancelar</AlertDialogCancel>
             <AlertDialogAction 
               onClick={handleDeleteUser}
+              disabled={isDeleting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Excluir
+              {isDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Excluindo...
+                </>
+              ) : (
+                "Excluir"
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

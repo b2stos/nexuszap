@@ -33,7 +33,8 @@ export type AuditAction =
   | "conversation.reopen"
   | "message.send_template"
   | "user.deactivate"
-  | "user.reactivate";
+  | "user.reactivate"
+  | "user.delete";
 
 export type EntityType = 
   | "template" 

@@ -1,7 +1,7 @@
 /**
  * DeleteUserDialog Component
  * 
- * Modal de confirmação para exclusão (desativação) de usuário
+ * Modal de confirmação para exclusão PERMANENTE de usuário
  * Apenas Super Admins podem usar
  */
 
@@ -62,12 +62,10 @@ export function DeleteUserDialog({
 
     try {
       // Verificar se é o último Super Admin (por email na lista de super admins)
-      // Para isso, contamos quantos usuários ativos existem que são super admins
       const { data: profiles } = await supabase
         .from("profiles")
         .select("id, email");
 
-      // Importar a função de super admin
       const { isSuperAdminEmail, getSuperAdminEmails } = await import("@/utils/superAdmin");
       
       const superAdminEmails = getSuperAdminEmails();
@@ -87,31 +85,49 @@ export function DeleteUserDialog({
         return;
       }
 
-      // Soft delete: desativar o usuário em tenant_users
-      const { error: tenantError } = await supabase
-        .from("tenant_users")
-        .update({ is_active: false })
-        .eq("user_id", userId);
+      // Call edge function for permanent deletion
+      const { data, error } = await supabase.functions.invoke('admin-delete-user', {
+        body: { userId }
+      });
 
-      if (tenantError) {
-        console.error("Error deactivating tenant user:", tenantError);
-        // Continuar mesmo se não houver entrada em tenant_users
+      if (error) {
+        console.error("Delete user error:", error);
+        toast({
+          title: "Erro ao excluir",
+          description: error.message || "Não foi possível excluir o usuário.",
+          variant: "destructive",
+        });
+        setIsDeleting(false);
+        setOpen(false);
+        return;
+      }
+
+      if (data?.error) {
+        toast({
+          title: "Erro ao excluir",
+          description: data.error,
+          variant: "destructive",
+        });
+        setIsDeleting(false);
+        setOpen(false);
+        return;
       }
 
       // Log da ação de auditoria
       await logAction({
-        action: "user.deactivate",
+        action: "user.delete",
         entity_type: "user",
         entity_id: userId,
         metadata: {
           target_email: userEmail,
           target_name: userName,
+          deletion_type: "permanent",
         },
       });
 
       toast({
-        title: "Usuário desativado",
-        description: `O usuário ${userEmail} foi desativado com sucesso.`,
+        title: "Usuário excluído",
+        description: `O usuário ${userEmail} foi removido permanentemente do sistema.`,
       });
 
       onUserDeleted(userId);
@@ -120,7 +136,7 @@ export function DeleteUserDialog({
       console.error("Error deleting user:", error);
       toast({
         title: "Erro",
-        description: "Não foi possível desativar o usuário.",
+        description: "Não foi possível excluir o usuário.",
         variant: "destructive",
       });
     } finally {
@@ -163,8 +179,8 @@ export function DeleteUserDialog({
               Essa ação é irreversível
             </p>
             <p className="text-sm text-muted-foreground">
-              O usuário será desativado e não poderá mais acessar o sistema. 
-              Os dados associados serão mantidos para fins de auditoria.
+              O usuário será <strong>removido permanentemente</strong> do sistema. 
+              O email ficará liberado para criar uma nova conta no futuro.
             </p>
           </AlertDialogDescription>
         </AlertDialogHeader>
