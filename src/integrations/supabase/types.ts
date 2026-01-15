@@ -1321,6 +1321,45 @@ export type Database = {
           },
         ]
       }
+      user_settings: {
+        Row: {
+          accent_color: string
+          created_at: string
+          dashboard_widgets: Json
+          id: string
+          notify_campaign_complete: boolean
+          notify_new_message: boolean
+          notify_send_failure: boolean
+          theme: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          accent_color?: string
+          created_at?: string
+          dashboard_widgets?: Json
+          id?: string
+          notify_campaign_complete?: boolean
+          notify_new_message?: boolean
+          notify_send_failure?: boolean
+          theme?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          accent_color?: string
+          created_at?: string
+          dashboard_widgets?: Json
+          id?: string
+          notify_campaign_complete?: boolean
+          notify_new_message?: boolean
+          notify_send_failure?: boolean
+          theme?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       webhook_events: {
         Row: {
           created_at: string
@@ -1546,7 +1585,14 @@ export type Database = {
       send_speed: "slow" | "normal" | "fast"
       template_status: "approved" | "pending" | "rejected"
       tenant_status: "active" | "inactive" | "suspended"
-      tenant_user_role: "owner" | "admin" | "agent"
+      tenant_user_role:
+        | "owner"
+        | "admin"
+        | "agent"
+        | "manager"
+        | "marketing"
+        | "attendant"
+        | "readonly"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1726,7 +1772,15 @@ export const Constants = {
       send_speed: ["slow", "normal", "fast"],
       template_status: ["approved", "pending", "rejected"],
       tenant_status: ["active", "inactive", "suspended"],
-      tenant_user_role: ["owner", "admin", "agent"],
+      tenant_user_role: [
+        "owner",
+        "admin",
+        "agent",
+        "manager",
+        "marketing",
+        "attendant",
+        "readonly",
+      ],
     },
   },
 } as const
