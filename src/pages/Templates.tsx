@@ -47,6 +47,8 @@ import {
 } from '@/components/ui/alert';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
 import { ImportTemplatesDialog } from '@/components/templates/ImportTemplatesDialog';
+import { TemplatesErrorBoundary } from '@/components/templates/TemplatesErrorBoundary';
+import { MetaAccountInfo } from '@/components/templates/MetaAccountInfo';
 import { supabase } from '@/integrations/supabase/client';
 import { User } from '@supabase/supabase-js';
 import { format } from 'date-fns';
@@ -57,6 +59,7 @@ import {
   Template,
 } from '@/hooks/useTemplates';
 import { useOnboarding } from '@/hooks/useOnboarding';
+import { useQuery } from '@tanstack/react-query';
 
 // Track onboarding when a template is synced
 function useTrackTemplateSync(templatesCount: number) {
@@ -67,6 +70,28 @@ function useTrackTemplateSync(templatesCount: number) {
       completeStep('template_created');
     }
   }, [templatesCount, state?.template_created_at]);
+}
+
+// Hook to get channel with Meta config
+function useChannelMetaConfig(tenantId: string | undefined) {
+  return useQuery({
+    queryKey: ['channel-meta-config', tenantId],
+    queryFn: async () => {
+      if (!tenantId) return null;
+      
+      const { data, error } = await supabase
+        .from('channels')
+        .select('id, name, phone_number, provider_config')
+        .eq('tenant_id', tenantId)
+        .eq('status', 'connected')
+        .limit(1)
+        .maybeSingle();
+      
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!tenantId,
+  });
 }
 
 // Status badge component
@@ -98,25 +123,8 @@ function StatusBadge({ status }: { status: string }) {
   }
 }
 
-// Source badge component
-function SourceBadge({ source }: { source?: string }) {
-  if (source === 'meta') {
-    return (
-      <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-600 border-blue-200">
-        <Cloud className="w-3 h-3 mr-1" />
-        Meta
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-600 border-orange-200">
-      <AlertTriangle className="w-3 h-3 mr-1" />
-      Local
-    </Badge>
-  );
-}
-
-export default function Templates() {
+// Main content component (wrapped by error boundary)
+function TemplatesContent() {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -130,7 +138,8 @@ export default function Templates() {
   
   // Queries - ONLY Meta templates
   const { data: tenantData, isLoading: tenantLoading, error: tenantError } = useCurrentTenantForTemplates();
-  const { data: templates = [], isLoading: templatesLoading, refetch } = useTemplates(tenantData?.tenantId);
+  const { data: templates = [], isLoading: templatesLoading, refetch, error: templatesError } = useTemplates(tenantData?.tenantId);
+  const { data: channelConfig } = useChannelMetaConfig(tenantData?.tenantId);
   
   // Track onboarding step
   useTrackTemplateSync(templates.length);
@@ -140,24 +149,36 @@ export default function Templates() {
     setImportOpen(true);
   };
 
+  // Safely filter templates with null checks
+  const safeTemplates = Array.isArray(templates) ? templates : [];
+  
   // Filter templates by status (only show meta source)
-  const metaTemplates = templates.filter(t => {
+  const metaTemplates = safeTemplates.filter(t => {
+    if (!t) return false;
     const source = (t as any).source;
     return source === 'meta' || source === undefined; // Include old templates without source column
   });
   
   const filteredTemplates = metaTemplates.filter(t => {
     if (statusFilter === 'all') return true;
-    return t.status === statusFilter;
+    return t?.status === statusFilter;
   });
 
   // Get template body preview from components
   const getBodyPreview = (template: Template): string => {
+    if (!template) return '';
     const components = template.components as Array<{ type: string; text?: string }> | null;
     if (!components || !Array.isArray(components)) return '';
-    const bodyComponent = components.find(c => c.type === 'BODY');
+    const bodyComponent = components.find(c => c?.type === 'BODY');
     return bodyComponent?.text || '';
   };
+
+  // Extract Meta config from channel
+  const providerConfig = channelConfig?.provider_config as {
+    waba_id?: string;
+    phone_number_id?: string;
+    business_id?: string;
+  } | null;
   
   // Loading state
   if (tenantLoading) {
@@ -183,6 +204,27 @@ export default function Templates() {
           <Button onClick={() => navigate('/dashboard')} className="mt-4">
             Voltar ao Dashboard
           </Button>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  // Error state for templates
+  if (templatesError) {
+    return (
+      <DashboardLayout user={user}>
+        <div className="container py-6">
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription className="space-y-2">
+              <p className="font-medium">Erro ao carregar templates</p>
+              <p className="text-sm">{templatesError instanceof Error ? templatesError.message : 'Erro desconhecido'}</p>
+              <Button variant="outline" size="sm" onClick={() => refetch()} className="mt-2">
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Tentar novamente
+              </Button>
+            </AlertDescription>
+          </Alert>
         </div>
       </DashboardLayout>
     );
@@ -221,6 +263,17 @@ export default function Templates() {
           </div>
         </div>
 
+        {/* Meta Account Info */}
+        {channelConfig && (
+          <MetaAccountInfo
+            wabaId={providerConfig?.waba_id}
+            phoneNumberId={providerConfig?.phone_number_id}
+            businessId={providerConfig?.business_id}
+            channelId={channelConfig.id}
+            channelName={channelConfig.name}
+          />
+        )}
+
         {/* Info Alert */}
         <Alert>
           <Info className="h-4 w-4" />
@@ -251,7 +304,7 @@ export default function Templates() {
               className={statusFilter === 'approved' ? 'bg-green-600 hover:bg-green-700' : ''}
             >
               <CheckCircle className="h-3 w-3 mr-1" />
-              Aprovados ({metaTemplates.filter(t => t.status === 'approved').length})
+              Aprovados ({metaTemplates.filter(t => t?.status === 'approved').length})
             </Button>
             <Button
               variant={statusFilter === 'pending' ? 'default' : 'outline'}
@@ -260,7 +313,7 @@ export default function Templates() {
               className={statusFilter === 'pending' ? 'bg-yellow-600 hover:bg-yellow-700' : ''}
             >
               <Clock className="h-3 w-3 mr-1" />
-              Pendentes ({metaTemplates.filter(t => t.status === 'pending').length})
+              Pendentes ({metaTemplates.filter(t => t?.status === 'pending').length})
             </Button>
             <Button
               variant={statusFilter === 'rejected' ? 'default' : 'outline'}
@@ -269,7 +322,7 @@ export default function Templates() {
               className={statusFilter === 'rejected' ? 'bg-red-600 hover:bg-red-700' : ''}
             >
               <XCircle className="h-3 w-3 mr-1" />
-              Rejeitados ({metaTemplates.filter(t => t.status === 'rejected').length})
+              Rejeitados ({metaTemplates.filter(t => t?.status === 'rejected').length})
             </Button>
           </div>
         </div>
@@ -327,6 +380,8 @@ export default function Templates() {
                 </TableHeader>
                 <TableBody>
                   {filteredTemplates.map((template) => {
+                    if (!template) return null;
+                    
                     const varsSchema = template.variables_schema as { 
                       header?: unknown[]; 
                       body?: unknown[]; 
@@ -507,5 +562,14 @@ export default function Templates() {
         </Dialog>
       </div>
     </DashboardLayout>
+  );
+}
+
+// Main export with Error Boundary wrapper
+export default function Templates() {
+  return (
+    <TemplatesErrorBoundary onReset={() => window.location.reload()}>
+      <TemplatesContent />
+    </TemplatesErrorBoundary>
   );
 }
