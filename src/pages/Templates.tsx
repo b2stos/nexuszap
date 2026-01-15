@@ -2,25 +2,25 @@
  * Templates Page
  * 
  * Página para gerenciamento de templates de WhatsApp
- * PRODUCTION: Apenas dados reais do banco
+ * APENAS templates sincronizados do Meta (WABA) são exibidos
+ * Criação/edição local foi removida - só sync
  */
 
 import { useState, useEffect } from 'react';
 import { 
-  Plus, 
   FileText, 
   Loader2, 
-  Pencil, 
-  Trash2, 
   CheckCircle, 
   Clock, 
   XCircle,
   RefreshCw,
   Building2,
-  Download,
   CloudDownload,
   Filter,
   Eye,
+  Cloud,
+  AlertTriangle,
+  Info,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -42,17 +42,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+  Alert,
+  AlertDescription,
+} from '@/components/ui/alert';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
-import { TemplateBuilder, TemplateBuilderOutput } from '@/components/templates/TemplateBuilder';
 import { ImportTemplatesDialog } from '@/components/templates/ImportTemplatesDialog';
 import { supabase } from '@/integrations/supabase/client';
 import { User } from '@supabase/supabase-js';
@@ -61,25 +54,15 @@ import { ptBR } from 'date-fns/locale';
 import {
   useCurrentTenantForTemplates,
   useTemplates,
-  useDeleteTemplate,
   Template,
 } from '@/hooks/useTemplates';
 import { useOnboarding } from '@/hooks/useOnboarding';
-import { toast } from 'sonner';
-import { 
-  componentsToJson, 
-  variablesToSchema,
-  jsonToComponents,
-  TemplateComponent,
-  DetectedVariable,
-} from '@/utils/templateParser';
 
-// Track onboarding when a template is created
-function useTrackTemplateCreation(templatesCount: number) {
+// Track onboarding when a template is synced
+function useTrackTemplateSync(templatesCount: number) {
   const { state, completeStep } = useOnboarding();
   
   useEffect(() => {
-    // Mark template_created step when there's at least one template
     if (templatesCount > 0 && state && !state.template_created_at) {
       completeStep('template_created');
     }
@@ -98,14 +81,14 @@ function StatusBadge({ status }: { status: string }) {
       );
     case 'pending':
       return (
-        <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600">
+        <Badge className="bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20">
           <Clock className="w-3 h-3 mr-1" />
           Pendente
         </Badge>
       );
     case 'rejected':
       return (
-        <Badge variant="destructive" className="bg-red-500/10 text-red-600">
+        <Badge className="bg-red-500/10 text-red-600 hover:bg-red-500/20">
           <XCircle className="w-3 h-3 mr-1" />
           Rejeitado
         </Badge>
@@ -115,133 +98,28 @@ function StatusBadge({ status }: { status: string }) {
   }
 }
 
-// Template Builder Dialog
-function TemplateBuilderDialog({
-  open,
-  onOpenChange,
-  template,
-  tenantId,
-  providerId,
-  onSuccess,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  template?: Template | null;
-  tenantId: string;
-  providerId: string;
-  onSuccess: () => void;
-}) {
-  const [isLoading, setIsLoading] = useState(false);
-  const isEditing = !!template;
-
-  // Parse existing template data
-  const initialComponents = template?.components 
-    ? jsonToComponents(template.components) 
-    : [];
-  
-  const initialVariables: DetectedVariable[] = template?.variables_schema
-    ? [
-        ...((template.variables_schema as { header?: DetectedVariable[] }).header || []).map(v => ({ ...v, section: 'HEADER' as const })),
-        ...((template.variables_schema as { body?: DetectedVariable[] }).body || []).map(v => ({ ...v, section: 'BODY' as const })),
-        ...((template.variables_schema as { button?: DetectedVariable[] }).button || []).map(v => ({ ...v, section: 'BUTTONS' as const })),
-      ]
-    : [];
-
-  const handleSave = async (data: TemplateBuilderOutput) => {
-    setIsLoading(true);
-
-    try {
-      const componentsJson = componentsToJson(data.components);
-      const variablesSchema = variablesToSchema(data.variables);
-
-      if (isEditing && template) {
-        // Update existing template
-        const { error } = await supabase
-          .from('mt_templates')
-          .update({
-            name: data.name,
-            language: data.language,
-            category: data.category,
-            status: data.status,
-            components: JSON.parse(JSON.stringify(componentsJson)),
-            variables_schema: JSON.parse(JSON.stringify(variablesSchema)),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', template.id)
-          .eq('tenant_id', tenantId);
-
-        if (error) throw error;
-        toast.success('Template atualizado com sucesso!');
-      } else {
-        // Create new template
-        const { error } = await supabase
-          .from('mt_templates')
-          .insert([{
-            tenant_id: tenantId,
-            provider_id: providerId,
-            name: data.name,
-            language: data.language,
-            category: data.category,
-            status: data.status,
-            components: JSON.parse(JSON.stringify(componentsJson)),
-            variables_schema: JSON.parse(JSON.stringify(variablesSchema)),
-          }]);
-
-        if (error) throw error;
-        toast.success('Template criado com sucesso!');
-      }
-
-      onSuccess();
-      onOpenChange(false);
-    } catch (error) {
-      console.error('Error saving template:', error);
-      toast.error('Erro ao salvar template', {
-        description: error instanceof Error ? error.message : 'Tente novamente',
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
+// Source badge component
+function SourceBadge({ source }: { source?: string }) {
+  if (source === 'meta') {
+    return (
+      <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-600 border-blue-200">
+        <Cloud className="w-3 h-3 mr-1" />
+        Meta
+      </Badge>
+    );
+  }
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[700px] max-h-[90vh]">
-        <DialogHeader>
-          <DialogTitle>
-            {isEditing ? 'Editar Template' : 'Novo Template'}
-          </DialogTitle>
-          <DialogDescription>
-            {isEditing 
-              ? 'Edite os componentes e variáveis do template.'
-              : 'Crie um novo template usando modelos prontos ou do zero.'
-            }
-          </DialogDescription>
-        </DialogHeader>
-        
-        <TemplateBuilder
-          initialName={template?.name || ''}
-          initialLanguage={template?.language || 'pt_BR'}
-          initialCategory={template?.category || 'MARKETING'}
-          initialStatus={template?.status || 'approved'}
-          initialComponents={initialComponents}
-          initialVariables={initialVariables}
-          onSave={handleSave}
-          onCancel={() => onOpenChange(false)}
-          isLoading={isLoading}
-          isEditing={isEditing}
-        />
-      </DialogContent>
-    </Dialog>
+    <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-600 border-orange-200">
+      <AlertTriangle className="w-3 h-3 mr-1" />
+      Local
+    </Badge>
   );
 }
 
 export default function Templates() {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
-  const [builderOpen, setBuilderOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
-  const [deleteTemplate, setDeleteTemplate] = useState<Template | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'approved' | 'pending' | 'rejected'>('approved');
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
   
@@ -250,41 +128,25 @@ export default function Templates() {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
   }, []);
   
-  // Queries - ALWAYS use real data
+  // Queries - ONLY Meta templates
   const { data: tenantData, isLoading: tenantLoading, error: tenantError } = useCurrentTenantForTemplates();
   const { data: templates = [], isLoading: templatesLoading, refetch } = useTemplates(tenantData?.tenantId);
-  const deleteTemplateMutation = useDeleteTemplate();
   
   // Track onboarding step
-  useTrackTemplateCreation(templates.length);
+  useTrackTemplateSync(templates.length);
   
   // Handlers
-  const handleCreate = () => {
-    setEditingTemplate(null);
-    setBuilderOpen(true);
-  };
-  
-  const handleEdit = (template: Template) => {
-    setEditingTemplate(template);
-    setBuilderOpen(true);
-  };
-  
-  const handleDelete = async () => {
-    if (!deleteTemplate || !tenantData?.tenantId) return;
-    
-    await deleteTemplateMutation.mutateAsync({
-      tenantId: tenantData.tenantId,
-      templateId: deleteTemplate.id,
-    });
-    setDeleteTemplate(null);
-  };
-
   const handleImport = () => {
     setImportOpen(true);
   };
 
-  // Filter templates by status
-  const filteredTemplates = templates.filter(t => {
+  // Filter templates by status (only show meta source)
+  const metaTemplates = templates.filter(t => {
+    const source = (t as any).source;
+    return source === 'meta' || source === undefined; // Include old templates without source column
+  });
+  
+  const filteredTemplates = metaTemplates.filter(t => {
     if (statusFilter === 'all') return true;
     return t.status === statusFilter;
   });
@@ -334,7 +196,7 @@ export default function Templates() {
           <div>
             <h1 className="text-2xl font-bold">Templates</h1>
             <p className="text-muted-foreground">
-              Gerencie seus templates de mensagem do WhatsApp
+              Templates sincronizados da sua conta WhatsApp Business (Meta)
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -356,12 +218,17 @@ export default function Templates() {
               <CloudDownload className="h-4 w-4 mr-2" />
               Sincronizar da Meta
             </Button>
-            <Button onClick={handleCreate} size="sm">
-              <Plus className="h-4 w-4 mr-2" />
-              Novo Template
-            </Button>
           </div>
         </div>
+
+        {/* Info Alert */}
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription>
+            Templates são gerenciados diretamente no Meta Business Suite. 
+            Use o botão "Sincronizar da Meta" para importar templates aprovados para uso em campanhas e no Inbox.
+          </AlertDescription>
+        </Alert>
 
         {/* Filter Tabs */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -375,7 +242,7 @@ export default function Templates() {
               size="sm"
               onClick={() => setStatusFilter('all')}
             >
-              Todos ({templates.length})
+              Todos ({metaTemplates.length})
             </Button>
             <Button
               variant={statusFilter === 'approved' ? 'default' : 'outline'}
@@ -384,7 +251,7 @@ export default function Templates() {
               className={statusFilter === 'approved' ? 'bg-green-600 hover:bg-green-700' : ''}
             >
               <CheckCircle className="h-3 w-3 mr-1" />
-              Aprovados ({templates.filter(t => t.status === 'approved').length})
+              Aprovados ({metaTemplates.filter(t => t.status === 'approved').length})
             </Button>
             <Button
               variant={statusFilter === 'pending' ? 'default' : 'outline'}
@@ -393,7 +260,7 @@ export default function Templates() {
               className={statusFilter === 'pending' ? 'bg-yellow-600 hover:bg-yellow-700' : ''}
             >
               <Clock className="h-3 w-3 mr-1" />
-              Pendentes ({templates.filter(t => t.status === 'pending').length})
+              Pendentes ({metaTemplates.filter(t => t.status === 'pending').length})
             </Button>
             <Button
               variant={statusFilter === 'rejected' ? 'default' : 'outline'}
@@ -402,7 +269,7 @@ export default function Templates() {
               className={statusFilter === 'rejected' ? 'bg-red-600 hover:bg-red-700' : ''}
             >
               <XCircle className="h-3 w-3 mr-1" />
-              Rejeitados ({templates.filter(t => t.status === 'rejected').length})
+              Rejeitados ({metaTemplates.filter(t => t.status === 'rejected').length})
             </Button>
           </div>
         </div>
@@ -412,10 +279,10 @@ export default function Templates() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
-              Templates Cadastrados
+              Templates Sincronizados
             </CardTitle>
             <CardDescription>
-              Templates precisam estar aprovados pelo WhatsApp para serem usados
+              Templates precisam estar aprovados pelo WhatsApp para serem usados em campanhas
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -423,23 +290,17 @@ export default function Templates() {
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
-            ) : templates.length === 0 ? (
+            ) : metaTemplates.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
-                <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                <h3 className="font-medium mb-1">Nenhum template cadastrado</h3>
-                <p className="text-sm text-muted-foreground mb-4">
-                  Sincronize templates aprovados da sua conta WhatsApp Business (Meta) para usar no Inbox e campanhas.
+                <CloudDownload className="h-12 w-12 text-muted-foreground/50 mb-4" />
+                <h3 className="font-medium mb-1">Nenhum template sincronizado</h3>
+                <p className="text-sm text-muted-foreground mb-4 max-w-md">
+                  Clique em "Sincronizar da Meta" para importar templates aprovados da sua conta WhatsApp Business.
                 </p>
-                <div className="flex gap-2">
-                  <Button onClick={handleImport} className="bg-green-600 hover:bg-green-700">
-                    <CloudDownload className="h-4 w-4 mr-2" />
-                    Sincronizar Templates da Meta
-                  </Button>
-                  <Button variant="outline" onClick={handleCreate}>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Criar Manualmente
-                  </Button>
-                </div>
+                <Button onClick={handleImport} className="bg-green-600 hover:bg-green-700">
+                  <CloudDownload className="h-4 w-4 mr-2" />
+                  Sincronizar Templates da Meta
+                </Button>
               </div>
             ) : filteredTemplates.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -460,7 +321,7 @@ export default function Templates() {
                     <TableHead className="hidden md:table-cell">Preview</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="hidden sm:table-cell">Variáveis</TableHead>
-                    <TableHead className="hidden lg:table-cell">Criado em</TableHead>
+                    <TableHead className="hidden lg:table-cell">Sincronizado</TableHead>
                     <TableHead className="text-right">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -477,6 +338,7 @@ export default function Templates() {
                         (varsSchema.button?.length || 0)
                       : 0;
                     const bodyPreview = getBodyPreview(template);
+                    const lastSynced = (template as any).last_synced_at;
                     
                     return (
                       <TableRow key={template.id}>
@@ -526,38 +388,21 @@ export default function Templates() {
                           )}
                         </TableCell>
                         <TableCell className="text-muted-foreground hidden lg:table-cell text-sm">
-                          {format(new Date(template.created_at), "dd/MM/yy", { locale: ptBR })}
+                          {lastSynced 
+                            ? format(new Date(lastSynced), "dd/MM/yy HH:mm", { locale: ptBR })
+                            : format(new Date(template.created_at), "dd/MM/yy", { locale: ptBR })
+                          }
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => setPreviewTemplate(template)}
-                              title="Ver preview"
-                            >
-                              <Eye className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => handleEdit(template)}
-                              title="Editar"
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-destructive hover:text-destructive"
-                              onClick={() => setDeleteTemplate(template)}
-                              title="Excluir"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => setPreviewTemplate(template)}
+                            title="Ver preview"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
                         </TableCell>
                       </TableRow>
                     );
@@ -567,18 +412,6 @@ export default function Templates() {
             )}
           </CardContent>
         </Card>
-        
-        {/* Template Builder Dialog */}
-        {tenantData?.providerId && (
-          <TemplateBuilderDialog
-            open={builderOpen}
-            onOpenChange={setBuilderOpen}
-            template={editingTemplate}
-            tenantId={tenantData.tenantId}
-            providerId={tenantData.providerId}
-            onSuccess={() => refetch()}
-          />
-        )}
 
         {/* Import Dialog */}
         {tenantData?.providerId && (
@@ -605,7 +438,7 @@ export default function Templates() {
             </DialogHeader>
             {previewTemplate && (
               <div className="space-y-4">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <StatusBadge status={previewTemplate.status} />
                   <Badge variant="outline">{previewTemplate.language}</Badge>
                   <Badge variant="outline">{previewTemplate.category}</Badge>
@@ -643,54 +476,35 @@ export default function Templates() {
                 {/* Variables info */}
                 {(() => {
                   const varsSchema = previewTemplate.variables_schema as { 
-                    header?: unknown[]; 
-                    body?: unknown[]; 
-                    button?: unknown[] 
+                    header?: Array<{ key: string; label: string }>; 
+                    body?: Array<{ key: string; label: string }>; 
+                    button?: Array<{ key: string; label: string }> 
                   } | null;
-                  const varsCount = varsSchema
-                    ? (varsSchema.header?.length || 0) + 
-                      (varsSchema.body?.length || 0) + 
-                      (varsSchema.button?.length || 0)
-                    : 0;
+                  const allVars = [
+                    ...(varsSchema?.header || []),
+                    ...(varsSchema?.body || []),
+                    ...(varsSchema?.button || []),
+                  ];
                   
-                  if (varsCount > 0) {
-                    return (
-                      <div className="text-sm text-muted-foreground">
-                        <strong>{varsCount}</strong> variável(is) detectada(s)
+                  if (allVars.length === 0) return null;
+                  
+                  return (
+                    <div className="border-t pt-4">
+                      <h4 className="text-sm font-medium mb-2">Variáveis ({allVars.length})</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {allVars.map((v, idx) => (
+                          <Badge key={idx} variant="outline" className="font-mono text-xs">
+                            {`{{${v.key}}}`} - {v.label}
+                          </Badge>
+                        ))}
                       </div>
-                    );
-                  }
-                  return null;
+                    </div>
+                  );
                 })()}
               </div>
             )}
           </DialogContent>
         </Dialog>
-        
-        {/* Delete Confirmation */}
-        <AlertDialog open={!!deleteTemplate} onOpenChange={() => setDeleteTemplate(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Excluir template?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Tem certeza que deseja excluir o template "{deleteTemplate?.name}"?
-                Esta ação não pode ser desfeita.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-              <AlertDialogAction
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                onClick={handleDelete}
-              >
-                {deleteTemplateMutation.isPending && (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                )}
-                Excluir
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
       </div>
     </DashboardLayout>
   );

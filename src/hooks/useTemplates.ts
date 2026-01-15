@@ -86,7 +86,7 @@ export function useCurrentTenantForTemplates() {
   });
 }
 
-// List templates
+// List templates (only meta source)
 export function useTemplates(tenantId: string | undefined) {
   return useQuery({
     queryKey: ['templates', tenantId],
@@ -97,6 +97,7 @@ export function useTemplates(tenantId: string | undefined) {
         .from('mt_templates')
         .select('*')
         .eq('tenant_id', tenantId)
+        .eq('source', 'meta') // Only Meta templates
         .order('created_at', { ascending: false });
       
       if (error) throw error;
@@ -107,7 +108,7 @@ export function useTemplates(tenantId: string | undefined) {
   });
 }
 
-// List approved templates only (for Inbox)
+// List approved templates only (for Inbox and Campaigns)
 export function useApprovedTemplates(tenantId: string | undefined) {
   return useQuery({
     queryKey: ['templates-approved', tenantId],
@@ -118,6 +119,7 @@ export function useApprovedTemplates(tenantId: string | undefined) {
         .from('mt_templates')
         .select('*')
         .eq('tenant_id', tenantId)
+        .eq('source', 'meta') // Only Meta templates
         .eq('status', 'approved')
         .order('name', { ascending: true });
       
