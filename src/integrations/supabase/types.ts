@@ -858,10 +858,13 @@ export type Database = {
           created_at: string
           id: string
           language: string
+          last_synced_at: string | null
+          meta_template_id: string | null
           name: string
           provider_id: string
           provider_template_id: string | null
           rejection_reason: string | null
+          source: string
           status: Database["public"]["Enums"]["template_status"]
           tenant_id: string
           updated_at: string
@@ -873,10 +876,13 @@ export type Database = {
           created_at?: string
           id?: string
           language?: string
+          last_synced_at?: string | null
+          meta_template_id?: string | null
           name: string
           provider_id: string
           provider_template_id?: string | null
           rejection_reason?: string | null
+          source?: string
           status?: Database["public"]["Enums"]["template_status"]
           tenant_id: string
           updated_at?: string
@@ -888,10 +894,13 @@ export type Database = {
           created_at?: string
           id?: string
           language?: string
+          last_synced_at?: string | null
+          meta_template_id?: string | null
           name?: string
           provider_id?: string
           provider_template_id?: string | null
           rejection_reason?: string | null
+          source?: string
           status?: Database["public"]["Enums"]["template_status"]
           tenant_id?: string
           updated_at?: string
