@@ -8,6 +8,11 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { 
   LifeBuoy, 
   Copy, 
@@ -15,7 +20,8 @@ import {
   Terminal,
   ExternalLink,
   FileText,
-  Bug
+  ChevronDown,
+  Info
 } from 'lucide-react';
 import { useTenantRole } from '@/hooks/useTenantRole';
 import { toast } from 'sonner';
@@ -26,32 +32,40 @@ export function SupportSettings() {
   const navigate = useNavigate();
   const location = useLocation();
   const [copied, setCopied] = useState(false);
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
   const canViewLogs = isOwner || isAdmin || isSuperAdmin;
+  const isDev = import.meta.env.DEV;
 
-  const generateDiagnosticInfo = () => {
-    const info = {
-      timestamp: new Date().toISOString(),
-      version: '1.0.0',
-      route: location.pathname,
-      tenantId: tenantId || 'N/A',
-      role: role || 'N/A',
-      userAgent: navigator.userAgent,
-      screenSize: `${window.innerWidth}x${window.innerHeight}`,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      language: navigator.language,
-    };
+  // Safe diagnostic info (no sensitive data)
+  const getSafeDiagnosticInfo = () => ({
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    route: location.pathname,
+    screenSize: `${window.innerWidth}x${window.innerHeight}`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    language: navigator.language,
+    role: role || 'N/A',
+  });
 
-    return JSON.stringify(info, null, 2);
-  };
+  // Full diagnostic info (for admin/dev only)
+  const getFullDiagnosticInfo = () => ({
+    ...getSafeDiagnosticInfo(),
+    tenantId: tenantId || 'N/A',
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    online: navigator.onLine,
+  });
 
   const handleCopyDiagnostic = () => {
-    const info = generateDiagnosticInfo();
-    navigator.clipboard.writeText(info);
+    const info = canViewLogs ? getFullDiagnosticInfo() : getSafeDiagnosticInfo();
+    navigator.clipboard.writeText(JSON.stringify(info, null, 2));
     setCopied(true);
     toast.success('Diagnóstico copiado!');
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const safeInfo = getSafeDiagnosticInfo();
 
   return (
     <div className="space-y-6">
@@ -110,21 +124,62 @@ export function SupportSettings() {
         </CardContent>
       </Card>
 
-      {/* Diagnostic Preview */}
+      {/* Diagnostic Info Summary */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Bug className="h-5 w-5" />
-            Informações de Diagnóstico
+            <Info className="h-5 w-5" />
+            Informações do Sistema
           </CardTitle>
           <CardDescription>
-            Dados não sensíveis para suporte técnico
+            Dados básicos para suporte técnico
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <pre className="p-4 rounded-lg bg-muted text-xs font-mono overflow-auto max-h-48">
-            {generateDiagnosticInfo()}
-          </pre>
+        <CardContent className="space-y-4">
+          {/* Friendly summary - always visible */}
+          <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+            <div className="p-3 rounded-lg bg-muted">
+              <p className="text-xs text-muted-foreground">Versão</p>
+              <p className="text-sm font-medium">{safeInfo.version}</p>
+            </div>
+            <div className="p-3 rounded-lg bg-muted">
+              <p className="text-xs text-muted-foreground">Tela</p>
+              <p className="text-sm font-medium">{safeInfo.screenSize}</p>
+            </div>
+            <div className="p-3 rounded-lg bg-muted">
+              <p className="text-xs text-muted-foreground">Fuso Horário</p>
+              <p className="text-sm font-medium truncate">{safeInfo.timezone}</p>
+            </div>
+            <div className="p-3 rounded-lg bg-muted">
+              <p className="text-xs text-muted-foreground">Idioma</p>
+              <p className="text-sm font-medium">{safeInfo.language}</p>
+            </div>
+            <div className="p-3 rounded-lg bg-muted">
+              <p className="text-xs text-muted-foreground">Função</p>
+              <p className="text-sm font-medium capitalize">{safeInfo.role}</p>
+            </div>
+            <div className="p-3 rounded-lg bg-muted">
+              <p className="text-xs text-muted-foreground">Rota</p>
+              <p className="text-sm font-medium truncate">{safeInfo.route}</p>
+            </div>
+          </div>
+
+          {/* Technical details - collapsible, only for admin/dev */}
+          {(canViewLogs || isDev) && (
+            <Collapsible open={showTechnicalDetails} onOpenChange={setShowTechnicalDetails}>
+              <CollapsibleTrigger asChild>
+                <Button variant="ghost" size="sm" className="w-full justify-between">
+                  <span className="text-sm text-muted-foreground">Ver detalhes técnicos</span>
+                  <ChevronDown className={`h-4 w-4 transition-transform ${showTechnicalDetails ? 'rotate-180' : ''}`} />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-2">
+                <pre className="p-4 rounded-lg bg-muted text-xs font-mono overflow-auto max-h-48">
+                  {JSON.stringify(getFullDiagnosticInfo(), null, 2)}
+                </pre>
+              </CollapsibleContent>
+            </Collapsible>
+          )}
         </CardContent>
       </Card>
 

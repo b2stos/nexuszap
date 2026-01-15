@@ -5,13 +5,6 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { 
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -20,14 +13,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { 
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { 
   UserPlus, 
@@ -37,8 +22,8 @@ import {
   Megaphone, 
   Headphones, 
   Eye,
-  MoreHorizontal,
-  Loader2
+  Loader2,
+  Edit2
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useTenantRole } from '@/hooks/useTenantRole';
@@ -105,14 +90,26 @@ const roleConfig: Record<TenantUserRole, { label: string; icon: typeof User; col
 
 export function TeamSettings() {
   const { tenantId, isOwner, isAdmin, isSuperAdmin } = useTenantRole();
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<TenantUserRole>('agent');
   const [isInviting, setIsInviting] = useState(false);
+  const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
+  const [newRole, setNewRole] = useState<TenantUserRole>('agent');
 
   const canManageTeam = isOwner || isAdmin || isSuperAdmin;
+
+  // Get current user id
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setCurrentUserId(user?.id || null);
+    };
+    getUser();
+  }, []);
 
   useEffect(() => {
     if (tenantId) {
@@ -179,16 +176,28 @@ export function TeamSettings() {
     }
   };
 
-  const updateMemberRole = async (memberId: string, newRole: TenantUserRole) => {
+  const handleOpenEditRole = (member: TeamMember) => {
+    if (member.role === 'owner' && member.user_id === currentUserId) {
+      toast.error('Você não pode alterar sua própria função de Proprietário');
+      return;
+    }
+    setEditingMember(member);
+    setNewRole(member.role === 'owner' ? 'admin' : member.role);
+  };
+
+  const handleSaveRole = async () => {
+    if (!editingMember) return;
+
     try {
       const { error } = await supabase
         .from('tenant_users')
         .update({ role: newRole })
-        .eq('id', memberId);
+        .eq('id', editingMember.id);
 
       if (error) throw error;
 
-      toast.success('Função atualizada');
+      toast.success('Função atualizada com sucesso');
+      setEditingMember(null);
       fetchMembers();
     } catch (err) {
       console.error('Error updating role:', err);
@@ -196,9 +205,118 @@ export function TeamSettings() {
     }
   };
 
+  const getInitials = (member: TeamMember) => {
+    return member.profile?.full_name
+      ?.split(' ')
+      .map(n => n[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || member.profile?.email?.[0]?.toUpperCase() || '?';
+  };
+
+  // Render member as card (for mobile)
+  const renderMemberCard = (member: TeamMember) => {
+    const role = roleConfig[member.role] || roleConfig.agent;
+    const Icon = role.icon;
+    const initials = getInitials(member);
+
+    return (
+      <div key={member.id} className="p-4 rounded-lg border bg-card space-y-3">
+        <div className="flex items-center gap-3">
+          <Avatar className="h-10 w-10">
+            <AvatarFallback className="text-sm">{initials}</AvatarFallback>
+          </Avatar>
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-sm truncate">
+              {member.profile?.full_name || 'Sem nome'}
+            </p>
+            <p className="text-xs text-muted-foreground truncate">
+              {member.profile?.email}
+            </p>
+          </div>
+          <Badge variant={member.is_active ? 'default' : 'secondary'} className="shrink-0">
+            {member.is_active ? 'Ativo' : 'Inativo'}
+          </Badge>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className={`p-1.5 rounded ${role.color}`}>
+              <Icon className="h-3.5 w-3.5 text-white" />
+            </div>
+            <span className="text-sm font-medium">{role.label}</span>
+          </div>
+          {canManageTeam && member.role !== 'owner' && (
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => handleOpenEditRole(member)}
+            >
+              <Edit2 className="h-3.5 w-3.5 mr-1.5" />
+              Alterar
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Render member as table row (for desktop)
+  const renderMemberRow = (member: TeamMember) => {
+    const role = roleConfig[member.role] || roleConfig.agent;
+    const Icon = role.icon;
+    const initials = getInitials(member);
+
+    return (
+      <tr key={member.id} className="border-b last:border-0">
+        <td className="py-3 pr-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <Avatar className="h-8 w-8 shrink-0">
+              <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+            </Avatar>
+            <div className="min-w-0">
+              <p className="font-medium text-sm truncate max-w-[180px]">
+                {member.profile?.full_name || 'Sem nome'}
+              </p>
+              <p className="text-xs text-muted-foreground truncate max-w-[180px]">
+                {member.profile?.email}
+              </p>
+            </div>
+          </div>
+        </td>
+        <td className="py-3 px-2">
+          <div className="flex items-center gap-2">
+            <div className={`p-1 rounded ${role.color}`}>
+              <Icon className="h-3 w-3 text-white" />
+            </div>
+            <span className="text-sm whitespace-nowrap">{role.label}</span>
+          </div>
+        </td>
+        <td className="py-3 px-2">
+          <Badge variant={member.is_active ? 'default' : 'secondary'}>
+            {member.is_active ? 'Ativo' : 'Inativo'}
+          </Badge>
+        </td>
+        {canManageTeam && (
+          <td className="py-3 pl-2">
+            {member.role !== 'owner' && (
+              <Button 
+                variant="ghost" 
+                size="sm"
+                onClick={() => handleOpenEditRole(member)}
+              >
+                <Edit2 className="h-3.5 w-3.5 mr-1" />
+                Editar
+              </Button>
+            )}
+          </td>
+        )}
+      </tr>
+    );
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 max-w-full overflow-hidden">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold">Equipe e Permissões</h3>
           <p className="text-sm text-muted-foreground">
@@ -208,12 +326,12 @@ export function TeamSettings() {
         {canManageTeam && (
           <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
             <DialogTrigger asChild>
-              <Button>
+              <Button className="w-full sm:w-auto">
                 <UserPlus className="h-4 w-4 mr-2" />
                 Convidar
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-md">
               <DialogHeader>
                 <DialogTitle>Convidar Membro</DialogTitle>
                 <DialogDescription>
@@ -233,28 +351,27 @@ export function TeamSettings() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="role">Função</Label>
-                  <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as TenantUserRole)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(roleConfig).filter(([key]) => key !== 'owner').map(([key, config]) => (
-                        <SelectItem key={key} value={key}>
-                          <div className="flex items-center gap-2">
-                            <config.icon className="h-4 w-4" />
-                            {config.label}
-                          </div>
-                        </SelectItem>
+                  <select
+                    id="role"
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value as TenantUserRole)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  >
+                    {Object.entries(roleConfig)
+                      .filter(([key]) => key !== 'owner')
+                      .map(([key, config]) => (
+                        <option key={key} value={key}>
+                          {config.label}
+                        </option>
                       ))}
-                    </SelectContent>
-                  </Select>
+                  </select>
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsInviteOpen(false)}>
+              <DialogFooter className="flex-col sm:flex-row gap-2">
+                <Button variant="outline" onClick={() => setIsInviteOpen(false)} className="w-full sm:w-auto">
                   Cancelar
                 </Button>
-                <Button onClick={handleInvite} disabled={isInviting || !inviteEmail}>
+                <Button onClick={handleInvite} disabled={isInviting || !inviteEmail} className="w-full sm:w-auto">
                   {isInviting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                   Enviar Convite
                 </Button>
@@ -273,7 +390,7 @@ export function TeamSettings() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
             {Object.entries(roleConfig).map(([key, config]) => {
               const Icon = config.icon;
               return (
@@ -298,7 +415,7 @@ export function TeamSettings() {
         </CardContent>
       </Card>
 
-      {/* Team Members Table */}
+      {/* Team Members */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Membros da Equipe</CardTitle>
@@ -316,94 +433,79 @@ export function TeamSettings() {
               Nenhum membro encontrado
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Usuário</TableHead>
-                  <TableHead>Função</TableHead>
-                  <TableHead>Status</TableHead>
-                  {canManageTeam && <TableHead className="w-[50px]"></TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {members.map((member) => {
-                  const role = roleConfig[member.role] || roleConfig.agent;
-                  const Icon = role.icon;
-                  const initials = member.profile?.full_name
-                    ?.split(' ')
-                    .map(n => n[0])
-                    .slice(0, 2)
-                    .join('')
-                    .toUpperCase() || member.profile?.email?.[0]?.toUpperCase() || '?';
+            <>
+              {/* Mobile: Cards layout */}
+              <div className="lg:hidden space-y-3">
+                {members.map(renderMemberCard)}
+              </div>
 
-                  return (
-                    <TableRow key={member.id}>
-                      <TableCell>
-                        <div className="flex items-center gap-3">
-                          <Avatar className="h-8 w-8">
-                            <AvatarFallback className="text-xs">
-                              {initials}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div>
-                            <div className="font-medium text-sm">
-                              {member.profile?.full_name || 'Sem nome'}
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              {member.profile?.email}
-                            </div>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {canManageTeam && member.role !== 'owner' ? (
-                          <Select 
-                            value={member.role} 
-                            onValueChange={(v) => updateMemberRole(member.id, v as TenantUserRole)}
-                          >
-                            <SelectTrigger className="w-[160px]">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {Object.entries(roleConfig).filter(([key]) => key !== 'owner').map(([key, config]) => (
-                                <SelectItem key={key} value={key}>
-                                  <div className="flex items-center gap-2">
-                                    <config.icon className="h-4 w-4" />
-                                    {config.label}
-                                  </div>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <div className={`p-1 rounded ${role.color}`}>
-                              <Icon className="h-3 w-3 text-white" />
-                            </div>
-                            <span className="text-sm">{role.label}</span>
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={member.is_active ? 'default' : 'secondary'}>
-                          {member.is_active ? 'Ativo' : 'Inativo'}
-                        </Badge>
-                      </TableCell>
-                      {canManageTeam && (
-                        <TableCell>
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+              {/* Desktop: Table layout */}
+              <div className="hidden lg:block overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b text-left">
+                      <th className="pb-3 text-sm font-medium text-muted-foreground">Usuário</th>
+                      <th className="pb-3 px-2 text-sm font-medium text-muted-foreground">Função</th>
+                      <th className="pb-3 px-2 text-sm font-medium text-muted-foreground">Status</th>
+                      {canManageTeam && <th className="pb-3 pl-2 text-sm font-medium text-muted-foreground w-[100px]">Ações</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {members.map(renderMemberRow)}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
+
+      {/* Edit Role Modal */}
+      <Dialog open={!!editingMember} onOpenChange={(open) => !open && setEditingMember(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Alterar Função</DialogTitle>
+            <DialogDescription>
+              Altere a função de {editingMember?.profile?.full_name || editingMember?.profile?.email}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Label htmlFor="newRole">Nova Função</Label>
+            <select
+              id="newRole"
+              value={newRole}
+              onChange={(e) => setNewRole(e.target.value as TenantUserRole)}
+              className="mt-2 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              {Object.entries(roleConfig)
+                .filter(([key]) => key !== 'owner')
+                .map(([key, config]) => (
+                  <option key={key} value={key}>
+                    {config.label}
+                  </option>
+                ))}
+            </select>
+            <div className="mt-3 p-3 rounded-lg bg-muted">
+              <p className="text-xs text-muted-foreground mb-2">Permissões da função:</p>
+              <div className="flex flex-wrap gap-1">
+                {roleConfig[newRole]?.permissions.map((perm) => (
+                  <Badge key={perm} variant="secondary" className="text-xs">
+                    {perm}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={() => setEditingMember(null)} className="w-full sm:w-auto">
+              Cancelar
+            </Button>
+            <Button onClick={handleSaveRole} className="w-full sm:w-auto">
+              Salvar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
