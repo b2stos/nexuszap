@@ -230,15 +230,45 @@ Deno.serve(async (req) => {
     }
 
     // Build readable preview for message content
-    // Format: "variavel1 | variavel2 | variavel3" + template name footer
-    const variableValues = Object.values(variables).filter(Boolean);
-    const variablesPreview = variableValues.length > 0
-      ? variableValues.join(' | ')
-      : '';
+    // Try to extract real template body and substitute variables
+    let messageContent = '';
     
-    const messageContent = variablesPreview
-      ? `${variablesPreview}\n\n📋 Template: ${tpl.name}`
-      : `📋 Template: ${tpl.name}`;
+    // Get template components (if available in template data)
+    const templateComponents = (template as Record<string, unknown>).components;
+    
+    if (templateComponents && Array.isArray(templateComponents)) {
+      const bodyComponent = templateComponents.find(
+        (c: Record<string, unknown>) => c.type === 'BODY' || c.type === 'body'
+      ) as Record<string, unknown> | undefined;
+      
+      if (bodyComponent?.text) {
+        let bodyText = String(bodyComponent.text);
+        
+        // Substitute {{1}}, {{2}}, etc. with actual values from body variables
+        if (tpl.variables_schema?.body) {
+          tpl.variables_schema.body.forEach((v, idx) => {
+            const placeholder = `{{${idx + 1}}}`;
+            const value = variables[v.key] || '';
+            bodyText = bodyText.replace(placeholder, value);
+          });
+        }
+        
+        // Clean up any remaining placeholders
+        bodyText = bodyText.replace(/\{\{\d+\}\}/g, '').trim();
+        
+        if (bodyText) {
+          messageContent = bodyText;
+        }
+      }
+    }
+    
+    // Fallback: use variable values if we couldn't extract template body
+    if (!messageContent) {
+      const variableValues = Object.values(variables).filter(Boolean);
+      messageContent = variableValues.length > 0 
+        ? variableValues.join(' | ')
+        : `Mensagem de template`;
+    }
 
     const { data: message, error: msgError } = await supabase
       .from('mt_messages')
@@ -376,9 +406,9 @@ Deno.serve(async (req) => {
     }
 
     // Update conversation last_message_at with better preview
-    const conversationPreview = variablesPreview
-      ? variablesPreview.substring(0, 80)
-      : `📋 ${tpl.name}`;
+    const conversationPreview = messageContent.length > 80 
+      ? messageContent.substring(0, 80) + '...'
+      : messageContent || `📋 ${tpl.name}`;
     
     await supabase
       .from('conversations')

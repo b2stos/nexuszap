@@ -238,37 +238,56 @@ function buildTemplateVariables(
 }
 
 /**
- * Renderiza preview do template para o Inbox
- * Formato: "[Template: nome_template] Variáveis: {{1}}=valor1, {{2}}=valor2"
- * Se não houver variáveis, apenas "[Template: nome_template]"
+ * Renderiza preview REAL do template para o Inbox
+ * Busca o texto do BODY do template e substitui {{1}}, {{2}}, etc. pelos valores reais
+ * Fallback: mostra os valores das variáveis de forma amigável
  */
-function renderTemplatePreview(templateName: string, variables: Record<string, TemplateVariable[]>, contactName?: string | null): string {
+function renderTemplatePreview(
+  templateName: string, 
+  variables: Record<string, TemplateVariable[]>, 
+  templateComponents?: unknown,
+  contactName?: string | null
+): string {
   const bodyVars = variables.body || [];
   
+  // 1. Tentar extrair texto do BODY do template e substituir variáveis
+  if (templateComponents && Array.isArray(templateComponents)) {
+    const bodyComponent = templateComponents.find(
+      (c: Record<string, unknown>) => c.type === 'BODY' || c.type === 'body'
+    ) as Record<string, unknown> | undefined;
+    
+    if (bodyComponent?.text) {
+      let bodyText = String(bodyComponent.text);
+      
+      // Substituir {{1}}, {{2}}, etc. pelos valores reais
+      bodyVars.forEach((v, i) => {
+        const placeholder = `{{${i + 1}}}`;
+        const value = v.value || '';
+        bodyText = bodyText.replace(placeholder, value);
+      });
+      
+      // Se ainda houver placeholders não preenchidos, limpar
+      bodyText = bodyText.replace(/\{\{\d+\}\}/g, '');
+      
+      if (bodyText.trim()) {
+        return bodyText.trim();
+      }
+    }
+  }
+  
+  // 2. Fallback: mostrar valores das variáveis de forma amigável
   if (bodyVars.length === 0) {
-    // Sem variáveis - mostra apenas nome do template
-    return `📋 Template: ${templateName}`;
+    // Template sem variáveis no body - só nome
+    return `Mensagem de template`;
   }
   
-  // Com variáveis - mostra valores preenchidos
-  const values = bodyVars
-    .map((v, i) => `{{${i + 1}}}=${v.value || '?'}`)
-    .filter(v => !v.endsWith('=?'))
-    .join(', ');
-  
-  if (!values) {
-    return `📋 Template: ${templateName}`;
-  }
-  
-  // Formato final: "Template enviado com: nome=João, data=10/01"
+  // Concatenar valores das variáveis que foram preenchidas
   const friendlyValues = bodyVars
-    .map((v, i) => v.value)
+    .map((v) => v.value)
     .filter(Boolean)
     .join(' | ');
   
-  return friendlyValues 
-    ? `${friendlyValues}\n\n📋 Template: ${templateName}`
-    : `📋 Template: ${templateName}`;
+  return friendlyValues || `Mensagem de template`;
 }
 
 function logCampaignStats(campaignName: string, stats: CampaignStats) {
@@ -305,6 +324,7 @@ async function createOutboundMessageInInbox(
   contactId: string,
   templateName: string,
   templateVars: Record<string, TemplateVariable[]>,
+  templateComponents: unknown,
   providerMessageId: string,
   sentByUserId: string | null
 ): Promise<{ conversationId: string | null; messageId: string | null }> {
@@ -318,6 +338,7 @@ async function createOutboundMessageInInbox(
       .eq('tenant_id', tenantId)
       .eq('channel_id', channelId)
       .eq('contact_id', contactId)
+      .is('deleted_at', null)
       .maybeSingle();
     
     if (existingConv) {
@@ -345,8 +366,8 @@ async function createOutboundMessageInInbox(
       conversationId = newConv.id;
     }
     
-    // 2. Criar mensagem outbound
-    const messageContent = renderTemplatePreview(templateName, templateVars);
+    // 2. Criar mensagem outbound - usar texto REAL do template
+    const messageContent = renderTemplatePreview(templateName, templateVars, templateComponents, null);
     
     const { data: message, error: msgError } = await supabase
       .from('mt_messages')
@@ -372,12 +393,16 @@ async function createOutboundMessageInInbox(
       return { conversationId, messageId: null };
     }
     
-    // 3. Atualizar conversa com última mensagem
+    // 3. Atualizar conversa com última mensagem - também usar preview real
+    const previewContent = messageContent.length > 50 
+      ? messageContent.substring(0, 50) + '...'
+      : messageContent;
+    
     await supabase
       .from('conversations')
       .update({
         last_message_at: new Date().toISOString(),
-        last_message_preview: `📋 ${templateName}`,
+        last_message_preview: previewContent,
       })
       .eq('id', conversationId);
     
@@ -620,6 +645,7 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
           recipient.contact_id,
           campaign.template.name,
           templateVars,
+          campaign.template.components, // Template components para renderizar preview real
           result.provider_message_id,
           sentByUserId
         );

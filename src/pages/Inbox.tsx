@@ -5,7 +5,7 @@
  * PRODUCTION: Apenas dados reais do banco
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Component, ReactNode, ErrorInfo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Loader2, 
@@ -18,6 +18,7 @@ import {
   PinOff,
   Trash2,
   Ban,
+  AlertCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -60,6 +61,64 @@ import {
 } from '@/hooks/useConversationActions';
 import { InboxConversation, ConversationFilter } from '@/types/inbox';
 import { useOnboarding } from '@/hooks/useOnboarding';
+
+// ============================================
+// ERROR BOUNDARY - Previne blank screen no iPad
+// ============================================
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  fallback?: ReactNode;
+  onReset?: () => void;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class InboxErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('[Inbox] Error caught by boundary:', error, errorInfo);
+  }
+
+  handleReset = () => {
+    this.setState({ hasError: false, error: null });
+    this.props.onReset?.();
+  };
+
+  render() {
+    if (this.state.hasError) {
+      if (this.props.fallback) {
+        return this.props.fallback;
+      }
+      
+      return (
+        <div className="flex flex-col items-center justify-center h-full p-8 text-center bg-muted/20">
+          <AlertCircle className="w-12 h-12 text-destructive mb-4" />
+          <h3 className="text-lg font-semibold mb-2">Algo deu errado</h3>
+          <p className="text-sm text-muted-foreground mb-4 max-w-xs">
+            Ocorreu um erro ao carregar esta conversa.
+          </p>
+          <Button onClick={this.handleReset} variant="outline">
+            Tentar novamente
+          </Button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 // Track inbox_opened onboarding step
 function useTrackInboxOpened() {
@@ -174,11 +233,25 @@ export default function Inbox() {
   const runDeleteConversation = (conversationId: string) => {
     const prevActive = activeConversation;
     const wasActive = activeConversation?.id === conversationId;
+    
+    // Find next conversation to select after delete
+    let nextConversation: InboxConversation | null = null;
+    if (wasActive && conversations.length > 1) {
+      const currentIndex = conversations.findIndex(c => c.id === conversationId);
+      // Try next conversation, or previous if at end
+      if (currentIndex < conversations.length - 1) {
+        nextConversation = conversations[currentIndex + 1];
+      } else if (currentIndex > 0) {
+        nextConversation = conversations[currentIndex - 1];
+      }
+    }
 
-    // Optimistic UI: if deleting the open conversation, clear it immediately
+    // Optimistic UI: if deleting the open conversation, select next one immediately
     if (wasActive) {
-      setActiveConversation(null);
-      setShowMobileChat(false);
+      setActiveConversation(nextConversation);
+      if (!nextConversation) {
+        setShowMobileChat(false);
+      }
     }
 
     deleteConversation.mutate(
@@ -386,13 +459,15 @@ export default function Inbox() {
             </AlertDialog>
             
             <div className="flex-1">
-              <ChatWindow
-                conversation={activeConversation}
-                messages={messages}
-                isLoading={messagesLoading}
-                windowStatus={windowStatus}
-                tenantId={tenantId}
-              />
+              <InboxErrorBoundary onReset={() => setActiveConversation(null)}>
+                <ChatWindow
+                  conversation={activeConversation}
+                  messages={messages}
+                  isLoading={messagesLoading}
+                  windowStatus={windowStatus}
+                  tenantId={tenantId}
+                />
+              </InboxErrorBoundary>
             </div>
           </div>
           
