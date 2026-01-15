@@ -197,13 +197,24 @@ export function useDeleteConversation() {
     }
   >({
     mutationFn: async ({ conversationId, hardDelete = false }) => {
+      console.log(`[useDeleteConversation] Deleting conversation: ${conversationId}, hardDelete: ${hardDelete}`);
+      
+      // Use POST instead of DELETE for better Safari/iPad compatibility
       const { data, error } = await supabase.functions.invoke('inbox-delete-conversation', {
-        method: 'DELETE',
+        method: 'POST',
         body: { conversationId, hardDelete },
       });
 
-      if (error) throw error as unknown as Error;
-      if (data?.error) throw new Error(data.error);
+      console.log('[useDeleteConversation] Response:', { data, error });
+
+      if (error) {
+        console.error('[useDeleteConversation] Invoke error:', error);
+        throw error as unknown as Error;
+      }
+      if (data?.error) {
+        console.error('[useDeleteConversation] API error:', data.error);
+        throw new Error(data.error);
+      }
 
       return data?.conversationId || conversationId;
     },
