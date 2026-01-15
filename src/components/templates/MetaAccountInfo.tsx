@@ -163,33 +163,13 @@ export function MetaAccountInfo({
               )}
             </div>
 
-            {/* Phone Number ID */}
-            <div className="flex items-center justify-between p-2 bg-background rounded-lg border">
-              <div className="flex-1 min-w-0">
-                <p className="text-xs text-muted-foreground">Phone Number ID (Cloud API)</p>
-                {isLoading ? (
-                  <Skeleton className="h-5 w-40 mt-1" />
-                ) : phoneNumberId ? (
+            {/* Phone Number ID - Only show for Meta Cloud API when value exists */}
+            {phoneNumberId && (
+              <div className="flex items-center justify-between p-2 bg-background rounded-lg border">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-muted-foreground">Phone Number ID (Cloud API)</p>
                   <p className="font-mono text-sm truncate">{phoneNumberId}</p>
-                ) : (
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="flex items-center gap-1.5 cursor-help">
-                          <span className="text-sm text-muted-foreground">Não disponível</span>
-                          <Info className="h-3.5 w-3.5 text-muted-foreground" />
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" className="max-w-[250px]">
-                        <p className="text-sm">
-                          {unavailableReason || 'Configure o Access Token da Meta para buscar automaticamente'}
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                )}
-              </div>
-              {phoneNumberId && (
+                </div>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -198,8 +178,8 @@ export function MetaAccountInfo({
                 >
                   <Copy className="h-4 w-4" />
                 </Button>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Display Phone Number (if available) */}
             {displayPhoneNumber && (
@@ -233,29 +213,6 @@ export function MetaAccountInfo({
                   onClick={() => handleCopy(businessId, 'Business ID')}
                 >
                   <Copy className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
-
-            {/* Refresh button if we have unavailable reason */}
-            {unavailableReason && channelId && (
-              <div className="pt-2 flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 text-muted-foreground shrink-0" />
-                <p className="text-xs text-muted-foreground flex-1">
-                  {unavailableReason}
-                </p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={fetchMetaIdentifiers}
-                  disabled={isLoading}
-                  className="shrink-0"
-                >
-                  {isLoading ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    'Tentar novamente'
-                  )}
                 </Button>
               </div>
             )}
