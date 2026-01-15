@@ -146,6 +146,7 @@ export default function Inbox() {
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteTargetConversationId, setDeleteTargetConversationId] = useState<string | null>(null);
+  const [hardDeleteMode, setHardDeleteMode] = useState(false);
   const didAutoSelectRef = useRef(false);
   useTrackInboxOpened();
   
@@ -225,8 +226,9 @@ export default function Inbox() {
     setShowMobileChat(false);
   };
   
-  const openDeleteDialog = (conversationId: string) => {
+  const openDeleteDialog = (conversationId: string, hardMode = false) => {
     setDeleteTargetConversationId(conversationId);
+    setHardDeleteMode(hardMode);
     setShowDeleteDialog(true);
   };
 
@@ -254,14 +256,19 @@ export default function Inbox() {
       }
     }
 
+    console.log(`[Inbox] Deleting conversation: ${conversationId}, hardDelete: ${hardDeleteMode}`);
+
     deleteConversation.mutate(
-      { conversationId },
+      { conversationId, hardDelete: hardDeleteMode },
       {
         onSuccess: () => {
+          console.log(`[Inbox] Delete successful for: ${conversationId}`);
           setShowDeleteDialog(false);
           setDeleteTargetConversationId(null);
+          setHardDeleteMode(false);
         },
-        onError: () => {
+        onError: (error) => {
+          console.error(`[Inbox] Delete failed:`, error);
           // Rollback local UI selection if needed (list rollback is handled in the hook)
           if (wasActive && prevActive) {
             setActiveConversation(prevActive);
@@ -434,25 +441,43 @@ export default function Inbox() {
               open={showDeleteDialog}
               onOpenChange={(open) => {
                 setShowDeleteDialog(open);
-                if (!open) setDeleteTargetConversationId(null);
+                if (!open) {
+                  setDeleteTargetConversationId(null);
+                  setHardDeleteMode(false);
+                }
               }}
             >
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Apagar conversa?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Isso remove esta conversa e todas as mensagens do Nexus Zap. 
-                    (Não apaga do WhatsApp do cliente.)
+                  <AlertDialogDescription className="space-y-3">
+                    <span className="block">
+                      Isso remove esta conversa e todas as mensagens do Nexus Zap. 
+                      (Não apaga do WhatsApp do cliente.)
+                    </span>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer mt-4">
+                      <input
+                        type="checkbox"
+                        checked={hardDeleteMode}
+                        onChange={(e) => setHardDeleteMode(e.target.checked)}
+                        className="h-4 w-4 rounded border-border"
+                      />
+                      <span className="text-foreground">
+                        Excluir permanentemente (não pode ser desfeito)
+                      </span>
+                    </label>
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogCancel disabled={deleteConversation.isPending}>
+                    Cancelar
+                  </AlertDialogCancel>
                   <AlertDialogAction
                     onClick={handleDeleteConversation}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                     disabled={deleteConversation.isPending}
                   >
-                    {deleteConversation.isPending ? 'Apagando...' : 'Apagar'}
+                    {deleteConversation.isPending ? 'Apagando...' : hardDeleteMode ? 'Excluir permanentemente' : 'Apagar'}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
