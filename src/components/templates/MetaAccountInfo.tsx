@@ -2,14 +2,24 @@
  * MetaAccountInfo Component
  * 
  * Exibe IDs da conta Meta (WABA ID, Phone Number ID) com botões de copiar
+ * Busca automaticamente o Phone Number ID via edge function
  */
 
-import { Copy, ExternalLink, Settings, CheckCircle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Copy, Settings, CheckCircle, Loader2, AlertCircle, Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
+import { supabase } from '@/integrations/supabase/client';
 
 interface MetaAccountInfoProps {
   wabaId?: string | null;
@@ -19,14 +29,84 @@ interface MetaAccountInfoProps {
   channelName?: string;
 }
 
+interface MetaIdentifiersResult {
+  success: boolean;
+  waba_id: string | null;
+  phone_number_id: string | null;
+  display_phone_number: string | null;
+  reason?: string;
+  cached?: boolean;
+  error?: string;
+}
+
+// Map reason codes to user-friendly messages
+const REASON_MESSAGES: Record<string, string> = {
+  'provider_does_not_expose': 'Indisponível via provedor atual (NotificaMe)',
+  'token_expired_or_no_permission': 'Token expirado ou sem permissão',
+  'no_phone_numbers_in_waba': 'Nenhum número encontrado nesta conta WABA',
+  'meta_api_error': 'Erro na API da Meta',
+  'network_error': 'Erro de conexão',
+  'no_credentials_configured': 'Credenciais não configuradas',
+};
+
 export function MetaAccountInfo({
-  wabaId,
-  phoneNumberId,
+  wabaId: initialWabaId,
+  phoneNumberId: initialPhoneNumberId,
   businessId,
   channelId,
   channelName,
 }: MetaAccountInfoProps) {
   const navigate = useNavigate();
+  const [isLoading, setIsLoading] = useState(false);
+  const [wabaId, setWabaId] = useState(initialWabaId);
+  const [phoneNumberId, setPhoneNumberId] = useState(initialPhoneNumberId);
+  const [displayPhoneNumber, setDisplayPhoneNumber] = useState<string | null>(null);
+  const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
+
+  // Fetch meta identifiers when channelId is available and phone_number_id is missing
+  useEffect(() => {
+    if (channelId && initialWabaId && !initialPhoneNumberId) {
+      fetchMetaIdentifiers();
+    }
+  }, [channelId, initialWabaId, initialPhoneNumberId]);
+
+  const fetchMetaIdentifiers = async () => {
+    if (!channelId) return;
+
+    setIsLoading(true);
+    setUnavailableReason(null);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('fetch-meta-identifiers', {
+        body: { channel_id: channelId },
+      });
+
+      if (error) {
+        console.error('Error fetching meta identifiers:', error);
+        setUnavailableReason('Erro ao buscar identificadores');
+        return;
+      }
+
+      const result = data as MetaIdentifiersResult;
+
+      if (result.success) {
+        setWabaId(result.waba_id || wabaId);
+        setPhoneNumberId(result.phone_number_id);
+        setDisplayPhoneNumber(result.display_phone_number);
+
+        if (!result.phone_number_id && result.reason) {
+          setUnavailableReason(REASON_MESSAGES[result.reason] || result.reason);
+        }
+      } else {
+        setUnavailableReason(result.error || 'Erro desconhecido');
+      }
+    } catch (err) {
+      console.error('Error calling fetch-meta-identifiers:', err);
+      setUnavailableReason('Erro de conexão');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleCopy = (value: string, label: string) => {
     navigator.clipboard.writeText(value);
@@ -50,7 +130,7 @@ export function MetaAccountInfo({
               {channelName ? `Canal: ${channelName}` : 'IDs da conta WhatsApp Business'}
             </CardDescription>
           </div>
-          {hasAnyConfig && (
+          {hasAnyConfig && !isLoading && (
             <Badge variant="outline" className="bg-green-500/10 text-green-700 border-green-300">
               <CheckCircle className="h-3 w-3 mr-1" />
               Configurado
@@ -59,13 +139,17 @@ export function MetaAccountInfo({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {hasAnyConfig ? (
+        {hasAnyConfig || isLoading ? (
           <>
             {/* WABA ID */}
             <div className="flex items-center justify-between p-2 bg-background rounded-lg border">
               <div className="flex-1 min-w-0">
                 <p className="text-xs text-muted-foreground">WABA ID</p>
-                <p className="font-mono text-sm truncate">{wabaId || 'Não configurado'}</p>
+                {isLoading && !wabaId ? (
+                  <Skeleton className="h-5 w-32 mt-1" />
+                ) : (
+                  <p className="font-mono text-sm truncate">{wabaId || 'Não configurado'}</p>
+                )}
               </div>
               {wabaId && (
                 <Button
@@ -83,7 +167,27 @@ export function MetaAccountInfo({
             <div className="flex items-center justify-between p-2 bg-background rounded-lg border">
               <div className="flex-1 min-w-0">
                 <p className="text-xs text-muted-foreground">Phone Number ID (Cloud API)</p>
-                <p className="font-mono text-sm truncate">{phoneNumberId || 'Não configurado'}</p>
+                {isLoading ? (
+                  <Skeleton className="h-5 w-40 mt-1" />
+                ) : phoneNumberId ? (
+                  <p className="font-mono text-sm truncate">{phoneNumberId}</p>
+                ) : (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1.5 cursor-help">
+                          <span className="text-sm text-muted-foreground">Não disponível</span>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="max-w-[250px]">
+                        <p className="text-sm">
+                          {unavailableReason || 'Configure o Access Token da Meta para buscar automaticamente'}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
               </div>
               {phoneNumberId && (
                 <Button
@@ -96,6 +200,24 @@ export function MetaAccountInfo({
                 </Button>
               )}
             </div>
+
+            {/* Display Phone Number (if available) */}
+            {displayPhoneNumber && (
+              <div className="flex items-center justify-between p-2 bg-background rounded-lg border">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-muted-foreground">Número do WhatsApp</p>
+                  <p className="font-mono text-sm truncate">{displayPhoneNumber}</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => handleCopy(displayPhoneNumber, 'Número')}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
 
             {/* Business ID (optional) */}
             {businessId && (
@@ -115,18 +237,28 @@ export function MetaAccountInfo({
               </div>
             )}
 
-            {/* Link to Meta Business */}
-            <div className="pt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full text-blue-600 hover:text-blue-700"
-                onClick={() => window.open('https://business.facebook.com/wa/manage/message-templates/', '_blank')}
-              >
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Gerenciar Templates no Meta Business Suite
-              </Button>
-            </div>
+            {/* Refresh button if we have unavailable reason */}
+            {unavailableReason && channelId && (
+              <div className="pt-2 flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 text-muted-foreground shrink-0" />
+                <p className="text-xs text-muted-foreground flex-1">
+                  {unavailableReason}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={fetchMetaIdentifiers}
+                  disabled={isLoading}
+                  className="shrink-0"
+                >
+                  {isLoading ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    'Tentar novamente'
+                  )}
+                </Button>
+              </div>
+            )}
           </>
         ) : (
           <div className="text-center py-4">

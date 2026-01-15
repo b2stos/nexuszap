@@ -17,7 +17,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Download, Loader2, AlertCircle, CheckCircle, RefreshCw, Info, Copy, ExternalLink } from 'lucide-react';
+import { Download, Loader2, AlertCircle, CheckCircle, RefreshCw, Info, Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -496,16 +496,6 @@ export function ImportTemplatesDialog({
                         </div>
                       </div>
                     )}
-
-                    <Button
-                      variant="link"
-                      size="sm"
-                      className="h-auto p-0 text-xs text-blue-600"
-                      onClick={() => window.open('https://business.facebook.com/wa/manage/message-templates/', '_blank')}
-                    >
-                      <ExternalLink className="h-3 w-3 mr-1" />
-                      Gerenciar no Meta Business Suite
-                    </Button>
                   </div>
                 )}
 
@@ -599,17 +589,8 @@ export function ImportTemplatesDialog({
                   <Download className="h-8 w-8 mx-auto mb-2 opacity-50" />
                   <p className="text-sm font-medium">Nenhum template APPROVED encontrado</p>
                   <p className="text-xs mt-1 max-w-sm mx-auto">
-                    Certifique-se de que existem templates com status "APPROVED" na sua conta WhatsApp Business no Meta.
+                    Certifique-se de que existem templates com status "APPROVED" na sua conta WhatsApp Business no Meta Business Suite.
                   </p>
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="mt-2 text-blue-600"
-                    onClick={() => window.open('https://business.facebook.com/wa/manage/message-templates/', '_blank')}
-                  >
-                    <ExternalLink className="h-3 w-3 mr-1" />
-                    Verificar no Meta Business Suite
-                  </Button>
                 </div>
               )}
 
