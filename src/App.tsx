@@ -30,7 +30,7 @@ import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 import NotificameDiagnostics from "./pages/NotificameDiagnostics";
 
-// Error Boundary to prevent white screen on errors
+// Global Error Boundary to prevent white screen on errors
 class ErrorBoundary extends Component<
   { children: ReactNode },
   { hasError: boolean; error: Error | null }
@@ -45,22 +45,69 @@ class ErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("ErrorBoundary caught:", error, errorInfo);
+    // Log with context for debugging
+    console.error("[GlobalErrorBoundary] Critical error:", {
+      message: error.message,
+      stack: error.stack,
+      componentStack: errorInfo.componentStack,
+      route: typeof window !== 'undefined' ? window.location.pathname : 'unknown',
+      timestamp: new Date().toISOString(),
+    });
   }
+
+  handleReload = () => {
+    window.location.reload();
+  };
+
+  handleGoHome = () => {
+    window.location.href = '/';
+  };
+
+  handleGoToDashboard = () => {
+    window.location.href = '/dashboard';
+  };
 
   render() {
     if (this.state.hasError) {
+      const isDashboardRoute = typeof window !== 'undefined' && 
+        window.location.pathname.startsWith('/dashboard');
+      
       return (
         <div className="min-h-screen flex items-center justify-center bg-background p-4">
           <div className="text-center space-y-4 max-w-md">
+            <div className="mx-auto mb-4 p-3 rounded-full bg-destructive/10 w-fit">
+              <svg className="h-8 w-8 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
             <h2 className="text-xl font-bold text-destructive">Algo deu errado</h2>
-            <p className="text-muted-foreground">{this.state.error?.message || "Erro inesperado"}</p>
-            <button 
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-            >
-              Recarregar Página
-            </button>
+            <p className="text-muted-foreground text-sm">
+              {this.state.error?.message || "Ocorreu um erro inesperado na aplicação."}
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2 justify-center pt-2">
+              <button 
+                onClick={this.handleReload}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 text-sm font-medium"
+              >
+                Recarregar Página
+              </button>
+              <button 
+                onClick={isDashboardRoute ? this.handleGoToDashboard : this.handleGoHome}
+                className="px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/90 text-sm font-medium"
+              >
+                {isDashboardRoute ? 'Voltar ao Dashboard' : 'Ir para Início'}
+              </button>
+            </div>
+            {import.meta.env.DEV && this.state.error?.stack && (
+              <details className="mt-4 text-left">
+                <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                  Ver diagnóstico (dev)
+                </summary>
+                <pre className="mt-2 text-xs bg-muted p-3 rounded-lg overflow-auto max-h-[200px] whitespace-pre-wrap break-words">
+                  {this.state.error.stack}
+                </pre>
+              </details>
+            )}
           </div>
         </div>
       );
