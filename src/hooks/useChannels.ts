@@ -189,6 +189,8 @@ export function useCreateChannel() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['channels', variables.tenantId] });
+      // Invalidate onboarding status to recalculate in real-time
+      queryClient.invalidateQueries({ queryKey: ['onboarding-status'] });
       toast({
         title: 'Canal criado',
         description: 'O canal foi criado com sucesso.',
@@ -280,6 +282,8 @@ export function useDeleteChannel() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['channels'] });
+      // Invalidate onboarding status to recalculate in real-time
+      queryClient.invalidateQueries({ queryKey: ['onboarding-status'] });
       toast({
         title: 'Canal removido',
         description: 'O canal foi removido com sucesso.',

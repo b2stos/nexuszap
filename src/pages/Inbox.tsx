@@ -60,7 +60,7 @@ import {
   useTogglePinConversation,
 } from '@/hooks/useConversationActions';
 import { InboxConversation, ConversationFilter } from '@/types/inbox';
-import { useOnboarding } from '@/hooks/useOnboarding';
+// Onboarding auto-detects from real data, no import needed
 
 // ============================================
 // ERROR BOUNDARY - Previne blank screen no iPad
@@ -120,16 +120,10 @@ class InboxErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryStat
   }
 }
 
-// Track inbox_opened onboarding step
+// Onboarding is now calculated in real-time from actual data
+// inbox_opened step is detected from conversations table
 function useTrackInboxOpened() {
-  const { state, completeStep } = useOnboarding();
-  
-  useEffect(() => {
-    // Mark inbox_opened step when entering the inbox
-    if (state && !state.inbox_opened_at) {
-      completeStep('inbox_opened');
-    }
-  }, [state?.inbox_opened_at]);
+  // Legacy function - onboarding now auto-detects from real data
 }
 
 export default function Inbox() {

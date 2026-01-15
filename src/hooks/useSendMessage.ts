@@ -123,7 +123,9 @@ export function useSendMessage() {
         
         // Invalidate conversations to update last_message_preview
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] });
-      } else {
+        
+        // Invalidate onboarding status - first message sent
+        queryClient.invalidateQueries({ queryKey: ['onboarding-status'] });
         // Handle API-level errors
         const errorMessage = data.message || data.error || 'Falha ao enviar mensagem';
         const errorType = data.error;

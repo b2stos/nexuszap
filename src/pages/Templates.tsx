@@ -58,18 +58,13 @@ import {
   useTemplates,
   Template,
 } from '@/hooks/useTemplates';
-import { useOnboarding } from '@/hooks/useOnboarding';
+// Onboarding auto-detects from real data, no import needed
 import { useQuery } from '@tanstack/react-query';
 
-// Track onboarding when a template is synced
-function useTrackTemplateSync(templatesCount: number) {
-  const { state, completeStep } = useOnboarding();
-  
-  useEffect(() => {
-    if (templatesCount > 0 && state && !state.template_created_at) {
-      completeStep('template_created');
-    }
-  }, [templatesCount, state?.template_created_at]);
+// Onboarding is now calculated in real-time from actual data
+// template_created step is detected from mt_templates table
+function useTrackTemplateSync(_templatesCount: number) {
+  // Legacy function - onboarding now auto-detects from real data
 }
 
 // Hook to get channel with Meta config
