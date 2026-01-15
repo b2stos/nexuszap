@@ -507,35 +507,42 @@ Deno.serve(async (req: Request) => {
     let templates: NotificaMeTemplate[] = [];
     let fetchError: { code: string; message: string; details?: string } | undefined;
 
-    // Strategy 1: Try NotificaMe API first (most common for BSP users)
-    if (notificameToken) {
-      console.log(`[list-templates][${requestId}] Attempting NotificaMe API with token: ${maskToken(notificameToken)}`);
-      const subscriptionId = providerConfig?.subscription_id;
-      const notificameResult = await fetchTemplatesFromNotificaMe(notificameToken, subscriptionId);
-      
-      if (notificameResult.success && notificameResult.templates.length > 0) {
-        templates = notificameResult.templates;
-        metaInfo.source = 'notificame';
-      } else {
-        fetchError = notificameResult.error;
-        console.log(`[list-templates][${requestId}] NotificaMe result: ${JSON.stringify(notificameResult.error)}`);
-      }
-    }
+    // ESTRATÉGIA ATUALIZADA:
+    // 1. Se tiver credenciais Meta (wabaId + accessToken), buscar DIRETAMENTE na Meta
+    // 2. Se NÃO tiver Meta mas tiver NotificaMe, informar que precisa configurar Meta
+    // 3. NotificaMe NÃO suporta listagem de templates de forma confiável
 
-    // Strategy 2: If NotificaMe didn't return templates and we have Meta credentials, try Meta API
-    if (templates.length === 0 && wabaId && metaAccessToken) {
-      console.log(`[list-templates][${requestId}] Attempting Meta API for WABA: ${wabaId}`);
+    // Strategy 1: Meta API (PREFERRED - always use when available)
+    if (wabaId && metaAccessToken) {
+      console.log(`[list-templates][${requestId}] Using Meta API for WABA: ${wabaId}`);
       const metaResult = await fetchTemplatesFromMeta(wabaId, metaAccessToken);
       
       if (metaResult.success) {
         templates = metaResult.templates;
         metaInfo.source = 'meta';
-        fetchError = undefined; // Clear previous error since Meta succeeded
       } else {
-        // Only override error if we didn't have templates from NotificaMe
         fetchError = metaResult.error;
-        console.log(`[list-templates][${requestId}] Meta result: ${JSON.stringify(metaResult.error)}`);
+        console.log(`[list-templates][${requestId}] Meta API error: ${JSON.stringify(metaResult.error)}`);
       }
+    } else if (notificameToken && !metaAccessToken) {
+      // Has NotificaMe but no Meta token - inform user to configure Meta
+      console.log(`[list-templates][${requestId}] NotificaMe channel without Meta token`);
+      
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          success: false,
+          templates: [],
+          error: {
+            code: 'META_TOKEN_REQUIRED',
+            message: 'Configure o Access Token da Meta para listar templates',
+            details: 'Seu provedor (NotificaMe) não suporta listagem de templates. Para buscar templates aprovados diretamente da Meta, configure o WABA ID e Access Token nas configurações do canal.'
+          },
+          meta: metaInfo,
+          requires_meta_token: true,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     // Filter only approved templates
@@ -557,17 +564,12 @@ Deno.serve(async (req: Request) => {
     }));
 
     // Determine response based on results
-    // IMPORTANT: 
-    // - If we got templates: ok = true, no error
-    // - If no templates but no error (just empty list): ok = true, empty = true
-    // - If no templates and error: ok = false, error present
-    
     if (transformedTemplates.length > 0) {
       // Success with templates
       return new Response(
         JSON.stringify({
           ok: true,
-          success: true, // Keep for backwards compatibility
+          success: true,
           templates: transformedTemplates,
           meta: metaInfo,
         }),
@@ -591,13 +593,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // No error, just empty - could be:
-    // 1. Meta returned 0 approved templates (legitimate empty)
-    // 2. We have no way to fetch (NotificaMe without template endpoint and no Meta credentials)
-    
-    // Check if we actually successfully queried something
-    if (metaInfo.source !== 'none') {
-      // We queried successfully but got 0 templates
+    // No error, successfully queried Meta but found 0 approved templates
+    if (metaInfo.source === 'meta') {
       return new Response(
         JSON.stringify({
           ok: true,
@@ -611,16 +608,16 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // We have NotificaMe token but no template endpoint, and no Meta credentials
+    // No credentials configured at all
     return new Response(
       JSON.stringify({
         ok: false,
         success: false,
         templates: [],
         error: {
-          code: 'NO_TEMPLATE_SOURCE',
-          message: 'Não foi possível buscar templates',
-          details: 'O provedor NotificaMe não expõe endpoint de templates. Configure WABA ID e Access Token da Meta para buscar diretamente.'
+          code: 'NO_CREDENTIALS',
+          message: 'Credenciais não configuradas',
+          details: 'Configure WABA ID e Access Token da Meta nas configurações do canal.'
         },
         meta: metaInfo,
       }),

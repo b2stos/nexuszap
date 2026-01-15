@@ -17,8 +17,9 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Download, Loader2, AlertCircle, CheckCircle, RefreshCw, Info, Copy } from 'lucide-react';
+import { Download, Loader2, AlertCircle, CheckCircle, RefreshCw, Info, Copy, Settings, ExternalLink, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -42,8 +43,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { parseVariablesFromText } from '@/utils/templateParser';
 
-// State machine states
-type FetchState = 'idle' | 'loading' | 'success' | 'empty' | 'error';
+// State machine states - added 'needs_meta_token' for NotificaMe channels without Meta credentials
+type FetchState = 'idle' | 'loading' | 'success' | 'empty' | 'error' | 'needs_meta_token';
 
 interface VariableSchema {
   index: number;
@@ -108,6 +109,18 @@ interface ApiError {
   details?: string;
 }
 
+// Response flags
+interface ApiResponse {
+  ok: boolean;
+  success?: boolean;
+  templates?: ExternalTemplate[];
+  error?: ApiError;
+  meta?: DiagnosticsInfo;
+  requires_meta_token?: boolean;
+  empty?: boolean;
+  message?: string;
+}
+
 interface ImportTemplatesDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -135,6 +148,7 @@ export function ImportTemplatesDialog({
   const [errorInfo, setErrorInfo] = useState<ApiError | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsInfo | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showTokenHelp, setShowTokenHelp] = useState(false);
 
   const selectedChannel = channels.find(c => c.id === selectedChannelId);
   const hasWabaId = !!selectedChannel?.provider_config?.waba_id;
@@ -153,21 +167,30 @@ export function ImportTemplatesDialog({
       setErrorInfo(null);
       setDiagnostics(null);
       setShowDiagnostics(false);
+      setShowTokenHelp(false);
       setTemplates([]);
       setSelectedTemplates(new Set());
     }
   }, [open, tenantId]);
 
-  // Load templates when channel is selected
+  // Load templates when channel is selected (only if has Meta credentials)
   useEffect(() => {
-    if (selectedChannelId && canFetchTemplates) {
-      loadTemplates();
+    if (selectedChannelId && selectedChannel) {
+      const hasMetaCreds = selectedChannel.provider_config?.waba_id && selectedChannel.provider_config?.access_token;
+      if (hasMetaCreds) {
+        loadTemplates();
+      } else if (selectedChannel.provider_config?.api_key && !hasMetaCreds) {
+        // NotificaMe channel without Meta token - show needs_meta_token state
+        setFetchState('needs_meta_token');
+      } else {
+        setFetchState('idle');
+      }
     } else {
       setTemplates([]);
       setSelectedTemplates(new Set());
       setFetchState('idle');
     }
-  }, [selectedChannelId, canFetchTemplates]);
+  }, [selectedChannelId, selectedChannel?.provider_config?.access_token, selectedChannel?.provider_config?.waba_id]);
 
   const loadChannels = async () => {
     setIsLoadingChannels(true);
@@ -231,14 +254,20 @@ export function ImportTemplatesDialog({
         return;
       }
 
-      const result = response.data;
+      const result = response.data as ApiResponse;
 
       // Store diagnostics info
       if (result.meta) {
         setDiagnostics(result.meta);
       }
 
-      // Check for API errors in response body - use new "ok" field
+      // Check for META_TOKEN_REQUIRED special case
+      if (result.requires_meta_token || result.error?.code === 'META_TOKEN_REQUIRED') {
+        setFetchState('needs_meta_token');
+        return;
+      }
+
+      // Check for API errors in response body
       if (result.ok === false || result.success === false) {
         console.error('API error:', result);
         setFetchState('error');
@@ -251,7 +280,7 @@ export function ImportTemplatesDialog({
 
       // Success! Check if list is empty or has templates
       const templateList = result.templates || [];
-      setTemplates(templateList);
+      setTemplates(templateList as ExternalTemplate[]);
 
       if (templateList.length === 0) {
         setFetchState('empty');
@@ -529,35 +558,100 @@ export function ImportTemplatesDialog({
                   </div>
                 )}
 
-                {/* Configuration Warning */}
-                {selectedChannelId && !canFetchTemplates && (
-                  <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>
-                      <strong>Configuração necessária para importar templates:</strong>
-                      <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
-                        {!hasNotificameToken && (
-                          <li>Token do NotificaMe não configurado</li>
-                        )}
-                        {!hasWabaId && (
-                          <li>WABA ID (ID da conta WhatsApp Business)</li>
-                        )}
-                        {!hasMetaToken && (
-                          <li>Access Token da Meta (para buscar templates diretamente)</li>
-                        )}
-                      </ul>
-                      <p className="mt-2 text-sm">
-                        Acesse <strong>Canais → Editar</strong> para configurar estas credenciais.
-                      </p>
-                    </AlertDescription>
-                  </Alert>
+                {/* State: Needs Meta Token (NotificaMe without Meta credentials) */}
+                {fetchState === 'needs_meta_token' && (
+                  <div className="mt-3 space-y-3">
+                    <Alert className="bg-amber-500/10 border-amber-500/30">
+                      <Info className="h-4 w-4 text-amber-600" />
+                      <AlertDescription className="text-amber-800 dark:text-amber-200">
+                        <p className="font-medium mb-1">Configure o Access Token da Meta</p>
+                        <p className="text-sm">
+                          Seu provedor atual (NotificaMe) não suporta listagem de templates. 
+                          Para listar templates aprovados, configure o <strong>WABA ID</strong> e <strong>Access Token da Meta</strong>.
+                        </p>
+                        <div className="mt-3 flex gap-2">
+                          <Button 
+                            variant="default" 
+                            size="sm" 
+                            onClick={() => window.location.href = '/dashboard/channels'}
+                            className="gap-1"
+                          >
+                            <Settings className="h-3 w-3" />
+                            Configurar Canal
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => setShowTokenHelp(!showTokenHelp)}
+                            className="gap-1"
+                          >
+                            <HelpCircle className="h-3 w-3" />
+                            Como gerar o token
+                          </Button>
+                        </div>
+                      </AlertDescription>
+                    </Alert>
+
+                    {/* Token Help Collapsible */}
+                    <Collapsible open={showTokenHelp} onOpenChange={setShowTokenHelp}>
+                      <CollapsibleContent className="space-y-0">
+                        <div className="p-4 bg-muted/50 rounded-lg border">
+                          <h4 className="font-medium text-sm mb-3 flex items-center gap-2">
+                            <HelpCircle className="h-4 w-4 text-primary" />
+                            Como gerar o Access Token da Meta
+                          </h4>
+                          <ol className="space-y-2.5 text-sm">
+                            <li className="flex gap-2">
+                              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/20 text-primary text-xs flex items-center justify-center font-medium">1</span>
+                              <span>
+                                Abra <strong>Configurações do Negócio</strong> no{' '}
+                                <a 
+                                  href="https://business.facebook.com/settings/system-users" 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="text-primary underline inline-flex items-center gap-0.5"
+                                >
+                                  Meta Business Manager
+                                  <ExternalLink className="h-3 w-3" />
+                                </a>
+                              </span>
+                            </li>
+                            <li className="flex gap-2">
+                              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/20 text-primary text-xs flex items-center justify-center font-medium">2</span>
+                              <span>Vá em <strong>Usuários → Usuários do Sistema</strong> e clique em <strong>Adicionar</strong> (tipo: Admin)</span>
+                            </li>
+                            <li className="flex gap-2">
+                              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/20 text-primary text-xs flex items-center justify-center font-medium">3</span>
+                              <span>Em <strong>Ativos (Assets)</strong>, dê acesso ao seu <strong>WhatsApp Account (WABA)</strong></span>
+                            </li>
+                            <li className="flex gap-2">
+                              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/20 text-primary text-xs flex items-center justify-center font-medium">4</span>
+                              <span>Clique em <strong>Gerar Token</strong> para o App (Meta for Developers)</span>
+                            </li>
+                            <li className="flex gap-2">
+                              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/20 text-primary text-xs flex items-center justify-center font-medium">5</span>
+                              <span>Marque as permissões: <code className="bg-background px-1 rounded text-xs">whatsapp_business_management</code> e <code className="bg-background px-1 rounded text-xs">whatsapp_business_messaging</code></span>
+                            </li>
+                            <li className="flex gap-2">
+                              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/20 text-primary text-xs flex items-center justify-center font-medium">6</span>
+                              <span>Copie o token e cole no Nexus Zap em <strong>Canais → Editar → Access Token da Meta</strong></span>
+                            </li>
+                            <li className="flex gap-2">
+                              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/20 text-primary text-xs flex items-center justify-center font-medium">7</span>
+                              <span>Volte aqui e clique em <strong>Atualizar</strong> para listar os templates</span>
+                            </li>
+                          </ol>
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </div>
                 )}
               </>
             )}
           </div>
 
-          {/* Templates List - Render based on fetchState */}
-          {selectedChannelId && canFetchTemplates && (
+          {/* Templates List - Only show when we have Meta credentials configured */}
+          {selectedChannelId && fetchState !== 'needs_meta_token' && fetchState !== 'idle' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">
