@@ -38,3 +38,6 @@ verify_jwt = false
 
 [functions.list-notificame-templates]
 verify_jwt = false
+
+[functions.fetch-meta-identifiers]
+verify_jwt = false
