@@ -396,7 +396,7 @@ async function insertInboundMessageIdempotent(
 }
 
 /**
- * Atualiza status de mensagem outbound
+ * Atualiza status de mensagem outbound E campaign_recipients se aplicável
  */
 async function updateOutboundMessageStatus(
   supabase: ReturnType<typeof getSupabaseAdmin>,
@@ -416,42 +416,127 @@ async function updateOutboundMessageStatus(
     .maybeSingle();
   
   if (!message) {
-    if (ctx) log('warn', 'Orphan status update', ctx, { provider_message_id: event.provider_message_id });
-    return false;
+    if (ctx) log('warn', 'Orphan status update for mt_messages', ctx, { provider_message_id: event.provider_message_id });
   }
   
   // Verificar progressão de status (não regredir)
   const statusOrder = ['queued', 'sent', 'delivered', 'read', 'failed'];
-  const currentIdx = statusOrder.indexOf(message.status);
+  const currentIdx = message ? statusOrder.indexOf(message.status) : -1;
   const newIdx = statusOrder.indexOf(statusUpdate.status);
   
-  if (statusUpdate.status !== 'failed' && newIdx <= currentIdx) {
-    return true;
+  // 1. Atualizar mt_messages se existe e status progrediu
+  if (message && (statusUpdate.status === 'failed' || newIdx > currentIdx)) {
+    const updateData: Record<string, unknown> = {
+      status: statusUpdate.status,
+    };
+    
+    if (statusUpdate.sent_at) updateData.sent_at = statusUpdate.sent_at.toISOString();
+    if (statusUpdate.delivered_at) updateData.delivered_at = statusUpdate.delivered_at.toISOString();
+    if (statusUpdate.read_at) updateData.read_at = statusUpdate.read_at.toISOString();
+    if (statusUpdate.failed_at) updateData.failed_at = statusUpdate.failed_at.toISOString();
+    if (statusUpdate.error_code) updateData.error_code = statusUpdate.error_code;
+    if (statusUpdate.error_detail) updateData.error_detail = statusUpdate.error_detail;
+    
+    const { error } = await supabase
+      .from('mt_messages')
+      .update(updateData)
+      .eq('id', message.id);
+    
+    if (error) {
+      if (ctx) log('error', 'Failed to update mt_messages status', ctx, { error: error.message });
+    } else {
+      if (ctx) log('info', 'mt_messages status updated', ctx, { 
+        message_id: message.id, 
+        new_status: statusUpdate.status 
+      });
+    }
   }
   
-  // Montar update
-  const updateData: Record<string, unknown> = {
+  // 2. CRITICAL: Também atualizar campaign_recipients pelo provider_message_id
+  // Isso garante que campanhas mostrem "Entregue" / "Lido"
+  const campaignRecipientUpdate: Record<string, unknown> = {
     status: statusUpdate.status,
+    updated_at: new Date().toISOString(),
   };
   
-  if (statusUpdate.sent_at) updateData.sent_at = statusUpdate.sent_at.toISOString();
-  if (statusUpdate.delivered_at) updateData.delivered_at = statusUpdate.delivered_at.toISOString();
-  if (statusUpdate.read_at) updateData.read_at = statusUpdate.read_at.toISOString();
-  if (statusUpdate.failed_at) updateData.failed_at = statusUpdate.failed_at.toISOString();
-  if (statusUpdate.error_code) updateData.error_code = statusUpdate.error_code;
-  if (statusUpdate.error_detail) updateData.error_detail = statusUpdate.error_detail;
-  
-  const { error } = await supabase
-    .from('mt_messages')
-    .update(updateData)
-    .eq('id', message.id);
-  
-  if (error) {
-    if (ctx) log('error', 'Failed to update message status', ctx, { error: error.message });
-    return false;
+  if (statusUpdate.delivered_at) {
+    campaignRecipientUpdate.delivered_at = statusUpdate.delivered_at.toISOString();
+  }
+  if (statusUpdate.read_at) {
+    campaignRecipientUpdate.read_at = statusUpdate.read_at.toISOString();
+  }
+  if (statusUpdate.status === 'failed') {
+    campaignRecipientUpdate.last_error = statusUpdate.error_detail || statusUpdate.error_code || 'Unknown error';
   }
   
-  return true;
+  const { data: campaignRecipient, error: crError } = await supabase
+    .from('campaign_recipients')
+    .update(campaignRecipientUpdate)
+    .eq('provider_message_id', event.provider_message_id)
+    .select('id, campaign_id')
+    .maybeSingle();
+  
+  if (crError) {
+    if (ctx) log('warn', 'Failed to update campaign_recipients', ctx, { error: crError.message });
+  } else if (campaignRecipient) {
+    if (ctx) log('info', 'campaign_recipients status updated', ctx, { 
+      recipient_id: campaignRecipient.id,
+      campaign_id: campaignRecipient.campaign_id,
+      new_status: statusUpdate.status,
+    });
+    
+    // 3. Atualizar contadores da campanha
+    await updateCampaignCounters(supabase, campaignRecipient.campaign_id, ctx);
+  }
+  
+  return message !== null || campaignRecipient !== null;
+}
+
+/**
+ * Recalcula contadores da campanha
+ */
+async function updateCampaignCounters(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  campaignId: string,
+  ctx?: LogContext
+): Promise<void> {
+  try {
+    const { data: counts, error } = await supabase
+      .from('campaign_recipients')
+      .select('status')
+      .eq('campaign_id', campaignId);
+    
+    if (error || !counts) {
+      if (ctx) log('warn', 'Failed to fetch campaign counts', ctx, { error: error?.message });
+      return;
+    }
+    
+    const sentCount = counts.filter(r => r.status === 'sent').length;
+    const deliveredCount = counts.filter(r => r.status === 'delivered').length;
+    const readCount = counts.filter(r => r.status === 'read').length;
+    const failedCount = counts.filter(r => r.status === 'failed').length;
+    
+    await supabase
+      .from('mt_campaigns')
+      .update({
+        sent_count: sentCount,
+        delivered_count: deliveredCount,
+        read_count: readCount,
+        failed_count: failedCount,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', campaignId);
+    
+    if (ctx) log('info', 'Campaign counters updated', ctx, { 
+      campaign_id: campaignId,
+      sent: sentCount,
+      delivered: deliveredCount,
+      read: readCount,
+      failed: failedCount,
+    });
+  } catch (e) {
+    if (ctx) log('error', 'Exception updating campaign counters', ctx, { error: String(e) });
+  }
 }
 
 // ============================================
