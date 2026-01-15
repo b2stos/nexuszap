@@ -611,7 +611,7 @@ export type Database = {
           sent_count: number | null
           started_at: string | null
           status: Database["public"]["Enums"]["campaign_status_v2"]
-          template_id: string
+          template_id: string | null
           template_variables: Json | null
           tenant_id: string
           total_recipients: number | null
@@ -631,7 +631,7 @@ export type Database = {
           sent_count?: number | null
           started_at?: string | null
           status?: Database["public"]["Enums"]["campaign_status_v2"]
-          template_id: string
+          template_id?: string | null
           template_variables?: Json | null
           tenant_id: string
           total_recipients?: number | null
@@ -651,7 +651,7 @@ export type Database = {
           sent_count?: number | null
           started_at?: string | null
           status?: Database["public"]["Enums"]["campaign_status_v2"]
-          template_id?: string
+          template_id?: string | null
           template_variables?: Json | null
           tenant_id?: string
           total_recipients?: number | null
