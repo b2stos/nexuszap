@@ -1508,6 +1508,10 @@ export type Database = {
         Returns: string
       }
       get_user_tenant_ids: { Args: { _user_id: string }; Returns: string[] }
+      has_module_permission: {
+        Args: { _module: string; _tenant_id: string; _user_id: string }
+        Returns: boolean
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
