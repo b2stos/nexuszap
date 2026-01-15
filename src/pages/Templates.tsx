@@ -126,12 +126,6 @@ function TemplatesContent() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'approved' | 'pending' | 'rejected'>('approved');
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
   
-  // DEV ONLY: Test error boundary - remove after testing
-  const [triggerError, setTriggerError] = useState(false);
-  if (triggerError) {
-    throw new Error('Erro simulado para teste do Error Boundary');
-  }
-  
   // Get user
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
@@ -261,16 +255,6 @@ function TemplatesContent() {
               <CloudDownload className="h-4 w-4 mr-2" />
               Sincronizar da Meta
             </Button>
-            {/* DEV ONLY: Test button - remove after testing */}
-            {import.meta.env.DEV && (
-              <Button 
-                variant="destructive" 
-                onClick={() => setTriggerError(true)}
-                size="sm"
-              >
-                🧪 Simular Erro
-              </Button>
-            )}
           </div>
         </div>
 
