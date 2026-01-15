@@ -13,6 +13,30 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { 
   UserPlus, 
@@ -23,7 +47,11 @@ import {
   Headphones, 
   Eye,
   Loader2,
-  Edit2
+  MoreHorizontal,
+  UserCog,
+  UserX,
+  Power,
+  AlertTriangle
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useTenantRole } from '@/hooks/useTenantRole';
@@ -97,12 +125,25 @@ export function TeamSettings() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<TenantUserRole>('agent');
   const [isInviting, setIsInviting] = useState(false);
+  
+  // Edit role state
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
   const [newRole, setNewRole] = useState<TenantUserRole>('agent');
+  const [isSavingRole, setIsSavingRole] = useState(false);
+  
+  // Delete confirmation state
+  const [deletingMember, setDeletingMember] = useState<TeamMember | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  
+  // Toggle status state
+  const [togglingMember, setTogglingMember] = useState<string | null>(null);
 
-  const canManageTeam = isOwner || isAdmin || isSuperAdmin;
+  const canManageTeam = isOwner || isSuperAdmin;
+  const canViewActions = isOwner || isAdmin || isSuperAdmin;
+  
+  // Count owners to prevent removing last one
+  const ownerCount = members.filter(m => m.role === 'owner').length;
 
-  // Get current user id
   useEffect(() => {
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -136,7 +177,6 @@ export function TeamSettings() {
 
       if (error) throw error;
 
-      // Fetch profiles for each user
       const memberIds = data?.map(m => m.user_id) || [];
       const { data: profiles } = await supabase
         .from('profiles')
@@ -163,8 +203,6 @@ export function TeamSettings() {
     
     setIsInviting(true);
     try {
-      // In a real implementation, this would send an invite email
-      // For now, we'll just show a message
       toast.info('Funcionalidade de convite por email em desenvolvimento');
       setIsInviteOpen(false);
       setInviteEmail('');
@@ -177,8 +215,14 @@ export function TeamSettings() {
   };
 
   const handleOpenEditRole = (member: TeamMember) => {
+    // Check if trying to edit own owner role
     if (member.role === 'owner' && member.user_id === currentUserId) {
       toast.error('Você não pode alterar sua própria função de Proprietário');
+      return;
+    }
+    // Check if trying to change last owner
+    if (member.role === 'owner' && ownerCount <= 1) {
+      toast.error('Não é possível alterar a função do único Proprietário');
       return;
     }
     setEditingMember(member);
@@ -187,6 +231,14 @@ export function TeamSettings() {
 
   const handleSaveRole = async () => {
     if (!editingMember) return;
+
+    setIsSavingRole(true);
+    
+    // Optimistic update
+    const previousMembers = [...members];
+    setMembers(prev => prev.map(m => 
+      m.id === editingMember.id ? { ...m, role: newRole } : m
+    ));
 
     try {
       const { error } = await supabase
@@ -198,10 +250,104 @@ export function TeamSettings() {
 
       toast.success('Função atualizada com sucesso');
       setEditingMember(null);
-      fetchMembers();
     } catch (err) {
       console.error('Error updating role:', err);
+      setMembers(previousMembers); // Rollback
       toast.error('Erro ao atualizar função');
+    } finally {
+      setIsSavingRole(false);
+    }
+  };
+
+  const handleToggleStatus = async (member: TeamMember) => {
+    // Check permissions
+    if (!canManageTeam) {
+      toast.error('Sem permissão para alterar status');
+      return;
+    }
+    
+    // Prevent deactivating self if owner
+    if (member.user_id === currentUserId && member.role === 'owner') {
+      toast.error('Você não pode desativar a si mesmo como Proprietário');
+      return;
+    }
+    
+    // Prevent deactivating last owner
+    if (member.role === 'owner' && ownerCount <= 1 && member.is_active) {
+      toast.error('Não é possível desativar o único Proprietário');
+      return;
+    }
+
+    setTogglingMember(member.id);
+    const newStatus = !member.is_active;
+    
+    // Optimistic update
+    const previousMembers = [...members];
+    setMembers(prev => prev.map(m => 
+      m.id === member.id ? { ...m, is_active: newStatus } : m
+    ));
+
+    try {
+      const { error } = await supabase
+        .from('tenant_users')
+        .update({ is_active: newStatus })
+        .eq('id', member.id);
+
+      if (error) throw error;
+
+      toast.success(newStatus ? 'Membro ativado' : 'Membro desativado');
+    } catch (err) {
+      console.error('Error toggling status:', err);
+      setMembers(previousMembers); // Rollback
+      toast.error('Erro ao alterar status');
+    } finally {
+      setTogglingMember(null);
+    }
+  };
+
+  const handleOpenDelete = (member: TeamMember) => {
+    // Check permissions
+    if (!canManageTeam) {
+      toast.error('Sem permissão para excluir membros');
+      return;
+    }
+    
+    // Prevent deleting self if owner
+    if (member.user_id === currentUserId && member.role === 'owner') {
+      toast.error('Você não pode excluir a si mesmo como Proprietário');
+      return;
+    }
+    
+    // Prevent deleting last owner
+    if (member.role === 'owner' && ownerCount <= 1) {
+      toast.error('Não é possível excluir o único Proprietário');
+      return;
+    }
+
+    setDeletingMember(member);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingMember) return;
+
+    setIsDeleting(true);
+
+    try {
+      const { error } = await supabase
+        .from('tenant_users')
+        .delete()
+        .eq('id', deletingMember.id);
+
+      if (error) throw error;
+
+      setMembers(prev => prev.filter(m => m.id !== deletingMember.id));
+      toast.success('Membro removido');
+      setDeletingMember(null);
+    } catch (err) {
+      console.error('Error deleting member:', err);
+      toast.error('Erro ao remover membro');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -214,47 +360,99 @@ export function TeamSettings() {
       .toUpperCase() || member.profile?.email?.[0]?.toUpperCase() || '?';
   };
 
-  // Render member as card (for mobile)
+  const canEditMember = (member: TeamMember) => {
+    if (!canManageTeam) return false;
+    if (member.user_id === currentUserId && member.role === 'owner') return false;
+    if (member.role === 'owner' && ownerCount <= 1) return false;
+    return true;
+  };
+
+  // Actions menu component
+  const MemberActionsMenu = ({ member }: { member: TeamMember }) => {
+    const canEdit = canEditMember(member);
+    const isSelf = member.user_id === currentUserId;
+    const isLastOwner = member.role === 'owner' && ownerCount <= 1;
+
+    if (!canViewActions) return null;
+
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="h-8 w-8">
+            <MoreHorizontal className="h-4 w-4" />
+            <span className="sr-only">Ações</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem 
+            onClick={() => handleOpenEditRole(member)}
+            disabled={!canEdit}
+            className="gap-2"
+          >
+            <UserCog className="h-4 w-4" />
+            Alterar função
+          </DropdownMenuItem>
+          <DropdownMenuItem 
+            onClick={() => handleToggleStatus(member)}
+            disabled={!canEdit || togglingMember === member.id}
+            className="gap-2"
+          >
+            <Power className="h-4 w-4" />
+            {member.is_active ? 'Desativar' : 'Ativar'}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem 
+            onClick={() => handleOpenDelete(member)}
+            disabled={!canEdit}
+            className="gap-2 text-destructive focus:text-destructive"
+          >
+            <UserX className="h-4 w-4" />
+            Excluir membro
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  };
+
+  // Render member as card (for mobile/tablet)
   const renderMemberCard = (member: TeamMember) => {
     const role = roleConfig[member.role] || roleConfig.agent;
     const Icon = role.icon;
     const initials = getInitials(member);
+    const isSelf = member.user_id === currentUserId;
 
     return (
-      <div key={member.id} className="p-4 rounded-lg border bg-card space-y-3">
-        <div className="flex items-center gap-3">
-          <Avatar className="h-10 w-10">
-            <AvatarFallback className="text-sm">{initials}</AvatarFallback>
-          </Avatar>
-          <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm truncate">
-              {member.profile?.full_name || 'Sem nome'}
-            </p>
-            <p className="text-xs text-muted-foreground truncate">
-              {member.profile?.email}
-            </p>
+      <div key={member.id} className="p-4 rounded-lg border bg-card">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <Avatar className="h-10 w-10 shrink-0">
+              <AvatarFallback className="text-sm">{initials}</AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <p className="font-medium text-sm truncate">
+                {member.profile?.full_name || 'Sem nome'}
+                {isSelf && <span className="text-muted-foreground ml-1">(você)</span>}
+              </p>
+              <p className="text-xs text-muted-foreground truncate">
+                {member.profile?.email}
+              </p>
+            </div>
           </div>
-          <Badge variant={member.is_active ? 'default' : 'secondary'} className="shrink-0">
-            {member.is_active ? 'Ativo' : 'Inativo'}
-          </Badge>
+          <MemberActionsMenu member={member} />
         </div>
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-2 mt-3 pt-3 border-t">
           <div className="flex items-center gap-2">
             <div className={`p-1.5 rounded ${role.color}`}>
               <Icon className="h-3.5 w-3.5 text-white" />
             </div>
             <span className="text-sm font-medium">{role.label}</span>
           </div>
-          {canManageTeam && member.role !== 'owner' && (
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={() => handleOpenEditRole(member)}
-            >
-              <Edit2 className="h-3.5 w-3.5 mr-1.5" />
-              Alterar
-            </Button>
-          )}
+          <Badge 
+            variant={member.is_active ? 'default' : 'secondary'}
+            className={member.is_active ? 'bg-green-500/10 text-green-600 hover:bg-green-500/20' : ''}
+          >
+            {member.is_active ? 'Ativo' : 'Inativo'}
+          </Badge>
         </div>
       </div>
     );
@@ -265,57 +463,51 @@ export function TeamSettings() {
     const role = roleConfig[member.role] || roleConfig.agent;
     const Icon = role.icon;
     const initials = getInitials(member);
+    const isSelf = member.user_id === currentUserId;
 
     return (
-      <tr key={member.id} className="border-b last:border-0">
-        <td className="py-3 pr-2">
-          <div className="flex items-center gap-3 min-w-0">
-            <Avatar className="h-8 w-8 shrink-0">
+      <tr key={member.id} className="border-b last:border-0 hover:bg-muted/50">
+        <td className="py-3 pr-4">
+          <div className="flex items-center gap-3">
+            <Avatar className="h-9 w-9 shrink-0">
               <AvatarFallback className="text-xs">{initials}</AvatarFallback>
             </Avatar>
             <div className="min-w-0">
-              <p className="font-medium text-sm truncate max-w-[180px]">
+              <p className="font-medium text-sm truncate">
                 {member.profile?.full_name || 'Sem nome'}
+                {isSelf && <span className="text-muted-foreground ml-1">(você)</span>}
               </p>
-              <p className="text-xs text-muted-foreground truncate max-w-[180px]">
+              <p className="text-xs text-muted-foreground truncate">
                 {member.profile?.email}
               </p>
             </div>
           </div>
         </td>
-        <td className="py-3 px-2">
+        <td className="py-3 px-4">
           <div className="flex items-center gap-2">
-            <div className={`p-1 rounded ${role.color}`}>
-              <Icon className="h-3 w-3 text-white" />
+            <div className={`p-1.5 rounded ${role.color}`}>
+              <Icon className="h-3.5 w-3.5 text-white" />
             </div>
             <span className="text-sm whitespace-nowrap">{role.label}</span>
           </div>
         </td>
-        <td className="py-3 px-2">
-          <Badge variant={member.is_active ? 'default' : 'secondary'}>
+        <td className="py-3 px-4">
+          <Badge 
+            variant={member.is_active ? 'default' : 'secondary'}
+            className={member.is_active ? 'bg-green-500/10 text-green-600 hover:bg-green-500/20' : ''}
+          >
             {member.is_active ? 'Ativo' : 'Inativo'}
           </Badge>
         </td>
-        {canManageTeam && (
-          <td className="py-3 pl-2">
-            {member.role !== 'owner' && (
-              <Button 
-                variant="ghost" 
-                size="sm"
-                onClick={() => handleOpenEditRole(member)}
-              >
-                <Edit2 className="h-3.5 w-3.5 mr-1" />
-                Editar
-              </Button>
-            )}
-          </td>
-        )}
+        <td className="py-3 pl-4 text-right">
+          <MemberActionsMenu member={member} />
+        </td>
       </tr>
     );
   };
 
   return (
-    <div className="space-y-6 max-w-full overflow-hidden">
+    <div className="space-y-6 w-full">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold">Equipe e Permissões</h3>
@@ -351,20 +543,20 @@ export function TeamSettings() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="role">Função</Label>
-                  <select
-                    id="role"
-                    value={inviteRole}
-                    onChange={(e) => setInviteRole(e.target.value as TenantUserRole)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  >
-                    {Object.entries(roleConfig)
-                      .filter(([key]) => key !== 'owner')
-                      .map(([key, config]) => (
-                        <option key={key} value={key}>
-                          {config.label}
-                        </option>
-                      ))}
-                  </select>
+                  <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as TenantUserRole)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(roleConfig)
+                        .filter(([key]) => key !== 'owner')
+                        .map(([key, config]) => (
+                          <SelectItem key={key} value={key}>
+                            {config.label}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <DialogFooter className="flex-col sm:flex-row gap-2">
@@ -381,9 +573,9 @@ export function TeamSettings() {
         )}
       </div>
 
-      {/* Roles Overview */}
+      {/* Roles Overview - Collapsible on mobile */}
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-3">
           <CardTitle className="text-base">Funções Disponíveis</CardTitle>
           <CardDescription>
             Cada função tem permissões específicas para diferentes módulos
@@ -417,13 +609,13 @@ export function TeamSettings() {
 
       {/* Team Members */}
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-3">
           <CardTitle className="text-base">Membros da Equipe</CardTitle>
           <CardDescription>
             {members.length} {members.length === 1 ? 'membro' : 'membros'} no workspace
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-4 sm:px-6">
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -434,26 +626,28 @@ export function TeamSettings() {
             </div>
           ) : (
             <>
-              {/* Mobile: Cards layout */}
+              {/* Mobile/Tablet: Cards layout */}
               <div className="lg:hidden space-y-3">
                 {members.map(renderMemberCard)}
               </div>
 
               {/* Desktop: Table layout */}
-              <div className="hidden lg:block overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="pb-3 text-sm font-medium text-muted-foreground">Usuário</th>
-                      <th className="pb-3 px-2 text-sm font-medium text-muted-foreground">Função</th>
-                      <th className="pb-3 px-2 text-sm font-medium text-muted-foreground">Status</th>
-                      {canManageTeam && <th className="pb-3 pl-2 text-sm font-medium text-muted-foreground w-[100px]">Ações</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {members.map(renderMemberRow)}
-                  </tbody>
-                </table>
+              <div className="hidden lg:block -mx-2">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[500px]">
+                    <thead>
+                      <tr className="border-b text-left">
+                        <th className="pb-3 pr-4 text-sm font-medium text-muted-foreground">Usuário</th>
+                        <th className="pb-3 px-4 text-sm font-medium text-muted-foreground">Função</th>
+                        <th className="pb-3 px-4 text-sm font-medium text-muted-foreground">Status</th>
+                        <th className="pb-3 pl-4 text-sm font-medium text-muted-foreground text-right w-16">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {members.map(renderMemberRow)}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </>
           )}
@@ -469,23 +663,33 @@ export function TeamSettings() {
               Altere a função de {editingMember?.profile?.full_name || editingMember?.profile?.email}
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <Label htmlFor="newRole">Nova Função</Label>
-            <select
-              id="newRole"
-              value={newRole}
-              onChange={(e) => setNewRole(e.target.value as TenantUserRole)}
-              className="mt-2 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            >
-              {Object.entries(roleConfig)
-                .filter(([key]) => key !== 'owner')
-                .map(([key, config]) => (
-                  <option key={key} value={key}>
-                    {config.label}
-                  </option>
-                ))}
-            </select>
-            <div className="mt-3 p-3 rounded-lg bg-muted">
+          <div className="py-4 space-y-4">
+            <div className="space-y-2">
+              <Label>Nova Função</Label>
+              <Select value={newRole} onValueChange={(v) => setNewRole(v as TenantUserRole)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(roleConfig)
+                    .filter(([key]) => key !== 'owner')
+                    .map(([key, config]) => {
+                      const Icon = config.icon;
+                      return (
+                        <SelectItem key={key} value={key}>
+                          <div className="flex items-center gap-2">
+                            <div className={`p-1 rounded ${config.color}`}>
+                              <Icon className="h-3 w-3 text-white" />
+                            </div>
+                            {config.label}
+                          </div>
+                        </SelectItem>
+                      );
+                    })}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="p-3 rounded-lg bg-muted">
               <p className="text-xs text-muted-foreground mb-2">Permissões da função:</p>
               <div className="flex flex-wrap gap-1">
                 {roleConfig[newRole]?.permissions.map((perm) => (
@@ -500,12 +704,41 @@ export function TeamSettings() {
             <Button variant="outline" onClick={() => setEditingMember(null)} className="w-full sm:w-auto">
               Cancelar
             </Button>
-            <Button onClick={handleSaveRole} className="w-full sm:w-auto">
+            <Button onClick={handleSaveRole} disabled={isSavingRole} className="w-full sm:w-auto">
+              {isSavingRole && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Salvar
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Modal */}
+      <AlertDialog open={!!deletingMember} onOpenChange={(open) => !open && setDeletingMember(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Excluir membro?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Essa ação remove o acesso de{' '}
+              <strong>{deletingMember?.profile?.full_name || deletingMember?.profile?.email}</strong>{' '}
+              a este workspace. Essa ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <AlertDialogCancel className="w-full sm:w-auto">Cancelar</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleConfirmDelete}
+              disabled={isDeleting}
+              className="w-full sm:w-auto bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
