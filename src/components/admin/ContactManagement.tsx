@@ -59,7 +59,7 @@ export function ContactManagement({ onContactDeleted }: ContactManagementProps) 
   const [contactTotal, setContactTotal] = useState(0);
   const [deletingContact, setDeletingContact] = useState<string | null>(null);
 
-  // Fetch owners with contact counts
+  // Fetch owners with contact counts using exact COUNT(*) queries
   const fetchOwners = useCallback(async () => {
     setOwnersLoading(true);
     
@@ -83,27 +83,41 @@ export function ContactManagement({ onContactDeleted }: ContactManagementProps) 
         return;
       }
 
-      // Get contact counts for all users
-      const { data: contactCounts, error: countsError } = await supabase
-        .from("contacts")
-        .select("user_id")
-        .in("user_id", profiles?.map(p => p.id) || []);
-
-      if (countsError) {
-        console.error("Error fetching contact counts:", countsError);
+      if (!profiles || profiles.length === 0) {
+        setOwners([]);
+        setOwnerTotal(profilesCount || 0);
+        setOwnersLoading(false);
+        return;
       }
 
-      // Count contacts per user
+      // Get EXACT contact counts for each user using COUNT(*) - bypasses 1000 row limit
+      const countPromises = profiles.map(async (profile) => {
+        const { count, error } = await supabase
+          .from("contacts")
+          .select("*", { count: 'exact', head: true })
+          .eq("user_id", profile.id);
+        
+        if (error) {
+          console.error(`Error counting contacts for ${profile.id}:`, error);
+          return { userId: profile.id, count: 0 };
+        }
+        
+        return { userId: profile.id, count: count || 0 };
+      });
+
+      const countResults = await Promise.all(countPromises);
+      
+      // Build count map from exact counts
       const countMap: Record<string, number> = {};
-      contactCounts?.forEach(c => {
-        countMap[c.user_id] = (countMap[c.user_id] || 0) + 1;
+      countResults.forEach(result => {
+        countMap[result.userId] = result.count;
       });
 
       // Get roles
       const { data: roles } = await supabase
         .from("user_roles")
         .select("user_id, role")
-        .in("user_id", profiles?.map(p => p.id) || []);
+        .in("user_id", profiles.map(p => p.id));
 
       const roleMap: Record<string, "admin" | "user"> = {};
       roles?.forEach(r => {
@@ -111,13 +125,13 @@ export function ContactManagement({ onContactDeleted }: ContactManagementProps) 
       });
 
       // Combine data
-      const ownersWithCounts: OwnerWithCount[] = profiles?.map(profile => ({
+      const ownersWithCounts: OwnerWithCount[] = profiles.map(profile => ({
         id: profile.id,
         email: profile.email,
         full_name: profile.full_name,
         role: roleMap[profile.id] || "user",
         contacts_count: countMap[profile.id] || 0,
-      })) || [];
+      }));
 
       // Sort by contacts count (descending)
       ownersWithCounts.sort((a, b) => b.contacts_count - a.contacts_count);
