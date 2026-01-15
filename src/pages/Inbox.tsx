@@ -191,17 +191,30 @@ export default function Inbox() {
     }, [])
   );
   
-  // Auto-select first conversation (only once per tenant)
+  // Sync activeConversation with conversations list
+  // If selected conversation was deleted/filtered, clear it
+  useEffect(() => {
+    if (activeConversation) {
+      const stillExists = conversations.some(c => c.id === activeConversation.id);
+      if (!stillExists && !conversationsLoading) {
+        console.log('[Inbox] Active conversation no longer exists, clearing selection');
+        setActiveConversation(null);
+        setShowMobileChat(false);
+      }
+    }
+  }, [conversations, activeConversation, conversationsLoading]);
+  
+  // Auto-select first conversation (only once per tenant, and only if none selected)
   useEffect(() => {
     didAutoSelectRef.current = false;
   }, [tenantId]);
 
   useEffect(() => {
-    if (conversations.length > 0 && !activeConversation && !didAutoSelectRef.current) {
+    if (conversations.length > 0 && !activeConversation && !didAutoSelectRef.current && !conversationsLoading) {
       setActiveConversation(conversations[0]);
       didAutoSelectRef.current = true;
     }
-  }, [conversations, activeConversation, tenantId]);
+  }, [conversations, activeConversation, tenantId, conversationsLoading]);
   
   // Mark as read when conversation is selected
   useEffect(() => {
@@ -346,29 +359,36 @@ export default function Inbox() {
       {/* Use dvh for iOS Safari compatibility, with vh fallback */}
       <div className="inbox-container flex flex-col overflow-hidden bg-muted/30">
         <div className="flex-1 flex overflow-hidden min-h-0">
-          {/* Left Column - Conversation List (hidden on mobile when chat is open) */}
-          <div className={`
-            w-full md:w-80 lg:w-96 flex-shrink-0 border-r border-border
-            ${showMobileChat ? 'hidden md:block' : 'block'}
-          `}>
-            <ConversationList
-              conversations={conversations}
-              isLoading={conversationsLoading}
-              activeId={activeConversation?.id}
-              filter={filter}
-              onFilterChange={setFilter}
-              onSelect={handleSelectConversation}
-              onDeleteConversation={(conversationId) => {
-                openDeleteDialog(conversationId);
-              }}
-            />
+          {/* Left Column - Conversation List (always visible on desktop, hidden on mobile when chat is open) */}
+          <div 
+            className={`
+              w-full md:w-80 lg:w-96 flex-shrink-0 border-r border-border bg-card
+              ${showMobileChat ? 'hidden md:block' : 'block'}
+            `}
+            style={{ minWidth: 'auto' }}
+          >
+            <div className="h-full flex flex-col md:min-w-[320px]">
+              <ConversationList
+                conversations={conversations}
+                isLoading={conversationsLoading}
+                activeId={activeConversation?.id}
+                filter={filter}
+                onFilterChange={setFilter}
+                onSelect={handleSelectConversation}
+                onDeleteConversation={(conversationId) => {
+                  openDeleteDialog(conversationId);
+                }}
+              />
+            </div>
           </div>
           
           {/* Center Column - Chat */}
-          <div className={`
-            flex-1 min-w-0 min-h-0 flex flex-col
-            ${!showMobileChat ? 'hidden md:flex' : 'flex'}
-          `}>
+          <div 
+            className={`
+              flex-1 min-w-0 min-h-0 flex flex-col bg-background
+              ${!showMobileChat ? 'hidden md:flex' : 'flex'}
+            `}
+          >
             {/* Mobile header with back button and actions menu */}
             <div className="md:hidden flex items-center justify-between p-2 border-b border-border bg-card">
               <div className="flex items-center gap-2 min-w-0">
