@@ -7,10 +7,17 @@
  * - Templates pertencem à Meta, NÃO ao NotificaMe
  * - O canal precisa ter WABA_ID configurado
  * - Apenas templates com status APPROVED são listados
+ * 
+ * STATE MACHINE:
+ * - idle: estado inicial antes de selecionar canal
+ * - loading: buscando templates
+ * - success: fetch OK e lista > 0
+ * - empty: fetch OK e lista === 0
+ * - error: fetch falhou (401/403/404/5xx)
  */
 
-import { useState, useEffect } from 'react';
-import { Download, Loader2, AlertCircle, CheckCircle, RefreshCw, Info } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Download, Loader2, AlertCircle, CheckCircle, RefreshCw, Info, Copy, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -35,7 +42,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { parseVariablesFromText } from '@/utils/templateParser';
 
-type TemplateSource = 'notificame' | 'meta' | 'none';
+// State machine states
+type FetchState = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
 interface VariableSchema {
   index: number;
@@ -76,6 +84,7 @@ interface Channel {
     waba_id?: string;
     access_token?: string;
     api_key?: string;
+    phone_number_id?: string;
   } | null;
 }
 
@@ -99,9 +108,11 @@ export function ImportTemplatesDialog({
   const [templates, setTemplates] = useState<ExternalTemplate[]>([]);
   const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set());
   const [isLoadingChannels, setIsLoadingChannels] = useState(false);
-  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  
+  // State machine for fetch state
+  const [fetchState, setFetchState] = useState<FetchState>('idle');
+  const [errorMessage, setErrorMessage] = useState<string>('');
 
   const selectedChannel = channels.find(c => c.id === selectedChannelId);
   const hasWabaId = !!selectedChannel?.provider_config?.waba_id;
@@ -114,6 +125,13 @@ export function ImportTemplatesDialog({
     if (open && tenantId) {
       loadChannels();
     }
+    // Reset state when dialog closes
+    if (!open) {
+      setFetchState('idle');
+      setErrorMessage('');
+      setTemplates([]);
+      setSelectedTemplates(new Set());
+    }
   }, [open, tenantId]);
 
   // Load templates when channel is selected
@@ -123,12 +141,13 @@ export function ImportTemplatesDialog({
     } else {
       setTemplates([]);
       setSelectedTemplates(new Set());
+      setFetchState('idle');
     }
   }, [selectedChannelId, canFetchTemplates]);
 
   const loadChannels = async () => {
     setIsLoadingChannels(true);
-    setError(null);
+    setErrorMessage('');
 
     try {
       const { data, error: queryError } = await supabase
@@ -143,58 +162,103 @@ export function ImportTemplatesDialog({
       
       // Auto-select first channel with WABA_ID if only one
       const channelsWithWaba = (data || []).filter(
-        (c: Channel) => c.provider_config?.waba_id
+        (c: Channel) => c.provider_config?.waba_id || c.provider_config?.api_key
       );
       if (channelsWithWaba.length === 1) {
         setSelectedChannelId(channelsWithWaba[0].id);
       }
     } catch (err) {
       console.error('Error loading channels:', err);
-      setError('Erro ao carregar canais');
+      setErrorMessage('Erro ao carregar canais');
     } finally {
       setIsLoadingChannels(false);
     }
   };
 
-  const loadTemplates = async () => {
+  const loadTemplates = useCallback(async () => {
     if (!selectedChannelId) return;
 
-    setIsLoadingTemplates(true);
-    setError(null);
+    // Reset state machine to loading
+    setFetchState('loading');
+    setErrorMessage('');
     setTemplates([]);
     setSelectedTemplates(new Set());
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        throw new Error('Não autenticado');
+        setFetchState('error');
+        setErrorMessage('Sessão expirada. Faça login novamente.');
+        return;
       }
 
       const response = await supabase.functions.invoke('list-notificame-templates', {
         body: { channel_id: selectedChannelId },
       });
 
+      // Check for edge function errors
       if (response.error) {
-        throw new Error(response.error.message || 'Erro ao buscar templates');
+        console.error('Edge function error:', response.error);
+        setFetchState('error');
+        setErrorMessage(getErrorMessage(response.error.message || 'Erro ao buscar templates'));
+        return;
       }
 
       const result = response.data;
 
+      // Check for API errors in response body
       if (!result.success) {
-        throw new Error(result.error || 'Erro ao buscar templates');
+        console.error('API error:', result);
+        setFetchState('error');
+        setErrorMessage(getErrorMessage(result.error || 'Erro ao buscar templates'));
+        return;
       }
 
-      setTemplates(result.templates || []);
+      // Success! Check if list is empty or has templates
+      const templateList = result.templates || [];
+      setTemplates(templateList);
 
-      if (result.templates?.length === 0) {
-        setError('Nenhum template aprovado encontrado na conta WhatsApp Business. Certifique-se de ter templates com status "APPROVED" na Meta.');
+      if (templateList.length === 0) {
+        setFetchState('empty');
+      } else {
+        setFetchState('success');
       }
     } catch (err) {
       console.error('Error loading templates:', err);
-      setError(err instanceof Error ? err.message : 'Erro ao buscar templates');
-    } finally {
-      setIsLoadingTemplates(false);
+      setFetchState('error');
+      setErrorMessage(getErrorMessage(err instanceof Error ? err.message : 'Erro desconhecido'));
     }
+  }, [selectedChannelId]);
+
+  // Map error messages to user-friendly text
+  const getErrorMessage = (error: string): string => {
+    const errorLower = error.toLowerCase();
+    
+    if (errorLower.includes('401') || errorLower.includes('unauthorized') || errorLower.includes('token inválido')) {
+      return 'Token inválido ou expirado. Verifique as credenciais do canal.';
+    }
+    if (errorLower.includes('403') || errorLower.includes('forbidden')) {
+      return 'Acesso negado. Verifique as permissões do token.';
+    }
+    if (errorLower.includes('404')) {
+      return 'Recurso não encontrado. Verifique o WABA ID configurado.';
+    }
+    if (errorLower.includes('429') || errorLower.includes('rate limit')) {
+      return 'Limite de requisições atingido. Aguarde alguns minutos.';
+    }
+    if (errorLower.includes('500') || errorLower.includes('502') || errorLower.includes('503')) {
+      return 'Erro no servidor da API. Tente novamente em alguns minutos.';
+    }
+    if (errorLower.includes('network') || errorLower.includes('fetch')) {
+      return 'Erro de conexão. Verifique sua internet.';
+    }
+    
+    return error || 'Não foi possível buscar templates. Verifique conexão do canal e credenciais.';
+  };
+
+  const handleCopy = (value: string, label: string) => {
+    navigator.clipboard.writeText(value);
+    toast.success(`${label} copiado!`);
   };
 
   const toggleTemplate = (name: string) => {
@@ -219,7 +283,6 @@ export function ImportTemplatesDialog({
     if (selectedTemplates.size === 0) return;
 
     setIsImporting(true);
-    setError(null);
 
     try {
       const templatesToImport = templates.filter(t => selectedTemplates.has(t.name));
@@ -282,7 +345,7 @@ export function ImportTemplatesDialog({
             components: JSON.parse(JSON.stringify(template.components || [])),
             variables_schema: variablesSchema ? JSON.parse(JSON.stringify(variablesSchema)) : null,
             provider_template_id: template.external_id,
-            source: 'meta', // Mark as Meta template
+            source: 'meta',
             last_synced_at: new Date().toISOString(),
           });
 
@@ -304,7 +367,7 @@ export function ImportTemplatesDialog({
       onOpenChange(false);
     } catch (err) {
       console.error('Error importing templates:', err);
-      setError(err instanceof Error ? err.message : 'Erro ao importar templates');
+      toast.error(err instanceof Error ? err.message : 'Erro ao importar templates');
     } finally {
       setIsImporting(false);
     }
@@ -389,6 +452,63 @@ export function ImportTemplatesDialog({
                   </SelectContent>
                 </Select>
 
+                {/* Meta Account Info */}
+                {selectedChannel && (
+                  <div className="mt-3 p-3 bg-muted/50 rounded-lg space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">IDs da Conta Meta</p>
+                    
+                    {selectedChannel.provider_config?.waba_id ? (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs">WABA ID:</span>
+                        <div className="flex items-center gap-1">
+                          <code className="text-xs font-mono bg-background px-1.5 py-0.5 rounded">
+                            {selectedChannel.provider_config.waba_id}
+                          </code>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => handleCopy(selectedChannel.provider_config!.waba_id!, 'WABA ID')}
+                          >
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-yellow-600">WABA ID não configurado</p>
+                    )}
+
+                    {selectedChannel.provider_config?.phone_number_id && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs">Phone Number ID:</span>
+                        <div className="flex items-center gap-1">
+                          <code className="text-xs font-mono bg-background px-1.5 py-0.5 rounded">
+                            {selectedChannel.provider_config.phone_number_id}
+                          </code>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => handleCopy(selectedChannel.provider_config!.phone_number_id!, 'Phone Number ID')}
+                          >
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 text-xs text-blue-600"
+                      onClick={() => window.open('https://business.facebook.com/wa/manage/message-templates/', '_blank')}
+                    >
+                      <ExternalLink className="h-3 w-3 mr-1" />
+                      Gerenciar no Meta Business Suite
+                    </Button>
+                  </div>
+                )}
+
                 {/* Configuration Warning */}
                 {selectedChannelId && !canFetchTemplates && (
                   <Alert variant="destructive">
@@ -416,28 +536,20 @@ export function ImportTemplatesDialog({
             )}
           </div>
 
-          {/* Error */}
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-
-          {/* Templates List */}
+          {/* Templates List - Render based on fetchState */}
           {selectedChannelId && canFetchTemplates && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">
                   Templates Aprovados
-                  {templates.length > 0 && (
+                  {fetchState === 'success' && templates.length > 0 && (
                     <span className="ml-2 text-muted-foreground">
                       ({selectedTemplates.size}/{templates.length} selecionados)
                     </span>
                   )}
                 </label>
                 <div className="flex gap-2">
-                  {templates.length > 0 && (
+                  {fetchState === 'success' && templates.length > 0 && (
                     <Button variant="ghost" size="sm" onClick={selectAll}>
                       {selectedTemplates.size === templates.length ? 'Desmarcar todos' : 'Selecionar todos'}
                     </Button>
@@ -446,32 +558,63 @@ export function ImportTemplatesDialog({
                     variant="outline" 
                     size="sm" 
                     onClick={loadTemplates}
-                    disabled={isLoadingTemplates}
+                    disabled={fetchState === 'loading'}
                   >
-                    <RefreshCw className={`h-3 w-3 mr-1 ${isLoadingTemplates ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`h-3 w-3 mr-1 ${fetchState === 'loading' ? 'animate-spin' : ''}`} />
                     Atualizar
                   </Button>
                 </div>
               </div>
 
-              {isLoadingTemplates ? (
+              {/* State: Loading */}
+              {fetchState === 'loading' && (
                 <div className="flex flex-col items-center justify-center py-8 gap-2">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                   <span className="text-sm text-muted-foreground">
                     Buscando templates na API da Meta...
                   </span>
                 </div>
-              ) : templates.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
+              )}
+
+              {/* State: Error - ONLY show error, never empty state */}
+              {fetchState === 'error' && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription className="space-y-2">
+                    <p className="font-medium">Erro ao buscar templates</p>
+                    <p className="text-sm">{errorMessage}</p>
+                    <div className="pt-2">
+                      <Button variant="outline" size="sm" onClick={loadTemplates}>
+                        <RefreshCw className="h-3 w-3 mr-1" />
+                        Tentar novamente
+                      </Button>
+                    </div>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* State: Empty - ONLY show empty state, never error */}
+              {fetchState === 'empty' && (
+                <div className="text-center py-8 text-muted-foreground border rounded-lg bg-muted/30">
                   <Download className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">
-                    Nenhum template aprovado encontrado.
+                  <p className="text-sm font-medium">Nenhum template APPROVED encontrado</p>
+                  <p className="text-xs mt-1 max-w-sm mx-auto">
+                    Certifique-se de que existem templates com status "APPROVED" na sua conta WhatsApp Business no Meta.
                   </p>
-                  <p className="text-xs mt-1">
-                    Verifique se existem templates com status APPROVED na sua conta WhatsApp Business.
-                  </p>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="mt-2 text-blue-600"
+                    onClick={() => window.open('https://business.facebook.com/wa/manage/message-templates/', '_blank')}
+                  >
+                    <ExternalLink className="h-3 w-3 mr-1" />
+                    Verificar no Meta Business Suite
+                  </Button>
                 </div>
-              ) : (
+              )}
+
+              {/* State: Success - Show template list */}
+              {fetchState === 'success' && templates.length > 0 && (
                 <ScrollArea className="h-[300px] border rounded-lg p-2">
                   <div className="space-y-2">
                     {templates.map((template) => (
@@ -534,7 +677,7 @@ export function ImportTemplatesDialog({
           </Button>
           <Button
             onClick={handleImport}
-            disabled={selectedTemplates.size === 0 || isImporting || !hasWabaId}
+            disabled={selectedTemplates.size === 0 || isImporting || fetchState !== 'success'}
           >
             {isImporting ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
