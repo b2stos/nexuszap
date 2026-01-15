@@ -8,13 +8,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Users, Send, MessageSquare, UserCheck, Crown, Shield, Loader2, Trash2, Megaphone, Contact, ExternalLink } from "lucide-react";
+import { Users, Send, MessageSquare, UserCheck, Crown, Shield, Loader2, Trash2, Megaphone, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { isSuperAdminEmail } from "@/utils/superAdmin";
 import { DeleteUserDialog } from "@/components/admin/DeleteUserDialog";
 import { UserManagementDialog } from "@/components/admin/UserManagementDialog";
+import { ContactManagement } from "@/components/admin/ContactManagement";
 
 interface UserWithStats {
   id: string;
@@ -36,15 +37,6 @@ interface CampaignWithOwner {
   messages_count: number;
 }
 
-interface ContactWithOwner {
-  id: string;
-  name: string;
-  phone: string;
-  created_at: string;
-  user_id: string;
-  owner_email: string;
-}
-
 interface GlobalStats {
   total_users: number;
   total_campaigns: number;
@@ -58,7 +50,6 @@ export default function Admin() {
   const { toast } = useToast();
   const [users, setUsers] = useState<UserWithStats[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignWithOwner[]>([]);
-  const [contacts, setContacts] = useState<ContactWithOwner[]>([]);
   const [stats, setStats] = useState<GlobalStats>({ 
     total_users: 0, 
     total_campaigns: 0, 
@@ -68,7 +59,6 @@ export default function Admin() {
   const [loading, setLoading] = useState(true);
   const [updatingRole, setUpdatingRole] = useState<string | null>(null);
   const [deletingCampaign, setDeletingCampaign] = useState<string | null>(null);
-  const [deletingContact, setDeletingContact] = useState<string | null>(null);
   
   // User Management Dialog state
   const [userManagementOpen, setUserManagementOpen] = useState(false);
@@ -118,13 +108,11 @@ export default function Admin() {
       { data: profiles },
       { data: roles },
       { data: campaignsData },
-      { data: contactsData },
       { data: messages }
     ] = await Promise.all([
       supabase.from("profiles").select("id, email, full_name").limit(100),
       supabase.from("user_roles").select("user_id, role"),
       supabase.from("campaigns").select("id, name, status, created_at, user_id").order("created_at", { ascending: false }).limit(50),
-      supabase.from("contacts").select("id, name, phone, created_at, user_id").order("created_at", { ascending: false }).limit(50),
       supabase.from("messages").select("id, campaign_id").limit(1000),
     ]);
 
@@ -139,20 +127,10 @@ export default function Admin() {
       };
     }) || [];
 
-    // Build contacts with owner info
-    const contactsWithOwner: ContactWithOwner[] = contactsData?.map(contact => {
-      const owner = profiles?.find(p => p.id === contact.user_id);
-      return {
-        ...contact,
-        owner_email: owner?.email || "Desconhecido",
-      };
-    }) || [];
-
     // Build user stats (for display only, limited)
     const usersWithStats: UserWithStats[] = profiles?.map(profile => {
       const userRole = roles?.find(r => r.user_id === profile.id);
       const userCampaigns = campaignsData?.filter(c => c.user_id === profile.id) || [];
-      const userContacts = contactsData?.filter(c => c.user_id === profile.id) || [];
       
       return {
         id: profile.id,
@@ -160,14 +138,13 @@ export default function Admin() {
         full_name: profile.full_name,
         role: (userRole?.role as "admin" | "user") || "user",
         campaigns_count: userCampaigns.length,
-        contacts_count: userContacts.length,
+        contacts_count: 0,
         messages_count: 0,
       };
     }) || [];
 
     setUsers(usersWithStats);
     setCampaigns(campaignsWithOwner);
-    setContacts(contactsWithOwner);
     setLoading(false);
   }
 
@@ -255,34 +232,6 @@ export default function Admin() {
     setDeletingCampaign(null);
   }
 
-  async function deleteContact(contactId: string) {
-    setDeletingContact(contactId);
-
-    const { error } = await supabase
-      .from("contacts")
-      .delete()
-      .eq("id", contactId);
-
-    if (error) {
-      toast({
-        title: "Erro",
-        description: "Não foi possível excluir o contato.",
-        variant: "destructive",
-      });
-    } else {
-      toast({
-        title: "Sucesso",
-        description: "Contato excluído com sucesso.",
-      });
-      setContacts(prev => prev.filter(c => c.id !== contactId));
-      setStats(prev => ({
-        ...prev,
-        total_contacts: prev.total_contacts - 1,
-      }));
-    }
-
-    setDeletingContact(null);
-  }
 
   const getStatusBadge = (status: string) => {
     const statusMap: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -448,92 +397,15 @@ export default function Admin() {
           </CardContent>
         </Card>
 
-        {/* Contacts Management */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Contact className="h-5 w-5 text-primary" />
-              <div>
-                <CardTitle>Gerenciamento de Contatos</CardTitle>
-                <CardDescription>
-                  Visualize e exclua contatos de todos os usuários (exibindo últimos 50 de {stats.total_contacts.toLocaleString('pt-BR')} total)
-                </CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-              </div>
-            ) : contacts.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                Nenhum contato encontrado
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Nome</TableHead>
-                      <TableHead>Telefone</TableHead>
-                      <TableHead>Proprietário</TableHead>
-                      <TableHead>Data</TableHead>
-                      <TableHead className="text-right">Ações</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {contacts.map((contact) => (
-                      <TableRow key={contact.id}>
-                        <TableCell className="font-medium">{contact.name}</TableCell>
-                        <TableCell className="text-muted-foreground">{contact.phone}</TableCell>
-                        <TableCell className="text-muted-foreground">{contact.owner_email}</TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {format(new Date(contact.created_at), "dd/MM/yyyy", { locale: ptBR })}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                disabled={deletingContact === contact.id}
-                              >
-                                {deletingContact === contact.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-4 w-4" />
-                                )}
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Excluir contato?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  Esta ação não pode ser desfeita. Isso excluirá permanentemente o contato 
-                                  <strong> "{contact.name}"</strong> ({contact.phone}).
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                <AlertDialogAction
-                                  onClick={() => deleteContact(contact.id)}
-                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                >
-                                  Excluir
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* Contacts Management - 2-Level Navigation */}
+        <ContactManagement 
+          onContactDeleted={() => {
+            setStats(prev => ({
+              ...prev,
+              total_contacts: prev.total_contacts - 1,
+            }));
+          }}
+        />
 
         {/* Users Table (Quick View) */}
         <Card>
