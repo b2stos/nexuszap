@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
 import Papa from "papaparse";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { z } from "zod";
 
 interface ImportContactsWithPreviewProps {
@@ -99,25 +99,43 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
   };
 
   const parseExcel = async (file: File): Promise<any[]> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-
-      reader.onload = (e) => {
-        try {
-          const data = e.target?.result;
-          const workbook = XLSX.read(data, { type: "binary", cellText: false, cellDates: true });
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[sheetName];
-          const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: "" });
-          resolve(jsonData);
-        } catch (error) {
-          reject(error);
-        }
-      };
-
-      reader.onerror = () => reject(new Error("Erro ao ler arquivo"));
-      reader.readAsBinaryString(file);
+    const arrayBuffer = await file.arrayBuffer();
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(arrayBuffer);
+    
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) throw new Error("Planilha vazia");
+    
+    // Get headers from first row
+    const headers: string[] = [];
+    worksheet.getRow(1).eachCell((cell, colNumber) => {
+      const normalized = String(cell.value || "").toLowerCase().trim();
+      if (normalized.includes("nome") || normalized === "name") {
+        headers[colNumber] = "name";
+      } else if (normalized.includes("telefone") || normalized === "phone" || normalized.includes("tel")) {
+        headers[colNumber] = "phone";
+      } else {
+        headers[colNumber] = normalized;
+      }
     });
+    
+    const jsonData: any[] = [];
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // Skip header
+      const rowData: any = {};
+      row.eachCell((cell, colNumber) => {
+        const header = headers[colNumber] || `col${colNumber}`;
+        let value = cell.value;
+        // Handle ExcelJS cell value types
+        if (value && typeof value === 'object' && 'result' in value) {
+          value = value.result; // Formula result
+        }
+        rowData[header] = value;
+      });
+      jsonData.push(rowData);
+    });
+    
+    return jsonData;
   };
 
   const processRawDataToContacts = (rawData: any[]): ParsedContact[] => {

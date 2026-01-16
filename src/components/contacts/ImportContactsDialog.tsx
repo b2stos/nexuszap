@@ -6,11 +6,11 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2, Upload, CheckCircle, XCircle } from "lucide-react";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
+import Papa from "papaparse";
 import { useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
-
 interface ImportContactsDialogProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -57,32 +57,74 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
     setBatchProgress(null);
     
     try {
-      const reader = new FileReader();
+      let jsonData: any[] = [];
       
-      reader.onload = async (e) => {
-        const data = e.target?.result;
-        const workbook = XLSX.read(data, { type: "binary" });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet);
-
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) throw new Error("Usuário não autenticado");
-
-        // Extract and pre-filter contacts
-        const rawContacts = jsonData
-          .map((row: any) => ({
-            name: row.nome || row.name || "",
-            phone: String(row.telefone || row.phone || "").trim(),
-          }))
-          .filter(contact => {
-            const phone = contact.phone;
-            if (!phone) return false;
-            if (phone.length < 8) return false;
-            if (phone.length > 20) return false;
-            if (!/\d/.test(phone)) return false;
-            return true;
+      if (file.name.endsWith('.csv')) {
+        // Use papaparse for CSV files
+        jsonData = await new Promise((resolve, reject) => {
+          Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            transformHeader: (header: string) => {
+              const normalized = header.toLowerCase().trim();
+              if (normalized.includes("nome") || normalized === "name") return "name";
+              if (normalized.includes("telefone") || normalized === "phone" || normalized.includes("tel")) return "phone";
+              return normalized;
+            },
+            complete: (results) => resolve(results.data),
+            error: (error) => reject(error),
           });
+        });
+      } else {
+        // Use exceljs for Excel files
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(arrayBuffer);
+        
+        const worksheet = workbook.worksheets[0];
+        if (!worksheet) throw new Error("Planilha vazia");
+        
+        // Get headers from first row
+        const headers: string[] = [];
+        worksheet.getRow(1).eachCell((cell, colNumber) => {
+          headers[colNumber] = String(cell.value || "").toLowerCase().trim();
+        });
+        
+        // Find column indexes
+        const nameColIndex = headers.findIndex(h => h.includes("nome") || h === "name") + 1;
+        const phoneColIndex = headers.findIndex(h => h.includes("telefone") || h === "phone" || h.includes("tel")) + 1;
+        
+        worksheet.eachRow((row, rowNumber) => {
+          if (rowNumber === 1) return; // Skip header
+          const rowData: any = {};
+          row.eachCell((cell, colNumber) => {
+            const header = headers[colNumber] || `col${colNumber}`;
+            rowData[header] = cell.value;
+          });
+          // Also map to standard names
+          if (nameColIndex > 0) rowData.name = row.getCell(nameColIndex).value;
+          if (phoneColIndex > 0) rowData.phone = row.getCell(phoneColIndex).value;
+          jsonData.push(rowData);
+        });
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Usuário não autenticado");
+
+      // Extract and pre-filter contacts
+      const rawContacts = jsonData
+        .map((row: any) => ({
+          name: String(row.nome || row.name || "").trim(),
+          phone: String(row.telefone || row.phone || "").trim(),
+        }))
+        .filter(contact => {
+          const phone = contact.phone;
+          if (!phone) return false;
+          if (phone.length < 8) return false;
+          if (phone.length > 20) return false;
+          if (!/\d/.test(phone)) return false;
+          return true;
+        });
 
         if (rawContacts.length === 0) {
           toast({
@@ -212,15 +254,12 @@ export function ImportContactsDialog({ open, onOpenChange }: ImportContactsDialo
 
         queryClient.invalidateQueries({ queryKey: ["contacts"] });
         
-        setTimeout(() => {
-          setFile(null);
-          setValidationResults(null);
-          setBatchProgress(null);
-          onOpenChange?.(false);
-        }, 3000);
-      };
-
-      reader.readAsBinaryString(file);
+      setTimeout(() => {
+        setFile(null);
+        setValidationResults(null);
+        setBatchProgress(null);
+        onOpenChange?.(false);
+      }, 3000);
     } catch (error: any) {
       console.error('Import error:', error);
       toast({
