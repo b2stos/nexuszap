@@ -391,7 +391,17 @@ export function ImportTemplatesDialog({
           };
         }
 
-        // Insert template with real status from Meta (não forçar approved)
+        // Map status to DB enum (approved | pending | rejected)
+        // DB enum only supports 3 values, map others appropriately
+        const mapStatusToDbEnum = (apiStatus: string): 'approved' | 'pending' | 'rejected' => {
+          const s = apiStatus?.toLowerCase() || 'pending';
+          if (s === 'approved' || s === 'active') return 'approved';
+          if (s === 'rejected') return 'rejected';
+          // pending, paused, disabled, in_appeal, flagged, unknown -> pending
+          return 'pending';
+        };
+
+        // Insert template with real status from Meta
         const { error: insertError } = await supabase
           .from('mt_templates')
           .insert({
@@ -400,7 +410,7 @@ export function ImportTemplatesDialog({
             name: template.name,
             language: template.language || 'pt_BR',
             category: template.category || 'UTILITY',
-            status: template.status || 'pending', // Preservar status real da Meta
+            status: mapStatusToDbEnum(template.status),
             components: JSON.parse(JSON.stringify(template.components || [])),
             variables_schema: variablesSchema ? JSON.parse(JSON.stringify(variablesSchema)) : null,
             provider_template_id: template.external_id,
