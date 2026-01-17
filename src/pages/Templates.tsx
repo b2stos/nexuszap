@@ -164,6 +164,7 @@ function TemplatesContent() {
   const [importOpen, setImportOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilterCategory>('all');
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
+  const [revalidatingId, setRevalidatingId] = useState<string | null>(null);
   
   // Get user
   useEffect(() => {
@@ -178,6 +179,44 @@ function TemplatesContent() {
   // Handlers
   const handleImport = () => {
     setImportOpen(true);
+  };
+
+  // Revalidate individual template status from Meta API
+  const handleRevalidateTemplate = async (templateId: string) => {
+    setRevalidatingId(templateId);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('Sessão expirada');
+      }
+
+      const response = await supabase.functions.invoke('revalidate-template-status', {
+        body: { template_id: templateId },
+      });
+
+      if (response.error) {
+        throw response.error;
+      }
+
+      const result = response.data;
+      
+      if (!result.ok && result.error) {
+        console.error('Revalidation error:', result.error);
+        // Still refetch to show updated data
+      }
+
+      // Refetch templates to show updated status
+      await refetch();
+      
+      // Show feedback based on result
+      if (result.mismatch) {
+        console.log(`Template status updated: ${result.previous_status} → ${result.status}`);
+      }
+    } catch (error) {
+      console.error('Error revalidating template:', error);
+    } finally {
+      setRevalidatingId(null);
+    }
   };
 
   // Safely filter templates with null checks
@@ -531,48 +570,71 @@ function TemplatesContent() {
                           }
                         </TableCell>
                         <TableCell className="text-right">
-                          {(() => {
-                            const canonical = dbStatusToCanonical(template.status);
-                            const isUsable = isTemplateUsable(canonical);
-                            const tooltip = getCtaTooltip(canonical);
+                          <div className="flex items-center justify-end gap-2">
+                            {/* Revalidate button */}
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    disabled={revalidatingId === template.id}
+                                    onClick={() => handleRevalidateTemplate(template.id)}
+                                  >
+                                    <RefreshCw className={`h-4 w-4 ${revalidatingId === template.id ? 'animate-spin' : ''}`} />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Revalidar status na Meta</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                             
-                            const ctaButton = (
-                              <Button
-                                variant={isUsable ? "default" : "outline"}
-                                size="sm"
-                                className={isUsable 
-                                  ? "bg-primary hover:bg-primary/90" 
-                                  : "opacity-50 cursor-not-allowed"
-                                }
-                                disabled={!isUsable}
-                                onClick={() => {
-                                  if (isUsable) {
-                                    navigate(`/dashboard/campaigns/new?templateId=${template.id}`);
+                            {/* CTA button */}
+                            {(() => {
+                              const canonical = dbStatusToCanonical(template.status);
+                              const isUsable = isTemplateUsable(canonical);
+                              const tooltip = getCtaTooltip(canonical);
+                              
+                              const ctaButton = (
+                                <Button
+                                  variant={isUsable ? "default" : "outline"}
+                                  size="sm"
+                                  className={isUsable 
+                                    ? "bg-primary hover:bg-primary/90" 
+                                    : "opacity-50 cursor-not-allowed"
                                   }
-                                }}
-                              >
-                                Prosseguir
-                                <ArrowRight className="h-4 w-4 ml-1" />
-                              </Button>
-                            );
-                            
-                            if (tooltip) {
-                              return (
-                                <TooltipProvider>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <span className="inline-block">{ctaButton}</span>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>{tooltip}</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </TooltipProvider>
+                                  disabled={!isUsable}
+                                  onClick={() => {
+                                    if (isUsable) {
+                                      navigate(`/dashboard/campaigns/new?templateId=${template.id}`);
+                                    }
+                                  }}
+                                >
+                                  Prosseguir
+                                  <ArrowRight className="h-4 w-4 ml-1" />
+                                </Button>
                               );
-                            }
-                            
-                            return ctaButton;
-                          })()}
+                              
+                              if (tooltip) {
+                                return (
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span className="inline-block">{ctaButton}</span>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>{tooltip}</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                );
+                              }
+                              
+                              return ctaButton;
+                            })()}
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
