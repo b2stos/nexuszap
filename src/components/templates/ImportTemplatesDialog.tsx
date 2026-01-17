@@ -21,20 +21,21 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { 
-  Download, 
-  Loader2, 
-  AlertCircle, 
-  CheckCircle, 
-  RefreshCw, 
-  Info, 
-  Copy, 
-  Settings, 
-  ExternalLink, 
+import {
+  Download,
+  Loader2,
+  AlertCircle,
+  CheckCircle,
+  RefreshCw,
+  Info,
+  Copy,
+  Settings,
+  ExternalLink,
   HelpCircle,
   Clock,
   XCircle,
   PauseCircle,
+  Filter,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
@@ -135,7 +136,8 @@ interface SyncTelemetry {
   finishedAt: Date | null;
 }
 
-// No filter needed - only showing approved templates
+// Filter options for modal
+type ModalFilter = 'all' | 'approved' | 'pending' | 'rejected' | 'other';
 
 interface ImportTemplatesDialogProps {
   open: boolean;
@@ -219,8 +221,8 @@ export function ImportTemplatesDialog({
   const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set());
   const [isLoadingChannels, setIsLoadingChannels] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  
-  
+  const [modalFilter, setModalFilter] = useState<ModalFilter>('all');
+
   // Telemetry state
   const [telemetry, setTelemetry] = useState<SyncTelemetry>({
     phase: 'idle',
@@ -246,10 +248,24 @@ export function ImportTemplatesDialog({
   const isProcessingComplete = ['persisting', 'success'].includes(telemetry.phase);
   const isPersistingComplete = telemetry.phase === 'success';
 
-  // Only show approved templates
-  const approvedTemplates = useMemo(() => 
-    templates.filter(t => t.status === 'approved'),
-  [templates]);
+  // Filter templates for display
+  const filteredTemplates = useMemo(() => {
+    if (modalFilter === 'all') return templates;
+    if (modalFilter === 'approved') return templates.filter(t => t.status === 'approved');
+    if (modalFilter === 'pending') return templates.filter(t => t.status === 'pending');
+    if (modalFilter === 'rejected') return templates.filter(t => t.status === 'rejected');
+    return templates.filter(t => !['approved', 'pending', 'rejected'].includes(t.status));
+  }, [templates, modalFilter]);
+
+  // Count by filter category
+  const countsByFilter = useMemo(() => ({
+    all: templates.length,
+    approved: templates.filter(t => t.status === 'approved').length,
+    pending: templates.filter(t => t.status === 'pending').length,
+    rejected: templates.filter(t => t.status === 'rejected').length,
+    other: templates.filter(t => !['approved', 'pending', 'rejected'].includes(t.status)).length,
+  }), [templates]);
+
 
   // Reset state when dialog closes
   useEffect(() => {
@@ -267,6 +283,7 @@ export function ImportTemplatesDialog({
       setShowTokenHelp(false);
       setTemplates([]);
       setSelectedTemplates(new Set());
+      setModalFilter('all');
     }
   }, [open]);
 
@@ -319,7 +336,7 @@ export function ImportTemplatesDialog({
     setTemplates([]);
     setSelectedTemplates(new Set());
     setErrorInfo(null);
-    
+    setModalFilter('all');
 
     // Start telemetry
     setTelemetry({
@@ -431,12 +448,12 @@ export function ImportTemplatesDialog({
     setSelectedTemplates(newSelected);
   };
 
-  const selectAll = () => {
-    const allNames = approvedTemplates.map(t => t.name);
-    if (selectedTemplates.size === allNames.length) {
+  const selectAllApproved = () => {
+    const approvedNames = templates.filter(t => t.status === 'approved').map(t => t.name);
+    if (selectedTemplates.size === approvedNames.length) {
       setSelectedTemplates(new Set());
     } else {
-      setSelectedTemplates(new Set(allNames));
+      setSelectedTemplates(new Set(approvedNames));
     }
   };
 
@@ -567,6 +584,8 @@ export function ImportTemplatesDialog({
     };
     return colors[category.toUpperCase()] || 'bg-gray-500/10 text-gray-600';
   };
+  const isTemplateApproved = (template: ExternalTemplate) => template.status === 'approved';
+  const approvedCount = countsByFilter.approved;
 
   // Determine if we're in a "syncing" phase
   const isSyncing = ['connecting', 'fetching', 'processing', 'persisting'].includes(telemetry.phase);
