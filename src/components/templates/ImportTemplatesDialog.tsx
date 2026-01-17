@@ -840,24 +840,26 @@ export function ImportTemplatesDialog({
             </div>
           )}
 
-          {/* Success State - Template List (only approved) */}
-          {telemetry.phase === 'success' && approvedTemplates.length > 0 && (
+          {/* Success State - Template List */}
+          {telemetry.phase === 'success' && templates.length > 0 && (
             <div className="space-y-3">
-              {/* Header with sync info */}
+              {/* Header with filters and sync info */}
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-green-600" />
                     <span className="text-sm font-medium">
-                      {approvedTemplates.length} templates aprovados
+                      {templates.length} templates encontrados
                     </span>
-                    <Badge variant="secondary" className="text-xs">
-                      {selectedTemplates.size}/{approvedTemplates.length} selecionados
-                    </Badge>
+                    {approvedCount > 0 && (
+                      <Badge variant="secondary" className="text-xs">
+                        {selectedTemplates.size}/{approvedCount} aprovados selecionados
+                      </Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="sm" onClick={selectAll}>
-                      {selectedTemplates.size === approvedTemplates.length ? 'Desmarcar' : 'Selecionar todos'}
+                    <Button variant="ghost" size="sm" onClick={selectAllApproved}>
+                      {selectedTemplates.size === approvedCount ? 'Desmarcar' : 'Selecionar aprovados'}
                     </Button>
                     <Button variant="outline" size="sm" onClick={startSync} disabled={isSyncing}>
                       <RefreshCw className={`h-3 w-3 mr-1 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -873,70 +875,140 @@ export function ImportTemplatesDialog({
                     Sincronizado em {format(telemetry.finishedAt, "dd/MM/yy 'às' HH:mm", { locale: ptBR })}
                   </p>
                 )}
+
+                {/* Filter Chips */}
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Filter className="h-3 w-3" />
+                  </span>
+                  <Button
+                    variant={modalFilter === 'all' ? 'default' : 'outline'}
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setModalFilter('all')}
+                  >
+                    Todos ({countsByFilter.all})
+                  </Button>
+                  <Button
+                    variant={modalFilter === 'approved' ? 'default' : 'outline'}
+                    size="sm"
+                    className={`h-7 text-xs ${modalFilter === 'approved' ? 'bg-green-600 hover:bg-green-700' : ''}`}
+                    onClick={() => setModalFilter('approved')}
+                  >
+                    <CheckCircle className="h-3 w-3 mr-1" />
+                    Aprovados ({countsByFilter.approved})
+                  </Button>
+                  <Button
+                    variant={modalFilter === 'pending' ? 'default' : 'outline'}
+                    size="sm"
+                    className={`h-7 text-xs ${modalFilter === 'pending' ? 'bg-yellow-600 hover:bg-yellow-700' : ''}`}
+                    onClick={() => setModalFilter('pending')}
+                  >
+                    <Clock className="h-3 w-3 mr-1" />
+                    Em análise ({countsByFilter.pending})
+                  </Button>
+                  {countsByFilter.rejected > 0 && (
+                    <Button
+                      variant={modalFilter === 'rejected' ? 'default' : 'outline'}
+                      size="sm"
+                      className={`h-7 text-xs ${modalFilter === 'rejected' ? 'bg-red-600 hover:bg-red-700' : ''}`}
+                      onClick={() => setModalFilter('rejected')}
+                    >
+                      <XCircle className="h-3 w-3 mr-1" />
+                      Reprovados ({countsByFilter.rejected})
+                    </Button>
+                  )}
+                  {countsByFilter.other > 0 && (
+                    <Button
+                      variant={modalFilter === 'other' ? 'default' : 'outline'}
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setModalFilter('other')}
+                    >
+                      Outros ({countsByFilter.other})
+                    </Button>
+                  )}
+                </div>
               </div>
 
+              {/* Info about approved-only import */}
+              <Alert className="bg-blue-500/10 border-blue-500/30">
+                <Info className="h-4 w-4 text-blue-600" />
+                <AlertDescription className="text-xs text-blue-800 dark:text-blue-200">
+                  Apenas templates <strong>aprovados</strong> podem ser importados para uso em campanhas.
+                  Templates em análise ficam visíveis para acompanhamento.
+                </AlertDescription>
+              </Alert>
+
               {/* Template List */}
-              <ScrollArea className="h-[320px] border rounded-lg">
+              <ScrollArea className="h-[280px] border rounded-lg">
                 <div className="p-2 space-y-2">
-                  {approvedTemplates.map((template) => {
-                    const isSelected = selectedTemplates.has(template.name);
-                    
-                    return (
-                      <div
-                        key={template.name}
-                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                          isSelected ? 'bg-primary/5 border-primary/30' : 'hover:bg-muted/50'
-                        }`}
-                        onClick={() => toggleTemplate(template.name)}
-                      >
-                        <Checkbox
-                          checked={isSelected}
-                          className="mt-1"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-medium font-mono text-sm">
-                              {template.name}
-                            </span>
-                            <TemplateSyncStatusBadge status={template.status} />
-                          </div>
-                          <div className="flex items-center gap-2 mt-1 flex-wrap">
-                            <Badge variant="outline" className="text-xs">
-                              {template.language}
-                            </Badge>
-                            <Badge className={`text-xs ${getCategoryBadge(template.category)}`}>
-                              {template.category}
-                            </Badge>
-                            {getVariableCount(template) > 0 && (
-                              <Badge variant="secondary" className="text-xs">
-                                {getVariableCount(template)} variável(is)
+                  {filteredTemplates.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <p className="text-sm">Nenhum template nesta categoria</p>
+                    </div>
+                  ) : (
+                    filteredTemplates.map((template) => {
+                      const isApproved = isTemplateApproved(template);
+                      const isSelected = selectedTemplates.has(template.name);
+
+                      return (
+                        <div
+                          key={template.name}
+                          className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                            isSelected ? 'bg-primary/5 border-primary/30' :
+                            isApproved ? 'hover:bg-muted/50' : 'opacity-75 hover:bg-muted/30'
+                          }`}
+                          onClick={() => toggleTemplate(template.name)}
+                        >
+                          <Checkbox
+                            checked={isSelected}
+                            disabled={!isApproved}
+                            className={`mt-1 ${!isApproved ? 'opacity-50' : ''}`}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-medium font-mono text-sm">
+                                {template.name}
+                              </span>
+                              <TemplateSyncStatusBadge status={template.status} />
+                            </div>
+                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                              <Badge variant="outline" className="text-xs">
+                                {template.language}
                               </Badge>
+                              <Badge className={`text-xs ${getCategoryBadge(template.category)}`}>
+                                {template.category}
+                              </Badge>
+                              {getVariableCount(template) > 0 && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {getVariableCount(template)} variável(is)
+                                </Badge>
+                              )}
+                            </div>
+                            {template.components.find(c => c.type === 'BODY')?.text && (
+                              <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+                                {template.components.find(c => c.type === 'BODY')?.text}
+                              </p>
                             )}
                           </div>
-                          {template.components.find(c => c.type === 'BODY')?.text && (
-                            <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
-                              {template.components.find(c => c.type === 'BODY')?.text}
-                            </p>
-                          )}
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
               </ScrollArea>
             </div>
           )}
 
-          {/* Empty State after sync - no approved templates */}
-          {telemetry.phase === 'success' && approvedTemplates.length === 0 && (
+          {/* Empty State after sync */}
+          {telemetry.phase === 'success' && templates.length === 0 && (
             <div className="text-center py-8 text-muted-foreground border rounded-lg bg-muted/30">
               <Download className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm font-medium">Nenhum template aprovado</p>
+              <p className="text-sm font-medium">Nenhum template encontrado</p>
               <p className="text-xs mt-1 max-w-sm mx-auto">
-                {templates.length > 0 
-                  ? `Encontramos ${templates.length} template(s), mas nenhum está aprovado pela Meta.`
-                  : 'Não existe template na sua conta WhatsApp Business para este WABA.'
-                }
+                Não existe template na sua conta WhatsApp Business para este WABA.
+                Crie um template no Meta Business Suite e sincronize novamente.
               </p>
             </div>
           )}
