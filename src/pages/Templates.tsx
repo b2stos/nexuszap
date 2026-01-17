@@ -2,7 +2,7 @@
  * Templates Page
  * 
  * Página para gerenciamento de templates de WhatsApp
- * APENAS templates sincronizados do Meta (WABA) são exibidos
+ * Exibe TODOS os templates sincronizados do Meta (WABA) - não apenas aprovados
  * Criação/edição local foi removida - só sync
  */
 
@@ -18,9 +18,13 @@ import {
   CloudDownload,
   Filter,
   Eye,
-  Cloud,
   AlertTriangle,
   Info,
+  PauseCircle,
+  MinusCircle,
+  Flag,
+  Scale,
+  HelpCircle,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -58,14 +62,16 @@ import {
   useTemplates,
   Template,
 } from '@/hooks/useTemplates';
-// Onboarding auto-detects from real data, no import needed
 import { useQuery } from '@tanstack/react-query';
-
-// Onboarding is now calculated in real-time from actual data
-// template_created step is detected from mt_templates table
-function useTrackTemplateSync(_templatesCount: number) {
-  // Legacy function - onboarding now auto-detects from real data
-}
+import {
+  dbStatusToCanonical,
+  getStatusLabel,
+  getStatusColorClasses,
+  matchesFilterCategory,
+  STATUS_FILTER_LABELS,
+  type StatusFilterCategory,
+  type CanonicalTemplateStatus,
+} from '@/utils/templateStatusMapper';
 
 // Hook to get channel with Meta config
 function useChannelMetaConfig(tenantId: string | undefined) {
@@ -89,33 +95,39 @@ function useChannelMetaConfig(tenantId: string | undefined) {
   });
 }
 
-// Status badge component
+// Get icon for status
+function getStatusIcon(canonicalStatus: CanonicalTemplateStatus) {
+  const iconMap: Record<CanonicalTemplateStatus, React.ReactNode> = {
+    'APPROVED': <CheckCircle className="w-3 h-3 mr-1" />,
+    'IN_REVIEW': <Clock className="w-3 h-3 mr-1" />,
+    'REJECTED': <XCircle className="w-3 h-3 mr-1" />,
+    'PAUSED': <PauseCircle className="w-3 h-3 mr-1" />,
+    'DISABLED': <MinusCircle className="w-3 h-3 mr-1" />,
+    'IN_APPEAL': <Scale className="w-3 h-3 mr-1" />,
+    'FLAGGED': <Flag className="w-3 h-3 mr-1" />,
+    'UNKNOWN': <HelpCircle className="w-3 h-3 mr-1" />,
+  };
+  return iconMap[canonicalStatus] || <HelpCircle className="w-3 h-3 mr-1" />;
+}
+
+// Status badge component - suporta todos os status
 function StatusBadge({ status }: { status: string }) {
-  switch (status) {
-    case 'approved':
-      return (
-        <Badge className="bg-green-500/10 text-green-600 hover:bg-green-500/20">
-          <CheckCircle className="w-3 h-3 mr-1" />
-          Aprovado
-        </Badge>
-      );
-    case 'pending':
-      return (
-        <Badge className="bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20">
-          <Clock className="w-3 h-3 mr-1" />
-          Pendente
-        </Badge>
-      );
-    case 'rejected':
-      return (
-        <Badge className="bg-red-500/10 text-red-600 hover:bg-red-500/20">
-          <XCircle className="w-3 h-3 mr-1" />
-          Rejeitado
-        </Badge>
-      );
-    default:
-      return <Badge variant="outline">{status}</Badge>;
-  }
+  const canonical = dbStatusToCanonical(status);
+  const label = getStatusLabel(status);
+  const colors = getStatusColorClasses(status);
+  
+  return (
+    <Badge className={`${colors.bg} ${colors.text} ${colors.hover}`}>
+      {getStatusIcon(canonical)}
+      {label}
+    </Badge>
+  );
+}
+
+// Count templates by filter category
+function countByCategory(templates: Template[], category: StatusFilterCategory): number {
+  if (category === 'all') return templates.length;
+  return templates.filter(t => matchesFilterCategory(t.status, category)).length;
 }
 
 // Main content component (wrapped by error boundary)
@@ -123,7 +135,7 @@ function TemplatesContent() {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
   const [importOpen, setImportOpen] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'approved' | 'pending' | 'rejected'>('approved');
+  const [statusFilter, setStatusFilter] = useState<StatusFilterCategory>('all');
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
   
   // Get user
@@ -131,13 +143,10 @@ function TemplatesContent() {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
   }, []);
   
-  // Queries - ONLY Meta templates
+  // Queries - ALL Meta templates
   const { data: tenantData, isLoading: tenantLoading, error: tenantError } = useCurrentTenantForTemplates();
   const { data: templates = [], isLoading: templatesLoading, refetch, error: templatesError } = useTemplates(tenantData?.tenantId);
   const { data: channelConfig } = useChannelMetaConfig(tenantData?.tenantId);
-  
-  // Track onboarding step
-  useTrackTemplateSync(templates.length);
   
   // Handlers
   const handleImport = () => {
@@ -147,17 +156,24 @@ function TemplatesContent() {
   // Safely filter templates with null checks
   const safeTemplates = Array.isArray(templates) ? templates : [];
   
-  // Filter templates by status (only show meta source)
+  // Filter templates by source (only show meta source)
   const metaTemplates = safeTemplates.filter(t => {
     if (!t) return false;
-    const source = (t as any).source;
-    return source === 'meta' || source === undefined; // Include old templates without source column
+    const source = (t as { source?: string }).source;
+    return source === 'meta' || source === undefined;
   });
   
+  // Filter by status category
   const filteredTemplates = metaTemplates.filter(t => {
     if (statusFilter === 'all') return true;
-    return t?.status === statusFilter;
+    return matchesFilterCategory(t.status, statusFilter);
   });
+
+  // Count by category for badges
+  const approvedCount = countByCategory(metaTemplates, 'approved');
+  const inReviewCount = countByCategory(metaTemplates, 'in_review');
+  const rejectedCount = countByCategory(metaTemplates, 'rejected');
+  const pausedDisabledCount = countByCategory(metaTemplates, 'paused_disabled');
 
   // Get template body preview from components
   const getBodyPreview = (template: Template): string => {
@@ -274,9 +290,21 @@ function TemplatesContent() {
           <Info className="h-4 w-4" />
           <AlertDescription>
             Templates são gerenciados diretamente no Meta Business Suite. 
-            Use o botão "Sincronizar da Meta" para importar templates aprovados para uso em campanhas e no Inbox.
+            Use o botão "Sincronizar da Meta" para importar todos os templates da sua conta.
+            Apenas templates aprovados podem ser usados em campanhas e no Inbox.
           </AlertDescription>
         </Alert>
+
+        {/* Warning if no approved templates */}
+        {metaTemplates.length > 0 && approvedCount === 0 && (
+          <Alert className="bg-yellow-500/10 border-yellow-500/30">
+            <AlertTriangle className="h-4 w-4 text-yellow-600" />
+            <AlertDescription className="text-yellow-800 dark:text-yellow-200">
+              <span className="font-medium">Sem templates aprovados no momento.</span> 
+              {' '}Templates precisam ser aprovados pela Meta para serem usados em campanhas.
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Filter Tabs */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -284,13 +312,13 @@ function TemplatesContent() {
             <Filter className="h-4 w-4" />
             Filtrar:
           </span>
-          <div className="flex gap-1">
+          <div className="flex gap-1 flex-wrap">
             <Button
               variant={statusFilter === 'all' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setStatusFilter('all')}
             >
-              Todos ({metaTemplates.length})
+              {STATUS_FILTER_LABELS.all} ({metaTemplates.length})
             </Button>
             <Button
               variant={statusFilter === 'approved' ? 'default' : 'outline'}
@@ -299,16 +327,16 @@ function TemplatesContent() {
               className={statusFilter === 'approved' ? 'bg-green-600 hover:bg-green-700' : ''}
             >
               <CheckCircle className="h-3 w-3 mr-1" />
-              Aprovados ({metaTemplates.filter(t => t?.status === 'approved').length})
+              {STATUS_FILTER_LABELS.approved} ({approvedCount})
             </Button>
             <Button
-              variant={statusFilter === 'pending' ? 'default' : 'outline'}
+              variant={statusFilter === 'in_review' ? 'default' : 'outline'}
               size="sm"
-              onClick={() => setStatusFilter('pending')}
-              className={statusFilter === 'pending' ? 'bg-yellow-600 hover:bg-yellow-700' : ''}
+              onClick={() => setStatusFilter('in_review')}
+              className={statusFilter === 'in_review' ? 'bg-yellow-600 hover:bg-yellow-700' : ''}
             >
               <Clock className="h-3 w-3 mr-1" />
-              Pendentes ({metaTemplates.filter(t => t?.status === 'pending').length})
+              {STATUS_FILTER_LABELS.in_review} ({inReviewCount})
             </Button>
             <Button
               variant={statusFilter === 'rejected' ? 'default' : 'outline'}
@@ -317,7 +345,16 @@ function TemplatesContent() {
               className={statusFilter === 'rejected' ? 'bg-red-600 hover:bg-red-700' : ''}
             >
               <XCircle className="h-3 w-3 mr-1" />
-              Rejeitados ({metaTemplates.filter(t => t?.status === 'rejected').length})
+              {STATUS_FILTER_LABELS.rejected} ({rejectedCount})
+            </Button>
+            <Button
+              variant={statusFilter === 'paused_disabled' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setStatusFilter('paused_disabled')}
+              className={statusFilter === 'paused_disabled' ? 'bg-gray-600 hover:bg-gray-700' : ''}
+            >
+              <PauseCircle className="h-3 w-3 mr-1" />
+              {STATUS_FILTER_LABELS.paused_disabled} ({pausedDisabledCount})
             </Button>
           </div>
         </div>
@@ -341,9 +378,9 @@ function TemplatesContent() {
             ) : metaTemplates.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <CloudDownload className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                <h3 className="font-medium mb-1">Nenhum template sincronizado</h3>
+                <h3 className="font-medium mb-1">Nenhum template encontrado</h3>
                 <p className="text-sm text-muted-foreground mb-4 max-w-md">
-                  Clique em "Sincronizar da Meta" para importar templates aprovados da sua conta WhatsApp Business.
+                  Clique em "Sincronizar da Meta" para importar templates da sua conta WhatsApp Business.
                 </p>
                 <Button onClick={handleImport} className="bg-green-600 hover:bg-green-700">
                   <CloudDownload className="h-4 w-4 mr-2" />
@@ -353,7 +390,9 @@ function TemplatesContent() {
             ) : filteredTemplates.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <Filter className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                <h3 className="font-medium mb-1">Nenhum template com status "{statusFilter}"</h3>
+                <h3 className="font-medium mb-1">
+                  Nenhum template com status "{STATUS_FILTER_LABELS[statusFilter]}"
+                </h3>
                 <p className="text-sm text-muted-foreground mb-4">
                   Altere o filtro para ver outros templates.
                 </p>
@@ -388,7 +427,7 @@ function TemplatesContent() {
                         (varsSchema.button?.length || 0)
                       : 0;
                     const bodyPreview = getBodyPreview(template);
-                    const lastSynced = (template as any).last_synced_at;
+                    const lastSynced = (template as { last_synced_at?: string }).last_synced_at;
                     
                     return (
                       <TableRow key={template.id}>

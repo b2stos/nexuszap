@@ -391,7 +391,7 @@ export function ImportTemplatesDialog({
           };
         }
 
-        // Insert template with source='meta'
+        // Insert template with real status from Meta (não forçar approved)
         const { error: insertError } = await supabase
           .from('mt_templates')
           .insert({
@@ -400,7 +400,7 @@ export function ImportTemplatesDialog({
             name: template.name,
             language: template.language || 'pt_BR',
             category: template.category || 'UTILITY',
-            status: 'approved',
+            status: template.status || 'pending', // Preservar status real da Meta
             components: JSON.parse(JSON.stringify(template.components || [])),
             variables_schema: variablesSchema ? JSON.parse(JSON.stringify(variablesSchema)) : null,
             provider_template_id: template.external_id,

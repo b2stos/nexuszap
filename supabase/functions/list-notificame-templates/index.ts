@@ -1,23 +1,24 @@
 /**
  * Edge Function: list-notificame-templates
  * 
- * Lista templates aprovados do WhatsApp Business.
+ * Lista TODOS os templates do WhatsApp Business (não apenas APPROVED).
  * 
  * ESTRATÉGIA DE BUSCA:
- * 1. Primeiro tenta via API do NotificaMe (BSP) - usa token do canal
- * 2. Se o canal tem access_token da Meta configurado, tenta API da Meta diretamente
+ * 1. Se tiver credenciais Meta (wabaId + accessToken), buscar DIRETAMENTE na Meta
+ * 2. Se NÃO tiver Meta mas tiver NotificaMe, informar que precisa configurar Meta
+ * 3. NotificaMe NÃO suporta listagem de templates de forma confiável
  * 
  * RESPONSE FORMAT:
  * {
  *   ok: boolean,
  *   templates: [...],
  *   error?: { code: string, message: string, details?: string },
- *   meta: { waba_id, phone_number_id, business_id, last_sync_at, source, request_id }
+ *   meta: { waba_id, phone_number_id, business_id, last_sync_at, source, request_id, counts_by_status }
  * }
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { notificameRequest, resolveToken, maskToken } from '../_shared/notificameClient.ts';
+import { resolveToken } from '../_shared/notificameClient.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -39,34 +40,52 @@ interface TemplateComponent {
   }>;
 }
 
-interface NotificaMeTemplate {
+interface MetaTemplate {
   id?: string;
   name: string;
   language?: string;
   category?: string;
   status?: string;
-  components?: TemplateComponent[];
-}
-
-interface TemplateListResponse {
-  data?: NotificaMeTemplate[];
-  templates?: NotificaMeTemplate[];
-  message_templates?: NotificaMeTemplate[];
-  error?: {
-    message?: string;
-    code?: string;
-    type?: string;
+  quality_score?: {
+    score?: string;
+    date?: string;
   };
+  components?: TemplateComponent[];
 }
 
 interface FetchResult {
   success: boolean;
-  templates: NotificaMeTemplate[];
+  templates: MetaTemplate[];
   error?: {
     code: string;
     message: string;
     details?: string;
   };
+  countsByStatus?: Record<string, number>;
+}
+
+/**
+ * Normaliza o status do template da Meta para formato canônico
+ */
+function normalizeMetaStatus(metaStatus: string | null | undefined): string {
+  if (!metaStatus) return 'unknown';
+  
+  const normalized = metaStatus.toUpperCase().trim();
+  
+  const statusMap: Record<string, string> = {
+    'PENDING': 'pending',      // In review
+    'APPROVED': 'approved',
+    'ACTIVE': 'approved',      // Legacy/fallback
+    'REJECTED': 'rejected',
+    'PAUSED': 'paused',
+    'DISABLED': 'disabled',
+    'IN_APPEAL': 'in_appeal',
+    'FLAGGED': 'flagged',
+    'LIMIT_EXCEEDED': 'disabled',
+    'DELETED': 'disabled',
+  };
+  
+  return statusMap[normalized] || 'unknown';
 }
 
 /**
@@ -134,206 +153,85 @@ function generateVariablesSchema(components: TemplateComponent[]): Record<string
 }
 
 /**
- * Busca templates via API do NotificaMe (BSP)
- * 
- * IMPORTANTE: NotificaMe retorna status 200 mesmo em erro, com body { error: {...} }
- * Precisamos verificar o body para detectar erros reais.
+ * Busca TODOS os templates via API da Meta (com paginação)
+ * NÃO aplica filtro de status - traz tudo
  */
-async function fetchTemplatesFromNotificaMe(
-  token: string, 
-  subscriptionId?: string
-): Promise<FetchResult> {
-  console.log('[list-templates] Trying NotificaMe API...');
+async function fetchAllTemplatesFromMeta(wabaId: string, accessToken: string): Promise<FetchResult> {
+  console.log(`[list-templates] Fetching ALL templates from Meta API for WABA: ${wabaId}`);
   
-  // Build endpoints to try - subscription-specific endpoints first
-  const endpoints: string[] = [];
+  const allTemplates: MetaTemplate[] = [];
+  const countsByStatus: Record<string, number> = {};
+  let nextUrl: string | null = `${META_GRAPH_API_URL}/${wabaId}/message_templates?limit=100`;
   
-  if (subscriptionId) {
-    endpoints.push(
-      `/subscriptions/${subscriptionId}/templates`,
-      `/subscriptions/${subscriptionId}/message-templates`,
-      `/channels/${subscriptionId}/templates`,
-      `/whatsapp/${subscriptionId}/templates`
-    );
-  }
-  
-  // Generic endpoints as fallback
-  endpoints.push(
-    '/subscriptions/templates',
-    '/templates',
-    '/message-templates',
-    '/whatsapp/templates'
-  );
-
-  let lastError: { code: string; message: string; details?: string } | undefined;
-
-  for (const endpoint of endpoints) {
-    console.log(`[list-templates] Trying NotificaMe endpoint: ${endpoint}`);
-    
-    const result = await notificameRequest<TemplateListResponse | NotificaMeTemplate[]>(
-      'GET',
-      endpoint,
-      token
-    );
-
-    // Check for HTTP-level errors
-    if (!result.success) {
-      const errorMsg = result.error?.message || 'Unknown error';
-      console.log(`[list-templates] NotificaMe ${endpoint} failed: ${errorMsg}`);
+  try {
+    // Paginate through all results
+    while (nextUrl) {
+      console.log(`[list-templates] Fetching page: ${nextUrl.substring(0, 100)}...`);
       
-      if (result.status === 401 || result.status === 403) {
+      const fetchResponse: Response = await fetch(nextUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const responseData = await fetchResponse.json() as {
+        data?: MetaTemplate[];
+        error?: { code: number; message: string };
+        paging?: { next?: string };
+      };
+
+      if (responseData.error) {
+        console.error('[list-templates] Meta API error:', JSON.stringify(responseData.error));
+        
+        let errorCode = 'META_API_ERROR';
+        let errorMessage = 'Erro ao buscar templates da Meta';
+        let details: string | undefined;
+        
+        if (responseData.error.code === 190 || responseData.error.code === 102) {
+          errorCode = 'TOKEN_INVALID';
+          errorMessage = 'Access Token da Meta inválido ou expirado';
+          details = 'Configure um token válido nas configurações do canal.';
+        } else if (responseData.error.code === 100) {
+          errorCode = 'INVALID_WABA';
+          errorMessage = 'WABA ID inválido ou sem permissão';
+          details = 'Verifique se o WABA ID está correto e se o token tem acesso a esta conta.';
+        } else if (responseData.error.code === 4) {
+          errorCode = 'RATE_LIMIT';
+          errorMessage = 'Limite de requisições atingido';
+          details = 'Aguarde alguns minutos e tente novamente.';
+        } else if (responseData.error.message) {
+          details = responseData.error.message;
+        }
+        
         return { 
           success: false, 
           templates: [], 
-          error: {
-            code: 'AUTH_ERROR',
-            message: 'Token NotificaMe inválido ou expirado',
-            details: 'Reconecte o canal nas configurações.'
-          }
+          error: { code: errorCode, message: errorMessage, details }
         };
       }
-      
-      lastError = {
-        code: `HTTP_${result.status || 'ERROR'}`,
-        message: errorMsg,
-        details: endpoint
-      };
-      continue;
-    }
 
-    const data = result.data;
-    
-    // Check for error in response body (NotificaMe returns 200 with error body)
-    if (data && typeof data === 'object' && 'error' in data && (data as TemplateListResponse).error) {
-      const apiError = (data as TemplateListResponse).error!;
-      console.log(`[list-templates] NotificaMe ${endpoint} returned error in body: ${apiError.message}`);
+      const pageTemplates = responseData.data || [];
       
-      // Hub404 means endpoint doesn't exist - try next
-      if (apiError.code === 'Hub404') {
-        lastError = {
-          code: 'ENDPOINT_NOT_FOUND',
-          message: 'Endpoint não suportado pelo NotificaMe',
-          details: endpoint
-        };
-        continue;
+      // Count by status and add to collection
+      for (const t of pageTemplates) {
+        const normalizedStatus = normalizeMetaStatus(t.status);
+        countsByStatus[normalizedStatus] = (countsByStatus[normalizedStatus] || 0) + 1;
+        allTemplates.push(t);
       }
       
-      // Other API errors
-      lastError = {
-        code: apiError.code || 'API_ERROR',
-        message: apiError.message || 'Erro na API do NotificaMe',
-        details: apiError.type
-      };
-      continue;
+      // Check for next page
+      nextUrl = responseData.paging?.next || null;
     }
 
-    // Parse templates from various response formats
-    let templates: NotificaMeTemplate[] = [];
+    console.log(`[list-templates] Found ${allTemplates.length} total templates from Meta API`);
+    console.log(`[list-templates] Status breakdown:`, JSON.stringify(countsByStatus));
     
-    if (Array.isArray(data)) {
-      templates = data;
-    } else if (data && typeof data === 'object') {
-      const responseData = data as TemplateListResponse;
-      if (responseData.data) {
-        templates = responseData.data;
-      } else if (responseData.templates) {
-        templates = responseData.templates;
-      } else if (responseData.message_templates) {
-        templates = responseData.message_templates;
-      }
-    }
-
-    if (templates.length > 0) {
-      console.log(`[list-templates] Found ${templates.length} templates at NotificaMe ${endpoint}`);
-      return { success: true, templates };
-    }
-  }
-
-  // No templates found via NotificaMe - this is NOT an error, just empty
-  // But if we had API errors, report them
-  if (lastError && lastError.code !== 'ENDPOINT_NOT_FOUND') {
-    return { 
-      success: false, 
-      templates: [], 
-      error: lastError
-    };
-  }
-
-  // NotificaMe doesn't have templates endpoint exposed
-  return { 
-    success: false, 
-    templates: [], 
-    error: {
-      code: 'NO_TEMPLATE_ENDPOINT',
-      message: 'API do NotificaMe não suporta listagem de templates',
-      details: 'Configure o Access Token da Meta para buscar diretamente.'
-    }
-  };
-}
-
-/**
- * Busca templates via API da Meta (requer access_token específico)
- */
-async function fetchTemplatesFromMeta(wabaId: string, accessToken: string): Promise<FetchResult> {
-  console.log(`[list-templates] Trying Meta API for WABA: ${wabaId}`);
-  
-  const metaUrl = `${META_GRAPH_API_URL}/${wabaId}/message_templates?status=APPROVED&limit=100`;
-  
-  try {
-    const response = await fetch(metaUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-
-    if (data.error) {
-      console.error('[list-templates] Meta API error:', JSON.stringify(data.error));
-      
-      let errorCode = 'META_API_ERROR';
-      let errorMessage = 'Erro ao buscar templates da Meta';
-      let details: string | undefined;
-      
-      if (data.error.code === 190 || data.error.code === 102) {
-        errorCode = 'TOKEN_INVALID';
-        errorMessage = 'Access Token da Meta inválido ou expirado';
-        details = 'Configure um token válido nas configurações do canal.';
-      } else if (data.error.code === 100) {
-        errorCode = 'INVALID_WABA';
-        errorMessage = 'WABA ID inválido ou sem permissão';
-        details = 'Verifique se o WABA ID está correto e se o token tem acesso a esta conta.';
-      } else if (data.error.code === 4) {
-        errorCode = 'RATE_LIMIT';
-        errorMessage = 'Limite de requisições atingido';
-        details = 'Aguarde alguns minutos e tente novamente.';
-      } else if (data.error.message) {
-        details = data.error.message;
-      }
-      
-      return { 
-        success: false, 
-        templates: [], 
-        error: { code: errorCode, message: errorMessage, details }
-      };
-    }
-
-    const templates = data.data || [];
-    console.log(`[list-templates] Found ${templates.length} templates from Meta API`);
-    
-    // Transform Meta format to our format
     return { 
       success: true, 
-      templates: templates.map((t: { id: string; name: string; language: string; category: string; status: string; components?: TemplateComponent[] }) => ({
-        id: t.id,
-        name: t.name,
-        language: t.language,
-        category: t.category,
-        status: t.status?.toLowerCase(),
-        components: t.components || [],
-      }))
+      templates: allTemplates,
+      countsByStatus,
     };
   } catch (error) {
     console.error('[list-templates] Meta API fetch error:', error);
@@ -351,6 +249,7 @@ async function fetchTemplatesFromMeta(wabaId: string, accessToken: string): Prom
 
 Deno.serve(async (req: Request) => {
   const requestId = crypto.randomUUID().slice(0, 8);
+  const startTime = Date.now();
   console.log(`[list-templates][${requestId}] Request started`);
   
   // Handle CORS preflight
@@ -475,7 +374,7 @@ Deno.serve(async (req: Request) => {
     const businessId = providerConfig?.business_id;
 
     // Build meta info for response
-    const metaInfo = {
+    const metaInfo: Record<string, unknown> = {
       request_id: requestId,
       channel_id,
       waba_id: wabaId || null,
@@ -504,21 +403,22 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    let templates: NotificaMeTemplate[] = [];
+    let templates: MetaTemplate[] = [];
     let fetchError: { code: string; message: string; details?: string } | undefined;
+    let countsByStatus: Record<string, number> = {};
 
     // ESTRATÉGIA ATUALIZADA:
-    // 1. Se tiver credenciais Meta (wabaId + accessToken), buscar DIRETAMENTE na Meta
+    // 1. Se tiver credenciais Meta (wabaId + accessToken), buscar DIRETAMENTE na Meta (TODOS OS STATUS)
     // 2. Se NÃO tiver Meta mas tiver NotificaMe, informar que precisa configurar Meta
-    // 3. NotificaMe NÃO suporta listagem de templates de forma confiável
 
     // Strategy 1: Meta API (PREFERRED - always use when available)
     if (wabaId && metaAccessToken) {
       console.log(`[list-templates][${requestId}] Using Meta API for WABA: ${wabaId}`);
-      const metaResult = await fetchTemplatesFromMeta(wabaId, metaAccessToken);
+      const metaResult = await fetchAllTemplatesFromMeta(wabaId, metaAccessToken);
       
       if (metaResult.success) {
         templates = metaResult.templates;
+        countsByStatus = metaResult.countsByStatus || {};
         metaInfo.source = 'meta';
       } else {
         fetchError = metaResult.error;
@@ -536,7 +436,7 @@ Deno.serve(async (req: Request) => {
           error: {
             code: 'META_TOKEN_REQUIRED',
             message: 'Configure o Access Token da Meta para listar templates',
-            details: 'Seu provedor (NotificaMe) não suporta listagem de templates. Para buscar templates aprovados diretamente da Meta, configure o WABA ID e Access Token nas configurações do canal.'
+            details: 'Seu provedor (NotificaMe) não suporta listagem de templates. Para buscar templates diretamente da Meta, configure o WABA ID e Access Token nas configurações do canal.'
           },
           meta: metaInfo,
           requires_meta_token: true,
@@ -545,20 +445,21 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Filter only approved templates
-    const approvedTemplates = templates.filter(t => 
-      !t.status || t.status.toLowerCase() === 'approved'
-    );
+    const durationMs = Date.now() - startTime;
+    metaInfo.duration_ms = durationMs;
+    metaInfo.counts_by_status = countsByStatus;
+    metaInfo.total_count = templates.length;
 
-    console.log(`[list-templates][${requestId}] Returning ${approvedTemplates.length} approved templates from ${metaInfo.source}`);
+    console.log(`[list-templates][${requestId}] Returning ${templates.length} templates from ${metaInfo.source} in ${durationMs}ms`);
 
-    // Transform templates to our format with auto-extracted variables
-    const transformedTemplates = approvedTemplates.map((t) => ({
+    // Transform ALL templates to our format (não filtrar por status!)
+    const transformedTemplates = templates.map((t) => ({
       external_id: t.id || t.name,
       name: t.name,
       language: t.language || 'pt_BR',
       category: (t.category || 'UTILITY').toUpperCase(),
-      status: (t.status || 'approved').toLowerCase(),
+      status: normalizeMetaStatus(t.status),
+      quality_score: t.quality_score?.score || null,
       components: t.components || [],
       variables_schema: generateVariablesSchema(t.components || []),
     }));
@@ -593,7 +494,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // No error, successfully queried Meta but found 0 approved templates
+    // No error, successfully queried Meta but found 0 templates
     if (metaInfo.source === 'meta') {
       return new Response(
         JSON.stringify({
@@ -601,7 +502,7 @@ Deno.serve(async (req: Request) => {
           success: true,
           templates: [],
           empty: true,
-          message: 'Nenhum template com status APPROVED encontrado nesta conta.',
+          message: 'Nenhum template encontrado nesta conta.',
           meta: metaInfo,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
