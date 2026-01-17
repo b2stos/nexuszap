@@ -417,9 +417,6 @@ function TemplatesContent() {
               <FileText className="h-5 w-5" />
               Templates Sincronizados
             </CardTitle>
-            <CardDescription>
-              Templates precisam estar aprovados pelo WhatsApp para serem usados em campanhas
-            </CardDescription>
           </CardHeader>
           <CardContent>
             {templatesLoading ? (
