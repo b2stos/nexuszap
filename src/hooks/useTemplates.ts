@@ -86,20 +86,19 @@ export function useCurrentTenantForTemplates() {
   });
 }
 
-// List only APPROVED templates (for main Templates page listing)
+// List ALL templates (all status, only meta source)
 export function useTemplates(tenantId: string | undefined) {
   return useQuery({
     queryKey: ['templates', tenantId],
     queryFn: async () => {
       if (!tenantId) return [];
       
-      // Buscar apenas templates APROVADOS
+      // Buscar TODOS os templates - sem filtro de status
       const { data, error } = await supabase
         .from('mt_templates')
         .select('*')
         .eq('tenant_id', tenantId)
         .eq('source', 'meta') // Only Meta templates
-        .eq('status', 'approved') // Only approved templates
         .order('name', { ascending: true });
       
       if (error) throw error;
