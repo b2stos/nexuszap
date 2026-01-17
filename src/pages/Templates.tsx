@@ -25,7 +25,14 @@ import {
   Flag,
   Scale,
   HelpCircle,
+  ArrowRight,
 } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -128,6 +135,26 @@ function StatusBadge({ status }: { status: string }) {
 function countByCategory(templates: Template[], category: StatusFilterCategory): number {
   if (category === 'all') return templates.length;
   return templates.filter(t => matchesFilterCategory(t.status, category)).length;
+}
+
+// Get tooltip message for CTA button based on status
+function getCtaTooltip(canonicalStatus: CanonicalTemplateStatus): string | null {
+  const tooltipMap: Record<CanonicalTemplateStatus, string | null> = {
+    'APPROVED': null, // No tooltip needed - button is enabled
+    'IN_REVIEW': 'Em análise na Meta — aguarde aprovação',
+    'REJECTED': 'Reprovado — ajuste e reenvie na Meta',
+    'PAUSED': 'Template pausado — reative na Meta',
+    'DISABLED': 'Template desativado pela Meta',
+    'IN_APPEAL': 'Em recurso — aguarde análise',
+    'FLAGGED': 'Template sinalizado — verifique na Meta',
+    'UNKNOWN': 'Status desconhecido — sincronize novamente',
+  };
+  return tooltipMap[canonicalStatus];
+}
+
+// Check if template status allows usage
+function isTemplateUsable(canonicalStatus: CanonicalTemplateStatus): boolean {
+  return canonicalStatus === 'APPROVED';
 }
 
 // Main content component (wrapped by error boundary)
@@ -285,15 +312,39 @@ function TemplatesContent() {
           />
         )}
 
-        {/* Info Alert */}
-        <Alert>
-          <Info className="h-4 w-4" />
-          <AlertDescription>
-            Templates são gerenciados diretamente no Meta Business Suite. 
-            Use o botão "Sincronizar da Meta" para importar todos os templates da sua conta.
-            Apenas templates aprovados podem ser usados em campanhas e no Inbox.
-          </AlertDescription>
-        </Alert>
+        {/* Last Sync Info + Help Alert */}
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <Alert className="flex-1">
+            <Info className="h-4 w-4" />
+            <AlertDescription>
+              Templates são gerenciados diretamente no Meta Business Suite. 
+              Apenas templates aprovados podem ser usados em campanhas.
+            </AlertDescription>
+          </Alert>
+          
+          {/* Last sync timestamp */}
+          {metaTemplates.length > 0 && (() => {
+            const latestSync = metaTemplates.reduce((latest, t) => {
+              const syncDate = (t as { last_synced_at?: string }).last_synced_at;
+              if (!syncDate) return latest;
+              return !latest || new Date(syncDate) > new Date(latest) ? syncDate : latest;
+            }, null as string | null);
+            
+            if (!latestSync) return null;
+            
+            return (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 px-3 py-2 rounded-md">
+                <RefreshCw className="h-4 w-4" />
+                <span>
+                  Última sincronização:{' '}
+                  <span className="font-medium">
+                    {format(new Date(latestSync), "dd/MM/yy 'às' HH:mm", { locale: ptBR })}
+                  </span>
+                </span>
+              </div>
+            );
+          })()}
+        </div>
 
         {/* Warning if no approved templates */}
         {metaTemplates.length > 0 && approvedCount === 0 && (
@@ -409,7 +460,7 @@ function TemplatesContent() {
                     <TableHead>Status</TableHead>
                     <TableHead className="hidden sm:table-cell">Variáveis</TableHead>
                     <TableHead className="hidden lg:table-cell">Sincronizado</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
+                    <TableHead className="text-right">Ação</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -483,15 +534,48 @@ function TemplatesContent() {
                           }
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => setPreviewTemplate(template)}
-                            title="Ver preview"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
+                          {(() => {
+                            const canonical = dbStatusToCanonical(template.status);
+                            const isUsable = isTemplateUsable(canonical);
+                            const tooltip = getCtaTooltip(canonical);
+                            
+                            const ctaButton = (
+                              <Button
+                                variant={isUsable ? "default" : "outline"}
+                                size="sm"
+                                className={isUsable 
+                                  ? "bg-primary hover:bg-primary/90" 
+                                  : "opacity-50 cursor-not-allowed"
+                                }
+                                disabled={!isUsable}
+                                onClick={() => {
+                                  if (isUsable) {
+                                    navigate(`/dashboard/campaigns/new?templateId=${template.id}`);
+                                  }
+                                }}
+                              >
+                                Prosseguir
+                                <ArrowRight className="h-4 w-4 ml-1" />
+                              </Button>
+                            );
+                            
+                            if (tooltip) {
+                              return (
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span className="inline-block">{ctaButton}</span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>{tooltip}</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              );
+                            }
+                            
+                            return ctaButton;
+                          })()}
                         </TableCell>
                       </TableRow>
                     );
