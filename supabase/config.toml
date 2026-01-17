@@ -41,3 +41,6 @@ verify_jwt = false
 
 [functions.fetch-meta-identifiers]
 verify_jwt = false
+
+[functions.revalidate-template-status]
+verify_jwt = false

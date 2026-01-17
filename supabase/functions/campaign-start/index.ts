@@ -329,14 +329,17 @@ Deno.serve(async (req) => {
       return createErrorResponse(traceId, 'NO_CONTACTS', 'Nenhum contato fornecido', 400, undefined, { enqueued: 0 });
     }
 
-    // 1. Fetch campaign WITH channel details for validation
-    console.log(`[campaign-start][${traceId}] Fetching campaign with channel...`);
+    // 1. Fetch campaign WITH channel and template details for validation
+    console.log(`[campaign-start][${traceId}] Fetching campaign with channel and template...`);
     const { data: campaign, error: campaignError } = await supabase
       .from('mt_campaigns')
       .select(`
         id, tenant_id, status, name, channel_id, template_id,
         channel:channels!inner(
           id, name, status, provider_config, provider_phone_id
+        ),
+        template:mt_templates!inner(
+          id, name, status, language
         )
       `)
       .eq('id', campaign_id)
@@ -356,6 +359,40 @@ Deno.serve(async (req) => {
         404,
         { db_error: campaignError?.message },
         { enqueued: 0 }
+      );
+    }
+
+    // 1.5. **CRITICAL: Validate template status (APPROVED only)**
+    // deno-lint-ignore no-explicit-any
+    const templateData = campaign.template as any;
+    const templateStatus = templateData?.status as string;
+    const templateName = templateData?.name as string;
+    
+    console.log(`[campaign-start][${traceId}] Template "${templateName}" status: ${templateStatus}`);
+    
+    if (templateStatus !== 'approved') {
+      console.error(`[campaign-start][${traceId}] Template not approved: ${templateStatus}`);
+      await saveAttemptLog(campaign_id, campaign.tenant_id, campaign.channel_id, templateName, 'validate_template', {
+        errorCode: 'TEMPLATE_NOT_APPROVED',
+        errorMessage: `Template "${templateName}" não está aprovado (status: ${templateStatus})`,
+        recipientsCount: contacts.length,
+      });
+      
+      const statusMessages: Record<string, string> = {
+        'pending': 'em análise na Meta. Aguarde aprovação.',
+        'rejected': 'foi reprovado pela Meta. Corrija e reenvie.',
+        'paused': 'está pausado.',
+        'disabled': 'está desativado.',
+      };
+      const statusMessage = statusMessages[templateStatus] || `tem status "${templateStatus}".`;
+      
+      return createErrorResponse(
+        traceId,
+        'TEMPLATE_NOT_APPROVED',
+        `Template "${templateName}" ${statusMessage}`,
+        400,
+        'Apenas templates aprovados podem ser usados em campanhas.',
+        { enqueued: 0, template_status: templateStatus }
       );
     }
 
