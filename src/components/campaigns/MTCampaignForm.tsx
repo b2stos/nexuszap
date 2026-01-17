@@ -27,7 +27,7 @@ import {
   Save,
 } from "lucide-react";
 import { useChannels } from "@/hooks/useChannels";
-import { useApprovedTemplates } from "@/hooks/useTemplates";
+import { useApprovedTemplates, useTemplates } from "@/hooks/useTemplates";
 import { useCreateMTCampaign, useStartCampaign, useCurrentTenantForCampaigns } from "@/hooks/useMTCampaigns";
 import { CampaignRecipients } from "./CampaignRecipients";
 import { CampaignConfirmDialog } from "./CampaignConfirmDialog";
@@ -65,14 +65,14 @@ const ChannelOption = memo(function ChannelOption({
   );
 });
 
-// Custom dropdown selector for templates (avoids Radix ref issues)
+// Custom dropdown selector for templates with status awareness
 const TemplateDropdown = memo(function TemplateDropdown({
   templates,
   selectedId,
   onSelect,
   isLoading,
 }: {
-  templates: Array<{ id: string; name: string; category: string }>;
+  templates: Array<{ id: string; name: string; category: string; status: string }>;
   selectedId: string;
   onSelect: (id: string) => void;
   isLoading: boolean;
@@ -95,6 +95,25 @@ const TemplateDropdown = memo(function TemplateDropdown({
   }, [isOpen]);
   
   const selectedTemplate = templates.find(t => t.id === selectedId);
+  const approvedTemplates = templates.filter(t => t.status === 'approved');
+  const pendingTemplates = templates.filter(t => t.status !== 'approved');
+  
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, string> = {
+      'approved': 'Aprovado',
+      'pending': 'Em análise',
+      'rejected': 'Reprovado',
+    };
+    return labels[status] || status;
+  };
+  
+  const getStatusTooltip = (status: string) => {
+    const tooltips: Record<string, string> = {
+      'pending': 'Em análise na Meta — aguarde aprovação',
+      'rejected': 'Reprovado — ajuste e reenvie na Meta',
+    };
+    return tooltips[status] || 'Não disponível para campanhas';
+  };
   
   if (isLoading) {
     return (
@@ -108,14 +127,22 @@ const TemplateDropdown = memo(function TemplateDropdown({
   if (templates.length === 0) {
     return (
       <div className="p-4 text-center text-sm text-muted-foreground bg-muted/30 rounded-md border">
-        Nenhum template aprovado encontrado
+        Nenhum template encontrado. Sincronize da Meta.
+      </div>
+    );
+  }
+  
+  if (approvedTemplates.length === 0) {
+    return (
+      <div className="p-4 text-center text-sm bg-yellow-500/10 border border-yellow-500/30 rounded-md">
+        <AlertCircle className="h-4 w-4 text-yellow-600 inline mr-2" />
+        <span className="text-yellow-700">Nenhum template aprovado. Aguarde aprovação da Meta.</span>
       </div>
     );
   }
   
   return (
     <div ref={dropdownRef} className="relative">
-      {/* Trigger button - looks like a select */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
@@ -124,17 +151,17 @@ const TemplateDropdown = memo(function TemplateDropdown({
         <span className={selectedTemplate ? 'text-foreground' : 'text-muted-foreground'}>
           {selectedTemplate 
             ? `${selectedTemplate.category} - ${selectedTemplate.name}` 
-            : 'Selecione um template'
+            : 'Selecione um template aprovado'
           }
         </span>
         <ChevronDown className={`h-4 w-4 opacity-50 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
       
-      {/* Dropdown menu */}
       {isOpen && (
         <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover text-popover-foreground shadow-md max-h-[300px] overflow-y-auto">
           <div className="p-1">
-            {templates.map((template) => (
+            {/* Approved templates (selectable) */}
+            {approvedTemplates.map((template) => (
               <div
                 key={template.id}
                 onClick={() => {
@@ -152,8 +179,34 @@ const TemplateDropdown = memo(function TemplateDropdown({
                   {template.category}
                 </Badge>
                 <span>{template.name}</span>
+                <Badge className="ml-auto bg-green-500/20 text-green-700 text-xs">Aprovado</Badge>
               </div>
             ))}
+            
+            {/* Pending/rejected templates (disabled) */}
+            {pendingTemplates.length > 0 && (
+              <>
+                <div className="px-2 py-1 text-xs text-muted-foreground border-t mt-1 pt-2">
+                  Não disponíveis
+                </div>
+                {pendingTemplates.map((template) => (
+                  <div
+                    key={template.id}
+                    title={getStatusTooltip(template.status)}
+                    className="relative flex select-none items-center rounded-sm px-2 py-2 text-sm text-muted-foreground/60 cursor-not-allowed opacity-60"
+                  >
+                    <span className="mr-2 flex h-4 w-4 items-center justify-center" />
+                    <Badge variant="outline" className="mr-2 text-xs opacity-50">
+                      {template.category}
+                    </Badge>
+                    <span className="line-through">{template.name}</span>
+                    <Badge className={`ml-auto text-xs ${template.status === 'pending' ? 'bg-yellow-500/20 text-yellow-700' : 'bg-red-500/20 text-red-700'}`}>
+                      {getStatusLabel(template.status)}
+                    </Badge>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         </div>
       )}
@@ -183,7 +236,7 @@ export function MTCampaignForm() {
   
   // Data fetching - only enable when tenantId is available
   const { data: channels, isLoading: channelsLoading } = useChannels(tenantId);
-  const { data: templates, isLoading: templatesLoading } = useApprovedTemplates(tenantId);
+  const { data: templates, isLoading: templatesLoading } = useTemplates(tenantId);
   const { data: sentLast24h = 0 } = useSentLast24Hours(tenantId);
   
   // Mutations
