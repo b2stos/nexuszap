@@ -144,6 +144,10 @@ All colors MUST be HSL.
   height: calc(100dvh - 4rem);
   /* Ensure proper flex behavior */
   min-height: 0;
+  /* CRITICAL: Prevent content from rendering "behind" */
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
 }
 
 /* Fix for iOS Safari address bar changes */
@@ -157,4 +161,48 @@ All colors MUST be HSL.
 .ios-scroll {
   -webkit-overflow-scrolling: touch;
   overflow-y: auto;
+}
+
+/* =============================================
+   Inbox Layout Stability - Prevent visual bugs
+   ============================================= */
+
+/* Ensure all inbox columns have proper stacking */
+.inbox-container > div {
+  position: relative;
+  z-index: 1;
+}
+
+/* Conversation list sidebar */
+.inbox-container aside {
+  position: relative;
+  z-index: 2;
+  background-color: hsl(var(--card));
+}
+
+/* Chat window main area */
+.inbox-container main {
+  position: relative;
+  z-index: 1;
+  background-color: hsl(var(--background));
+  /* Prevent content overflow causing visual glitches */
+  overflow: hidden;
+}
+
+/* Contact panel (right sidebar) */
+.inbox-container aside:last-child {
+  position: relative;
+  z-index: 2;
+  background-color: hsl(var(--card));
+}
+
+/* ScrollArea fix for chat messages - prevent content escaping */
+.inbox-container [data-radix-scroll-area-viewport] {
+  contain: strict;
+}
+
+/* Message bubble container - prevent layout shifts */
+.inbox-container .message-bubble-container {
+  transform: translateZ(0);
+  will-change: transform;
 }
