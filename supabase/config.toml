@@ -44,3 +44,9 @@ verify_jwt = false
 
 [functions.revalidate-template-status]
 verify_jwt = false
+
+[functions.campaign-status-poll]
+verify_jwt = false
+
+[functions.admin-delete-user]
+verify_jwt = false

@@ -28,12 +28,12 @@ import {
   Webhook,
   RefreshCw,
   Activity,
-  TrendingUp,
+  XCircle,
   Info,
-  ExternalLink,
-  Zap,
+  CreditCard,
+  AlertCircle,
 } from 'lucide-react';
-import { formatDistanceToNow, format, differenceInMinutes } from 'date-fns';
+import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -42,15 +42,24 @@ interface CampaignHealthPanelProps {
   tenantId: string;
 }
 
+interface WebhookError {
+  code: string;
+  message: string;
+  count: number;
+}
+
 interface HealthStats {
   totalSent: number;
   delivered: number;
   read: number;
   failed: number;
-  pendingConfirmation: number; // sent but no webhook yet
+  pendingConfirmation: number;
   lastWebhookAt: string | null;
   webhookHealthy: boolean;
   minutesSinceLastWebhook: number | null;
+  recentErrors: WebhookError[];
+  hasPaymentIssue: boolean;
+  orphanWebhooks: number;
 }
 
 export function CampaignHealthPanel({ campaignId, tenantId }: CampaignHealthPanelProps) {
@@ -60,39 +69,84 @@ export function CampaignHealthPanel({ campaignId, tenantId }: CampaignHealthPane
       // 1. Buscar contadores da campanha
       const { data: recipients, error: recipientsError } = await supabase
         .from('campaign_recipients')
-        .select('status, sent_at, delivered_at, read_at, updated_at')
+        .select('status, sent_at, delivered_at, read_at, provider_message_id, last_error')
         .eq('campaign_id', campaignId);
       
       if (recipientsError) throw recipientsError;
       
-      const totalSent = recipients?.filter(r => r.status === 'sent' || r.status === 'delivered' || r.status === 'read').length || 0;
-      const delivered = recipients?.filter(r => r.status === 'delivered' || r.status === 'read').length || 0;
+      const totalSent = recipients?.filter(r => 
+        r.status === 'sent' || r.status === 'delivered' || r.status === 'read'
+      ).length || 0;
+      const delivered = recipients?.filter(r => 
+        r.status === 'delivered' || r.status === 'read'
+      ).length || 0;
       const read = recipients?.filter(r => r.status === 'read').length || 0;
       const failed = recipients?.filter(r => r.status === 'failed').length || 0;
-      
-      // Mensagens "sent" mas sem delivered = pendente de confirmação
       const pendingConfirmation = recipients?.filter(r => r.status === 'sent').length || 0;
       
-      // 2. Buscar último webhook de status recebido
-      const { data: lastWebhook } = await supabase
-        .from('mt_webhook_events')
-        .select('received_at, event_type')
-        .eq('tenant_id', tenantId)
-        .ilike('event_type', '%status%')
-        .order('received_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      // Coletar IDs das mensagens da campanha
+      const campaignMessageIds = recipients
+        ?.map(r => r.provider_message_id)
+        .filter(Boolean) || [];
       
-      const lastWebhookAt = lastWebhook?.received_at || null;
+      // 2. Buscar webhooks recentes do tenant
+      const { data: recentWebhooks } = await supabase
+        .from('mt_webhook_events')
+        .select('received_at, message_id, payload_raw')
+        .eq('tenant_id', tenantId)
+        .order('received_at', { ascending: false })
+        .limit(50);
+      
+      // Encontrar último webhook e analisar erros
+      const lastWebhookAt = recentWebhooks?.[0]?.received_at || null;
+      
+      // Contar webhooks órfãos (IDs que não pertencem à campanha)
+      let orphanWebhooks = 0;
+      const errorCounts: Record<string, WebhookError> = {};
+      let hasPaymentIssue = false;
+      
+      recentWebhooks?.forEach(webhook => {
+        const messageId = webhook.message_id;
+        
+        // Verificar se é órfão (não pertence à campanha atual)
+        if (messageId && !campaignMessageIds.includes(messageId)) {
+          orphanWebhooks++;
+        }
+        
+        // Analisar erros
+        const payloadRaw = webhook.payload_raw as Record<string, unknown>;
+        const body = payloadRaw?.body as Record<string, unknown>;
+        const messageStatus = body?.messageStatus as Record<string, unknown>;
+        
+        if (messageStatus?.code === 'ERROR') {
+          const error = messageStatus.error as Record<string, unknown>;
+          const errorCode = String(error?.code || 'UNKNOWN');
+          const errorMessage = String(error?.message || error?.details || 'Erro desconhecido');
+          
+          // Detectar problema de pagamento
+          if (errorCode === '131042') {
+            hasPaymentIssue = true;
+          }
+          
+          if (!errorCounts[errorCode]) {
+            errorCounts[errorCode] = { code: errorCode, message: errorMessage, count: 0 };
+          }
+          errorCounts[errorCode].count++;
+        }
+      });
+      
+      const recentErrors = Object.values(errorCounts).sort((a, b) => b.count - a.count);
+      
+      // Calcular saúde do webhook
       let minutesSinceLastWebhook: number | null = null;
       let webhookHealthy = true;
       
       if (lastWebhookAt) {
-        minutesSinceLastWebhook = differenceInMinutes(new Date(), new Date(lastWebhookAt));
-        // Se enviamos mensagens e não recebemos webhook em 5+ minutos, não é saudável
+        minutesSinceLastWebhook = Math.round(
+          (Date.now() - new Date(lastWebhookAt).getTime()) / 60000
+        );
         webhookHealthy = minutesSinceLastWebhook < 10 || totalSent === 0;
       } else if (totalSent > 0) {
-        // Enviamos mas nunca recebemos webhook
         webhookHealthy = false;
       }
       
@@ -105,9 +159,12 @@ export function CampaignHealthPanel({ campaignId, tenantId }: CampaignHealthPane
         lastWebhookAt,
         webhookHealthy,
         minutesSinceLastWebhook,
+        recentErrors,
+        hasPaymentIssue,
+        orphanWebhooks,
       };
     },
-    refetchInterval: 10000, // Atualiza a cada 10s
+    refetchInterval: 10000,
     staleTime: 5000,
   });
   
@@ -163,6 +220,18 @@ export function CampaignHealthPanel({ campaignId, tenantId }: CampaignHealthPane
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Payment Issue Alert - Critical */}
+        {stats.hasPaymentIssue && (
+          <Alert variant="destructive" className="bg-red-500/10 border-red-500/50">
+            <CreditCard className="h-4 w-4" />
+            <AlertTitle>Problema de Pagamento Detectado</AlertTitle>
+            <AlertDescription className="text-sm">
+              A Meta retornou erro <strong>131042</strong> (Business eligibility payment issue).
+              As mensagens não estão sendo entregues. Verifique o pagamento da sua conta Meta Business.
+            </AlertDescription>
+          </Alert>
+        )}
+        
         {/* Stats Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <TooltipProvider>
@@ -211,22 +280,52 @@ export function CampaignHealthPanel({ campaignId, tenantId }: CampaignHealthPane
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className={`p-2 rounded-lg text-center cursor-help ${
+                  stats.failed > 0 ? 'bg-red-500/10' : 
                   stats.pendingConfirmation > 0 ? 'bg-orange-500/10' : 'bg-muted'
                 }`}>
                   <p className={`text-lg font-bold ${
+                    stats.failed > 0 ? 'text-red-600' :
                     stats.pendingConfirmation > 0 ? 'text-orange-600' : 'text-muted-foreground'
                   }`}>
-                    {stats.pendingConfirmation}
+                    {stats.failed > 0 ? stats.failed : stats.pendingConfirmation}
                   </p>
-                  <p className="text-xs text-muted-foreground">Pendentes</p>
+                  <p className="text-xs text-muted-foreground">
+                    {stats.failed > 0 ? 'Falhas' : 'Pendentes'}
+                  </p>
                 </div>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Aguardando confirmação do provedor (webhook)</p>
+                {stats.failed > 0 ? (
+                  <p>{stats.failed} mensagens falharam</p>
+                ) : (
+                  <p>Aguardando confirmação do provedor (webhook)</p>
+                )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
+        
+        {/* Recent Errors Summary */}
+        {stats.recentErrors.length > 0 && (
+          <div className="p-3 rounded-lg bg-red-500/5 border border-red-500/20 space-y-2">
+            <div className="flex items-center gap-2 text-red-700">
+              <AlertCircle className="h-4 w-4" />
+              <span className="text-sm font-medium">Erros Recentes</span>
+            </div>
+            <div className="space-y-1">
+              {stats.recentErrors.slice(0, 3).map((error) => (
+                <div key={error.code} className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground truncate flex-1">
+                    <Badge variant="outline" className="mr-1 text-[10px]">{error.code}</Badge>
+                    {error.message.substring(0, 50)}
+                    {error.message.length > 50 && '...'}
+                  </span>
+                  <Badge variant="secondary" className="ml-2">{error.count}x</Badge>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         
         {/* Webhook Health Indicator */}
         <div className={`p-3 rounded-lg flex items-center gap-3 ${
@@ -255,16 +354,18 @@ export function CampaignHealthPanel({ campaignId, tenantId }: CampaignHealthPane
               )}
             </p>
           </div>
-          {!stats.webhookHealthy && stats.pendingConfirmation > 0 && (
+          {stats.orphanWebhooks > 0 && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Info className="h-4 w-4 text-orange-600 flex-shrink-0 cursor-help" />
+                  <Badge variant="outline" className="text-[10px] cursor-help">
+                    {stats.orphanWebhooks} órfãos
+                  </Badge>
                 </TooltipTrigger>
                 <TooltipContent className="max-w-xs">
                   <p className="text-sm">
-                    Há {stats.pendingConfirmation} mensagens aguardando confirmação de entrega.
-                    Se persistir, verifique a configuração do webhook no painel NotificaMe.
+                    {stats.orphanWebhooks} webhooks recebidos não pertencem a esta campanha.
+                    Podem ser de campanhas anteriores ou de outro sistema.
                   </p>
                 </TooltipContent>
               </Tooltip>
@@ -273,7 +374,7 @@ export function CampaignHealthPanel({ campaignId, tenantId }: CampaignHealthPane
         </div>
         
         {/* Alert for pending confirmations */}
-        {!stats.webhookHealthy && stats.pendingConfirmation > 0 && stats.totalSent > 5 && (
+        {!stats.webhookHealthy && stats.pendingConfirmation > 0 && stats.totalSent > 3 && !stats.hasPaymentIssue && (
           <Alert variant="default" className="bg-orange-500/5 border-orange-500/30">
             <AlertTriangle className="h-4 w-4 text-orange-600" />
             <AlertTitle className="text-orange-700">Confirmações Pendentes</AlertTitle>
@@ -298,7 +399,9 @@ export function CampaignHealthPanel({ campaignId, tenantId }: CampaignHealthPane
             </div>
             <div className="h-2 bg-muted rounded-full overflow-hidden">
               <div 
-                className="h-full bg-green-500 transition-all duration-500"
+                className={`h-full transition-all duration-500 ${
+                  stats.hasPaymentIssue ? 'bg-red-500' : 'bg-green-500'
+                }`}
                 style={{ width: `${deliveryRate}%` }}
               />
             </div>
