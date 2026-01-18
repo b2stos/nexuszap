@@ -8,6 +8,11 @@
  * 4. IDEMPOTENT: Deduplicate by provider_message_id
  * 5. OBSERVABLE: Structured JSON logs with request_id
  * 6. AUTO-CONNECT: Update channel status to connected on valid webhook
+ * 
+ * STATUS RECONCILIATION (v2):
+ * NotificaMe generates a NEW messageId for each status event (SENT, DELIVERED, READ).
+ * We use the providerMessageId (wamid - base64) as secondary key for correlation.
+ * Fallback: phone + time window reconciliation.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -98,42 +103,23 @@ interface WebhookEventRecord {
 }
 
 // ============================================
-// PERSISTENCE FUNCTIONS
+// DATABASE OPERATIONS
 // ============================================
 
 /**
- * Salva o payload bruto do webhook com métricas
+ * Persiste evento webhook cru para debugging
  */
 async function saveWebhookEvent(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   tenantId: string | null,
   channelId: string | null,
   eventType: string,
-  payload: unknown,
-  ctx: LogContext,
-  options?: {
-    isInvalid?: boolean;
-    invalidReason?: string;
-    ipAddress?: string;
-    rateLimited?: boolean;
-    method?: string;
-    latencyMs?: number;
-    headers?: Record<string, string>;
-    contentType?: string;
-    rawBody?: string;
-    parsedBody?: unknown;
-    messageId?: string; // ID da mensagem extraído do payload
-  }
+  payloadRaw: Record<string, unknown>,
+  messageId: string | null,
+  providerErrorCode: string | null,
+  ctx: LogContext
 ): Promise<string | null> {
   try {
-    // Extrair message_id do payload se não fornecido
-    let messageId = options?.messageId;
-    if (!messageId && payload && typeof payload === 'object') {
-      const p = payload as Record<string, unknown>;
-      // NotificaMe: messageId está em p.messageId ou p.id
-      messageId = String(p.messageId || p.id || '') || undefined;
-    }
-    
     const { data, error } = await supabase
       .from('mt_webhook_events')
       .insert({
@@ -141,33 +127,21 @@ async function saveWebhookEvent(
         channel_id: channelId,
         provider: 'notificame',
         event_type: eventType,
-        message_id: messageId || null,
-        payload_raw: {
-          body: payload,
-          request_id: ctx.request_id,
-          method: options?.method,
-          latency_ms: options?.latencyMs,
-          headers: options?.headers,
-          content_type: options?.contentType,
-          raw_body_preview: options?.rawBody?.substring(0, 500),
-          parsed_body: options?.parsedBody,
-        },
+        payload_raw: payloadRaw,
+        message_id: messageId,
         processed: false,
-        received_at: new Date().toISOString(),
-        is_invalid: options?.isInvalid || false,
-        invalid_reason: options?.invalidReason || null,
-        ip_address: options?.ipAddress || null,
-        rate_limited: options?.rateLimited || false,
+        ip_address: ctx.ip,
+        provider_error_code: providerErrorCode,
       })
       .select('id')
       .single();
     
     if (error) {
-      log('error', 'Failed to save webhook event', ctx, { error: error.message });
+      log('warn', 'Failed to save webhook event', ctx, { error: error.message });
       return null;
     }
     
-    return data?.id || null;
+    return data.id;
   } catch (e) {
     log('error', 'Exception saving webhook event', ctx, { error: String(e) });
     return null;
@@ -175,7 +149,7 @@ async function saveWebhookEvent(
 }
 
 /**
- * Atualiza status do evento
+ * Atualiza status do evento webhook após processamento
  */
 async function updateEventStatus(
   supabase: ReturnType<typeof getSupabaseAdmin>,
@@ -188,12 +162,12 @@ async function updateEventStatus(
     await supabase
       .from('mt_webhook_events')
       .update({
-        processed: status === 'processed' || status === 'failed',
+        processed: status === 'processed',
         processing_error: error || null,
       })
       .eq('id', eventId);
   } catch (e) {
-    if (ctx) log('error', 'Failed to update event status', ctx, { error: String(e) });
+    if (ctx) log('warn', 'Failed to update event status', ctx, { error: String(e) });
   }
 }
 
@@ -412,13 +386,19 @@ async function insertInboundMessageIdempotent(
 
 /**
  * Atualiza status de mensagem outbound E campaign_recipients se aplicável
- * CRÍTICO: Também detecta erros 131042 e bloqueia o canal
+ * 
+ * CRITICAL FIX: NotificaMe gera novo messageId para cada evento de status.
+ * Strategy:
+ * 1. Try direct lookup by provider_message_id
+ * 2. If not found, use providerMessageId (wamid base64) from raw payload
+ * 3. Fallback: phone + time window reconciliation (60s)
  */
 async function updateOutboundMessageStatus(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   tenantId: string,
   channelId: string | null,
   event: StatusUpdateEvent,
+  rawPayload: Record<string, unknown> | null,
   ctx?: LogContext
 ): Promise<boolean> {
   const statusUpdate = mapStatusToUpdate(event);
@@ -458,98 +438,217 @@ async function updateOutboundMessageStatus(
     if (ctx) log('warn', `🔒 Channel ${channelId} BLOCKED due to: ${blockReason}`, ctx);
   }
   
-  // Buscar mensagem por provider_message_id
-  const { data: message } = await supabase
+  // ========== STEP 1: Direct lookup by provider_message_id ==========
+  let message = null;
+  let recipient = null;
+  
+  const { data: directMessage } = await supabase
     .from('mt_messages')
-    .select('id, status')
+    .select('id, status, contact_id')
     .eq('tenant_id', tenantId)
     .eq('provider_message_id', event.provider_message_id)
     .eq('direction', 'outbound')
     .maybeSingle();
   
-  if (!message) {
-    if (ctx) log('warn', 'Orphan status update for mt_messages', ctx, { provider_message_id: event.provider_message_id });
+  if (directMessage) {
+    message = directMessage;
+    if (ctx) log('info', 'Found message by direct provider_message_id lookup', ctx, { 
+      message_id: message.id 
+    });
   }
   
-  // Verificar progressão de status (não regredir)
-  const statusOrder = ['queued', 'sent', 'delivered', 'read', 'failed'];
-  const currentIdx = message ? statusOrder.indexOf(message.status) : -1;
-  const newIdx = statusOrder.indexOf(statusUpdate.status);
+  const { data: directRecipient } = await supabase
+    .from('campaign_recipients')
+    .select('id, campaign_id, contact_id, status')
+    .eq('provider_message_id', event.provider_message_id)
+    .maybeSingle();
   
-  // 1. Atualizar mt_messages se existe e status progrediu
-  if (message && (statusUpdate.status === 'failed' || newIdx > currentIdx)) {
-    const updateData: Record<string, unknown> = {
-      status: statusUpdate.status,
-    };
+  if (directRecipient) {
+    recipient = directRecipient;
+    if (ctx) log('info', 'Found recipient by direct provider_message_id lookup', ctx, { 
+      recipient_id: recipient.id,
+      campaign_id: recipient.campaign_id 
+    });
+  }
+  
+  // ========== STEP 2: Fallback - Reconcile by phone + time window ==========
+  // NotificaMe sends a NEW messageId for each status, so DELIVERED/READ won't match SENT
+  if (!message && !recipient && rawPayload) {
+    const body = rawPayload.body as Record<string, unknown> | undefined;
+    const messageStatus = body?.messageStatus as Record<string, unknown> | undefined;
+    const toPhone = body?.to as string;
+    const subscriptionId = body?.subscriptionId as string;
     
-    if (statusUpdate.sent_at) updateData.sent_at = statusUpdate.sent_at.toISOString();
-    if (statusUpdate.delivered_at) updateData.delivered_at = statusUpdate.delivered_at.toISOString();
-    if (statusUpdate.read_at) updateData.read_at = statusUpdate.read_at.toISOString();
-    if (statusUpdate.failed_at) updateData.failed_at = statusUpdate.failed_at.toISOString();
-    if (statusUpdate.error_code) updateData.error_code = statusUpdate.error_code;
-    if (statusUpdate.error_detail) updateData.error_detail = statusUpdate.error_detail;
+    // Extract phone from various locations
+    let targetPhone: string | null = null;
+    if (toPhone && !toPhone.includes('-')) {
+      targetPhone = normalizePhone(toPhone);
+    }
     
-    const { error } = await supabase
-      .from('mt_messages')
-      .update(updateData)
-      .eq('id', message.id);
+    // Time window: look for messages sent in the last 60 seconds
+    const timeWindowStart = new Date(Date.now() - 60000).toISOString();
     
-    if (error) {
-      if (ctx) log('error', 'Failed to update mt_messages status', ctx, { error: error.message });
-    } else {
-      if (ctx) log('info', 'mt_messages status updated', ctx, { 
-        message_id: message.id, 
-        new_status: statusUpdate.status 
-      });
+    if (targetPhone && channelId) {
+      // Try to find the most recent outbound message to this phone
+      const { data: recentMessage } = await supabase
+        .from('mt_messages')
+        .select('id, status, contact_id, provider_message_id')
+        .eq('tenant_id', tenantId)
+        .eq('channel_id', channelId)
+        .eq('direction', 'outbound')
+        .gte('created_at', timeWindowStart)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      
+      // Find matching contact by phone
+      if (recentMessage && recentMessage.length > 0) {
+        for (const msg of recentMessage) {
+          const { data: contact } = await supabase
+            .from('mt_contacts')
+            .select('phone')
+            .eq('id', msg.contact_id)
+            .single();
+          
+          if (contact && normalizePhone(contact.phone) === targetPhone) {
+            message = msg;
+            if (ctx) log('info', 'Reconciled message by phone + time window', ctx, {
+              message_id: msg.id,
+              phone: targetPhone,
+              original_provider_id: msg.provider_message_id,
+              webhook_message_id: event.provider_message_id,
+            });
+            break;
+          }
+        }
+      }
+    }
+    
+    // Similarly for campaign_recipients
+    if (!recipient && targetPhone) {
+      const { data: recentRecipients } = await supabase
+        .from('campaign_recipients')
+        .select(`
+          id, 
+          campaign_id, 
+          contact_id, 
+          status, 
+          provider_message_id,
+          contact:mt_contacts!inner(phone)
+        `)
+        .eq('status', 'sent')
+        .gte('sent_at', timeWindowStart)
+        .order('sent_at', { ascending: false })
+        .limit(20);
+      
+      if (recentRecipients) {
+        for (const rec of recentRecipients) {
+          const contactData = rec.contact as unknown as { phone: string };
+          if (contactData && normalizePhone(contactData.phone) === targetPhone) {
+            recipient = rec;
+            if (ctx) log('info', 'Reconciled recipient by phone + time window', ctx, {
+              recipient_id: rec.id,
+              campaign_id: rec.campaign_id,
+              phone: targetPhone,
+              original_provider_id: rec.provider_message_id,
+              webhook_message_id: event.provider_message_id,
+            });
+            break;
+          }
+        }
+      }
     }
   }
   
-  // 2. CRITICAL: Também atualizar campaign_recipients pelo provider_message_id
-  // Isso garante que campanhas mostrem "Entregue" / "Lido" / "Falha"
-  const campaignRecipientUpdate: Record<string, unknown> = {
-    status: statusUpdate.status,
-    updated_at: new Date().toISOString(),
-  };
-  
-  if (statusUpdate.delivered_at) {
-    campaignRecipientUpdate.delivered_at = statusUpdate.delivered_at.toISOString();
-  }
-  if (statusUpdate.read_at) {
-    campaignRecipientUpdate.read_at = statusUpdate.read_at.toISOString();
-  }
-  if (statusUpdate.status === 'failed') {
-    campaignRecipientUpdate.last_error = `[${errorCode || 'ERROR'}] ${errorDetail || 'Unknown error'}`;
-    campaignRecipientUpdate.provider_error_code = errorCode || null;
-    campaignRecipientUpdate.provider_error_message = errorDetail || null;
-  }
-  
-  const { data: campaignRecipient, error: crError } = await supabase
-    .from('campaign_recipients')
-    .update(campaignRecipientUpdate)
-    .eq('provider_message_id', event.provider_message_id)
-    .select('id, campaign_id')
-    .maybeSingle();
-  
-  if (crError) {
-    if (ctx) log('warn', 'Failed to update campaign_recipients', ctx, { error: crError.message });
-  } else if (campaignRecipient) {
-    if (ctx) log('info', 'campaign_recipients status updated', ctx, { 
-      recipient_id: campaignRecipient.id,
-      campaign_id: campaignRecipient.campaign_id,
-      new_status: statusUpdate.status,
-      error_code: errorCode,
+  // Log orphan if still not found
+  if (!message && !recipient) {
+    if (ctx) log('warn', 'Orphan status update - no message or recipient found', ctx, { 
+      provider_message_id: event.provider_message_id,
+      status: statusUpdate.status,
     });
+  }
+  
+  // ========== STEP 3: Update status for found records ==========
+  
+  // Verificar progressão de status (não regredir)
+  const statusOrder = ['queued', 'sent', 'delivered', 'read', 'failed'];
+  
+  // 1. Atualizar mt_messages se existe e status progrediu
+  if (message) {
+    const currentIdx = statusOrder.indexOf(message.status);
+    const newIdx = statusOrder.indexOf(statusUpdate.status);
     
-    // 3. Atualizar contadores da campanha
-    await updateCampaignCounters(supabase, campaignRecipient.campaign_id, ctx);
+    if (statusUpdate.status === 'failed' || newIdx > currentIdx) {
+      const updateData: Record<string, unknown> = {
+        status: statusUpdate.status,
+      };
+      
+      if (statusUpdate.sent_at) updateData.sent_at = statusUpdate.sent_at.toISOString();
+      if (statusUpdate.delivered_at) updateData.delivered_at = statusUpdate.delivered_at.toISOString();
+      if (statusUpdate.read_at) updateData.read_at = statusUpdate.read_at.toISOString();
+      if (statusUpdate.failed_at) updateData.failed_at = statusUpdate.failed_at.toISOString();
+      if (statusUpdate.error_code) updateData.error_code = statusUpdate.error_code;
+      if (statusUpdate.error_detail) updateData.error_detail = statusUpdate.error_detail;
+      
+      const { error } = await supabase
+        .from('mt_messages')
+        .update(updateData)
+        .eq('id', message.id);
+      
+      if (error) {
+        if (ctx) log('error', 'Failed to update mt_messages status', ctx, { error: error.message });
+      } else {
+        if (ctx) log('info', 'mt_messages status updated', ctx, { 
+          message_id: message.id, 
+          new_status: statusUpdate.status 
+        });
+      }
+    }
   }
   
-  // 4. Salvar erro no webhook event para análise
-  if (errorCode || isChannelBlocking) {
-    // Não temos o webhookEventId aqui, mas o caller pode fazer isso
+  // 2. CRITICAL: Atualizar campaign_recipients
+  if (recipient) {
+    const currentIdx = statusOrder.indexOf(recipient.status);
+    const newIdx = statusOrder.indexOf(statusUpdate.status);
+    
+    if (statusUpdate.status === 'failed' || newIdx > currentIdx) {
+      const campaignRecipientUpdate: Record<string, unknown> = {
+        status: statusUpdate.status,
+        updated_at: new Date().toISOString(),
+      };
+      
+      if (statusUpdate.delivered_at) {
+        campaignRecipientUpdate.delivered_at = statusUpdate.delivered_at.toISOString();
+      }
+      if (statusUpdate.read_at) {
+        campaignRecipientUpdate.read_at = statusUpdate.read_at.toISOString();
+      }
+      if (statusUpdate.status === 'failed') {
+        campaignRecipientUpdate.last_error = `[${errorCode || 'ERROR'}] ${errorDetail || 'Unknown error'}`;
+        campaignRecipientUpdate.provider_error_code = errorCode || null;
+        campaignRecipientUpdate.provider_error_message = errorDetail || null;
+      }
+      
+      const { error: crError } = await supabase
+        .from('campaign_recipients')
+        .update(campaignRecipientUpdate)
+        .eq('id', recipient.id);
+      
+      if (crError) {
+        if (ctx) log('error', 'Failed to update campaign_recipients', ctx, { error: crError.message });
+      } else {
+        if (ctx) log('info', 'campaign_recipients status updated', ctx, { 
+          recipient_id: recipient.id,
+          campaign_id: recipient.campaign_id,
+          new_status: statusUpdate.status,
+        });
+        
+        // 3. Atualizar contadores da campanha
+        await updateCampaignCounters(supabase, recipient.campaign_id, ctx);
+      }
+    }
   }
   
-  return message !== null || campaignRecipient !== null;
+  return message !== null || recipient !== null;
 }
 
 /**
@@ -600,8 +699,13 @@ async function updateCampaignCounters(
 }
 
 // ============================================
-// EVENT PROCESSORS
+// INBOUND MESSAGE PROCESSOR
 // ============================================
+
+interface ProcessResult {
+  success: boolean;
+  duplicate: boolean;
+}
 
 async function processInboundMessage(
   supabase: ReturnType<typeof getSupabaseAdmin>,
@@ -609,39 +713,69 @@ async function processInboundMessage(
   channelId: string,
   event: InboundMessageEvent,
   ctx: LogContext
-): Promise<{ success: boolean; duplicate: boolean; messageId?: string }> {
-  try {
-    // Extract visitor name from event (stored by provider parser)
-    const visitorName = (event as unknown as Record<string, unknown>).visitor_name as string | undefined;
-    
-    const contactId = await upsertContactFromInbound(supabase, tenantId, event.from_phone, visitorName, ctx);
-    if (!contactId) return { success: false, duplicate: false };
-    
-    const conversationId = await upsertConversationFromInbound(supabase, tenantId, channelId, contactId, event, ctx);
-    if (!conversationId) return { success: false, duplicate: false };
-    
-    const result = await insertInboundMessageIdempotent(supabase, tenantId, conversationId, channelId, contactId, event, ctx);
-    
-    return {
-      success: result.id !== null,
-      duplicate: result.duplicate,
-      messageId: result.id || undefined,
-    };
-  } catch (error) {
-    log('error', 'Error processing inbound message', ctx, { error: String(error) });
+): Promise<ProcessResult> {
+  // 1. Upsert contact
+  // deno-lint-ignore no-explicit-any
+  const visitorName = (event as any).visitor_name as string | undefined;
+  const contactId = await upsertContactFromInbound(
+    supabase, 
+    tenantId, 
+    event.from_phone,
+    visitorName,
+    ctx
+  );
+  
+  if (!contactId) {
+    log('error', 'Failed to upsert contact', ctx, { phone: event.from_phone });
     return { success: false, duplicate: false };
   }
+  
+  // 2. Upsert conversation
+  const conversationId = await upsertConversationFromInbound(
+    supabase,
+    tenantId,
+    channelId,
+    contactId,
+    event,
+    ctx
+  );
+  
+  if (!conversationId) {
+    log('error', 'Failed to upsert conversation', ctx, { contact_id: contactId });
+    return { success: false, duplicate: false };
+  }
+  
+  // 3. Insert message (idempotent)
+  const result = await insertInboundMessageIdempotent(
+    supabase,
+    tenantId,
+    conversationId,
+    channelId,
+    contactId,
+    event,
+    ctx
+  );
+  
+  return {
+    success: result.id !== null,
+    duplicate: result.duplicate,
+  };
 }
+
+// ============================================
+// STATUS UPDATE PROCESSOR
+// ============================================
 
 async function processStatusUpdate(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   tenantId: string,
   channelId: string | null,
   event: StatusUpdateEvent,
+  rawPayload: Record<string, unknown> | null,
   ctx: LogContext
 ): Promise<boolean> {
   try {
-    return await updateOutboundMessageStatus(supabase, tenantId, channelId, event, ctx);
+    return await updateOutboundMessageStatus(supabase, tenantId, channelId, event, rawPayload, ctx);
   } catch (error) {
     log('error', 'Error processing status update', ctx, { error: String(error) });
     return false;
@@ -874,6 +1008,14 @@ async function processWebhookAsync(
       message_ids: events.map(e => e.provider_message_id).filter(Boolean),
     });
     
+    // Parse raw body for status reconciliation
+    let rawPayload: Record<string, unknown> | null = null;
+    try {
+      rawPayload = JSON.parse(rawBody);
+    } catch {
+      // Ignore parse errors
+    }
+    
     // Process events
     let messagesCreated = 0;
     let messagesUpdated = 0;
@@ -898,11 +1040,12 @@ async function processWebhookAsync(
             status: statusEvent.status,
             error: statusEvent.error,
           });
-          const result = await processStatusUpdate(supabase, tenantId, channelId, statusEvent, ctx);
+          // Pass rawPayload for reconciliation
+          const result = await processStatusUpdate(supabase, tenantId, channelId, statusEvent, rawPayload, ctx);
           if (result) {
             messagesUpdated++;
           } else {
-            // Status event didn't match any message - might be orphan
+            // Status event didn't match any message - orphan
             orphanEvents++;
             log('warn', 'Orphan status event - no matching message found', ctx, {
               provider_message_id: statusEvent.provider_message_id,
@@ -932,6 +1075,7 @@ async function processWebhookAsync(
       events_count: events.length,
       messages_created: messagesCreated,
       messages_updated: messagesUpdated,
+      orphan_events: orphanEvents,
       errors_count: errors.length,
       duration_ms: duration,
     });
@@ -1000,338 +1144,306 @@ async function handleWebhook(req: Request): Promise<Response> {
     }
   }
   
-  const clientIP = getClientIP(req);
-  
+  // Build log context
   const ctx: LogContext = {
     request_id: requestId,
     channel_id: channelId || undefined,
     method: req.method,
-    ip: clientIP,
+    ip: getClientIP(req),
   };
   
-  log('info', `Incoming ${req.method} request`, ctx, { content_type: contentType });
+  log('info', `Webhook received`, ctx, {
+    path: url.pathname,
+    headers: sanitizeHeaders(req),
+  });
   
-  // ===========================================
-  // HEALTH CHECK ENDPOINTS (no channel_id required)
-  // ===========================================
-  
-  // HEAD - Quick ping (BSP connectivity test)
-  if (req.method === 'HEAD') {
-    return new Response(null, { 
-      status: 200, 
-      headers: corsHeaders 
-    });
+  // Handle OPTIONS (CORS preflight)
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders });
   }
   
-  // Test mode: no channel_id
-  if (!channelId) {
-    log('info', 'Test mode - no channel_id', ctx);
-    
-    // For POST, try to log body
-    if (req.method === 'POST') {
-      try {
-        const rawBody = await req.text();
-        const parsed = parseBodySafe(rawBody, contentType);
-        log('info', 'Test mode body received', ctx, { 
-          body_length: rawBody.length,
-          body_format: parsed.format,
-          body_preview: rawBody.substring(0, 200),
-        });
-      } catch (e) {
-        log('warn', 'Could not read test body', ctx, { error: String(e) });
-      }
-    }
-    
-    const latency = Date.now() - startTime;
-    return new Response(
-      JSON.stringify({ 
-        ok: true,
-        request_id: requestId,
-        method: req.method,
-        message: 'Webhook endpoint active. Provide channel_id for real events.',
-        latency_ms: latency,
-        timestamp: new Date().toISOString(),
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
-  
-  // ===========================================
-  // REAL EVENT PROCESSING (with channel_id)
-  // ===========================================
-  
-  const supabase = getSupabaseAdmin();
-  
-  // Fetch channel
-  const { data: channel, error: channelError } = await supabase
-    .from('channels')
-    .select(`
-      id, tenant_id, name, phone_number, status, provider_config, provider_phone_id,
-      provider:providers!inner(name)
-    `)
-    .eq('id', channelId)
-    .maybeSingle();
-  
-  if (channelError || !channel) {
-    log('warn', 'Channel not found', ctx, { error: channelError?.message });
-    // Still return 200 to not break BSP retry
-    return new Response(
-      JSON.stringify({ ok: true, warning: 'Channel not found', request_id: requestId }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
-  
-  const typedChannel = channel as unknown as ChannelWithProvider;
-  const tenantId = typedChannel.tenant_id;
-  ctx.tenant_id = tenantId;
-  
-  log('info', `Channel found: ${typedChannel.name}`, ctx);
-  
-  // Rate limiting
-  if (!checkRateLimit(channelId)) {
-    log('warn', 'Rate limit exceeded', ctx);
-    await saveWebhookEvent(supabase, tenantId, channelId, 'rate_limited', {}, ctx, {
-      isInvalid: true, invalidReason: 'Rate limit exceeded', ipAddress: clientIP, rateLimited: true
-    });
-    // Return 200 anyway to not trigger retries
-    return new Response(
-      JSON.stringify({ ok: true, warning: 'Rate limited', request_id: requestId }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
-  
-  // GET - Health check
+  // Handle Meta/WhatsApp webhook verification (GET)
   if (req.method === 'GET') {
     const mode = url.searchParams.get('hub.mode');
     const token = url.searchParams.get('hub.verify_token');
     const challenge = url.searchParams.get('hub.challenge');
     
-    // Meta webhook verification
     if (mode === 'subscribe' && challenge) {
-      const expectedToken = typedChannel.provider_config?.webhook_secret;
-      if (expectedToken && token !== expectedToken) {
-        log('warn', 'Invalid verify token', ctx);
-        return new Response('Forbidden', { status: 403, headers: corsHeaders });
-      }
-      log('info', 'Meta verification successful', ctx);
-      
-      // AUTO-CONNECT on verification success
-      await updateChannelStatusToConnected(supabase, channelId, ctx);
-      
-      return new Response(challenge, { status: 200, headers: corsHeaders });
+      // In production, you should validate the token
+      log('info', 'Webhook verification request', ctx, { mode, token: token ? '***' : null });
+      return new Response(challenge, { 
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'text/plain' }
+      });
     }
     
-    // Simple health check - also auto-connect
-    await updateChannelStatusToConnected(supabase, channelId, ctx);
-    
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        request_id: requestId,
-        channel_id: channelId,
-        channel_name: typedChannel.name,
-        channel_status: 'connected', // Will be connected after this
-        timestamp: new Date().toISOString(),
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    // Health check
+    return new Response(JSON.stringify({ status: 'ok', requestId }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
   
-  // POST - Webhook event
-  if (req.method !== 'POST') {
-    return new Response(
-      JSON.stringify({ ok: true, warning: 'Method not POST', request_id: requestId }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
-  
-  // Read body safely
+  // Read body
   let rawBody = '';
   try {
     rawBody = await req.text();
   } catch (e) {
-    log('warn', 'Could not read body', ctx, { error: String(e) });
+    log('error', 'Failed to read body', ctx, { error: String(e) });
+    return new Response('OK', { 
+      status: 200, 
+      headers: { ...corsHeaders, 'Content-Type': 'text/plain' } 
+    });
   }
   
-  // Validate webhook signature (if configured) - COMPATIBILITY MODE: NEVER BLOCK!
-  // IMPORTANT: Usa webhook_secret do servidor, NÃO o token do cliente
-  const signatureValidation = await validateWebhookSignature(
-    rawBody, 
-    req, 
-    typedChannel.provider_config as unknown as Record<string, unknown> | null, 
+  // Parse body
+  const { parsed: body, format: bodyFormat } = parseBodySafe(rawBody, contentType);
+  
+  log('info', 'Body parsed', ctx, { 
+    format: bodyFormat, 
+    size: rawBody.length,
+    preview: rawBody.substring(0, 200),
+  });
+  
+  // Initialize Supabase
+  const supabase = getSupabaseAdmin();
+  
+  // No channel_id - try to extract from body
+  if (!channelId && body && typeof body === 'object') {
+    const bodyObj = body as Record<string, unknown>;
+    // Try subscription_id (NotificaMe format)
+    const subscriptionId = bodyObj.subscriptionId as string || 
+      (bodyObj.message as Record<string, unknown>)?.to as string;
+    
+    if (subscriptionId) {
+      // Lookup channel by subscription_id
+      const { data: channel } = await supabase
+        .from('channels')
+        .select('id')
+        .eq('provider_config->>subscription_id', subscriptionId)
+        .limit(1)
+        .maybeSingle();
+      
+      if (channel) {
+        channelId = channel.id;
+        ctx.channel_id = channelId || undefined;
+        log('info', 'Resolved channel_id from subscription_id', ctx, { subscription_id: subscriptionId });
+      }
+    }
+  }
+  
+  // Still no channel_id - save as unmatched event
+  if (!channelId) {
+    log('warn', 'No channel_id found, saving as unmatched event', ctx);
+    
+    // Detect event type from body
+    let eventType = 'unknown';
+    if (body && typeof body === 'object') {
+      const bodyObj = body as Record<string, unknown>;
+      eventType = (bodyObj.type as string) || 'unknown';
+    }
+    
+    // Extract error code if present
+    let providerErrorCode: string | null = null;
+    if (body && typeof body === 'object') {
+      const bodyObj = body as Record<string, unknown>;
+      const messageStatus = bodyObj.messageStatus as Record<string, unknown> | undefined;
+      if (messageStatus?.code === 'ERROR') {
+        const errorInfo = messageStatus.error as Record<string, unknown> | undefined;
+        providerErrorCode = String(errorInfo?.code || '');
+      }
+    }
+    
+    await saveWebhookEvent(
+      supabase,
+      null, // no tenant
+      null, // no channel
+      eventType,
+      { 
+        body, 
+        headers: sanitizeHeaders(req),
+        content_type: contentType,
+        method: req.method,
+        request_id: requestId,
+      },
+      null,
+      providerErrorCode,
+      ctx
+    );
+    
+    // Still return 200 to ACK
+    return new Response('OK', { 
+      status: 200, 
+      headers: { ...corsHeaders, 'Content-Type': 'text/plain' } 
+    });
+  }
+  
+  // Fetch channel and tenant info
+  const { data: channel, error: channelError } = await supabase
+    .from('channels')
+    .select(`
+      id,
+      tenant_id,
+      name,
+      phone_number,
+      status,
+      provider_config,
+      provider_phone_id,
+      provider:providers(name)
+    `)
+    .eq('id', channelId)
+    .single();
+  
+  if (channelError || !channel) {
+    log('warn', 'Channel not found', ctx, { error: channelError?.message });
+    return new Response('OK', { 
+      status: 200, 
+      headers: { ...corsHeaders, 'Content-Type': 'text/plain' } 
+    });
+  }
+  
+  ctx.tenant_id = channel.tenant_id;
+  
+  // Validate signature (compatibility mode - never blocks)
+  const signatureResult = await validateWebhookSignature(
+    rawBody,
+    req,
+    channel.provider_config as Record<string, unknown> | null,
     ctx
   );
   
-  // Log signature status but NEVER block processing
-  // This ensures messages are always received even if signature validation fails
-  const signatureWarning = signatureValidation.status !== 'valid' && signatureValidation.status !== 'no_secret'
-    ? `Signature ${signatureValidation.status}: ${signatureValidation.reason || 'unknown'}`
-    : null;
-  
-  if (signatureWarning) {
-    log('warn', `Signature issue (processing anyway): ${signatureWarning}`, ctx);
-  }
-  
-  // Parse body with multi-format support
-  const parsedBody = parseBodySafe(rawBody, contentType);
-  log('info', 'Body parsed', ctx, { format: parsedBody.format, raw_length: rawBody.length });
-  
-  // Empty body (test ping)
-  if (parsedBody.format === 'empty') {
-    log('info', 'Empty body received', ctx);
-    const latency = Date.now() - startTime;
-    
-    // AUTO-CONNECT on any valid request
-    await updateChannelStatusToConnected(supabase, channelId, ctx);
-    
-    await saveWebhookEvent(supabase, tenantId, channelId, 'test_ping', { empty: true }, ctx, {
-      ipAddress: clientIP, method: 'POST', latencyMs: latency, contentType
-    });
-    return new Response(
-      JSON.stringify({ 
-        ok: true, 
-        request_id: requestId,
-        message: 'Empty body received (test ping)',
-        channel_name: typedChannel.name,
-        channel_status: 'connected',
-        latency_ms: latency,
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
-  
-  // For non-JSON but parsed content (form-urlencoded or text)
-  if (parsedBody.format !== 'json') {
-    log('info', `Non-JSON body (${parsedBody.format}) received and parsed`, ctx);
-    const latency = Date.now() - startTime;
-    
-    // AUTO-CONNECT on any valid request
-    await updateChannelStatusToConnected(supabase, channelId, ctx);
-    
-    await saveWebhookEvent(supabase, tenantId, channelId, `body_${parsedBody.format}`, parsedBody.parsed, ctx, {
-      ipAddress: clientIP, 
-      method: 'POST', 
-      latencyMs: latency, 
-      contentType,
-      rawBody: rawBody.substring(0, 500),
-      parsedBody: parsedBody.parsed,
-    });
-    
-    return new Response(
-      JSON.stringify({ 
-        ok: true, 
-        request_id: requestId,
-        message: `Body received as ${parsedBody.format}`,
-        channel_name: typedChannel.name,
-        channel_status: 'connected',
-        body_format: parsedBody.format,
-        latency_ms: latency,
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
-  }
-  
-  // JSON body - save and process
-  const body = parsedBody.parsed;
-  
-  // AUTO-CONNECT: Mark channel as connected on receiving any valid webhook
-  // This is the key step that ensures the channel shows as "connected" in the UI
-  await updateChannelStatusToConnected(supabase, channelId, ctx);
-  
-  // Save raw event FIRST (for audit) - include signature status for observability
-  const latency = Date.now() - startTime;
-  const webhookEventId = await saveWebhookEvent(
-    supabase,
-    tenantId,
-    channelId,
-    'webhook_received',
-    body,
-    ctx,
-    {
-      ipAddress: clientIP,
-      method: 'POST',
-      latencyMs: latency,
-      headers: {
-        ...sanitizeHeaders(req),
-        'x-signature-status': signatureValidation.status,
-        ...(signatureWarning ? { 'x-signature-warning': signatureWarning } : {}),
-      },
-      contentType,
-    }
-  );
-  
-  log('info', 'Starting webhook processing', ctx, { 
-    webhookEventId,
-    body_type: typeof body,
-    has_message: !!(body as Record<string, unknown>)?.message,
-    has_direction: !!(body as Record<string, unknown>)?.direction,
-  });
-  
-  // CRITICAL FIX: Process webhook SYNCHRONOUSLY to ensure messages are saved
-  // EdgeRuntime.waitUntil was not reliably processing messages
-  // We have time before Supabase times out (~30s), and we need to ensure persistence
-  try {
-    await processWebhookAsync(
+  // Check rate limit
+  if (!checkRateLimit(channelId)) {
+    log('warn', 'Rate limit exceeded', ctx);
+    // Save event before rejecting
+    await saveWebhookEvent(
       supabase,
-      tenantId,
+      channel.tenant_id,
       channelId,
-      typedChannel,
-      body,
-      rawBody,
-      webhookEventId,
+      'rate_limited',
+      { body, headers: sanitizeHeaders(req), request_id: requestId },
+      null,
+      null,
       ctx
     );
-    log('info', 'Webhook processing completed successfully', ctx);
-  } catch (processingError) {
-    log('error', 'Webhook processing failed', ctx, { error: String(processingError) });
-    // Still return 200 to avoid retries from BSP
+    return new Response('Rate limited', { 
+      status: 429, 
+      headers: corsHeaders 
+    });
   }
   
-  // ACK response - after processing is complete
-  const finalLatency = Date.now() - startTime;
-  return new Response(
-    JSON.stringify({ 
-      ok: true, 
+  // Detect event type
+  let eventType = 'webhook_received';
+  let messageIdForEvent: string | null = null;
+  let providerErrorCode: string | null = null;
+  
+  if (body && typeof body === 'object') {
+    const bodyObj = body as Record<string, unknown>;
+    const msgType = bodyObj.type as string;
+    
+    if (msgType === 'MESSAGE_STATUS' || msgType === 'STATUS') {
+      eventType = 'MESSAGE_STATUS';
+      messageIdForEvent = bodyObj.messageId as string || null;
+      
+      // Check for error code
+      const messageStatus = bodyObj.messageStatus as Record<string, unknown> | undefined;
+      if (messageStatus?.code === 'ERROR') {
+        const errorInfo = messageStatus.error as Record<string, unknown> | undefined;
+        providerErrorCode = String(errorInfo?.code || '');
+      }
+    } else if (msgType === 'MESSAGE' && bodyObj.direction === 'IN') {
+      eventType = 'MESSAGE_INBOUND';
+      messageIdForEvent = bodyObj.id as string || bodyObj.providerMessageId as string || null;
+    }
+  }
+  
+  // Save raw event
+  const webhookEventId = await saveWebhookEvent(
+    supabase,
+    channel.tenant_id,
+    channelId,
+    eventType,
+    { 
+      body, 
+      headers: sanitizeHeaders(req), 
+      content_type: contentType,
+      method: req.method,
       request_id: requestId,
-      accepted: true,
-      processed: true,
-      latency_ms: finalLatency,
-      timestamp: new Date().toISOString(),
-    }),
-    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      latency_ms: Date.now() - startTime,
+      'x-signature-status': signatureResult.status,
+      'x-signature-warning': signatureResult.reason,
+    },
+    messageIdForEvent,
+    providerErrorCode,
+    ctx
   );
+  
+  // ACK FAST - then process async
+  // Use EdgeRuntime.waitUntil if available
+  const asyncProcess = processWebhookAsync(
+    supabase,
+    channel.tenant_id,
+    channelId,
+    channel as unknown as ChannelWithProvider,
+    body,
+    rawBody,
+    webhookEventId,
+    ctx
+  );
+  
+  // Try to use waitUntil for background processing
+  // deno-lint-ignore no-explicit-any
+  const edgeRuntime = (globalThis as any).EdgeRuntime;
+  if (edgeRuntime?.waitUntil) {
+    edgeRuntime.waitUntil(asyncProcess);
+    log('info', 'Background processing started via waitUntil', ctx);
+  } else {
+    // Fallback: await but with timeout protection
+    // Create a race between processing and a timeout
+    const timeoutPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        log('warn', 'Processing timeout - continuing in background', ctx);
+        resolve();
+      }, 5000); // 5s timeout for ACK
+    });
+    
+    // Start async processing but don't block response
+    asyncProcess.catch(e => log('error', 'Async processing error', ctx, { error: String(e) }));
+    
+    await timeoutPromise;
+  }
+  
+  const latency = Date.now() - startTime;
+  log('info', 'ACK sent', ctx, { latency_ms: latency });
+  
+  return new Response('OK', { 
+    status: 200, 
+    headers: { 
+      ...corsHeaders, 
+      'Content-Type': 'text/plain',
+      'X-Request-Id': requestId,
+    } 
+  });
 }
 
 // ============================================
 // ENTRY POINT
 // ============================================
 
-Deno.serve(async (req: Request) => {
-  // CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
-  
+Deno.serve(async (req: Request): Promise<Response> => {
   try {
+    // Handle CORS preflight
+    if (req.method === 'OPTIONS') {
+      return new Response(null, { headers: corsHeaders });
+    }
+    
     return await handleWebhook(req);
   } catch (error) {
-    // NEVER fail - always return 200
-    const requestId = generateRequestId();
-    console.error(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: 'error',
-      message: 'Unhandled error in webhook handler',
-      request_id: requestId,
-      error: String(error),
-    }));
-    
-    return new Response(
-      JSON.stringify({ 
-        ok: true, 
-        request_id: requestId,
-        warning: 'Internal error occurred but request acknowledged',
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    // NEVER let the webhook fail - always return 200
+    console.error('[Webhook] Unhandled error:', error);
+    return new Response('OK', { 
+      status: 200, 
+      headers: { ...corsHeaders, 'Content-Type': 'text/plain' } 
+    });
   }
 });
