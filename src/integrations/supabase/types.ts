@@ -66,12 +66,16 @@ export type Database = {
           attempts: number
           campaign_id: string
           contact_id: string
+          correlation_id: string | null
           created_at: string
           delivered_at: string | null
           id: string
           last_error: string | null
           next_retry_at: string | null
+          provider_error_code: string | null
+          provider_error_message: string | null
           provider_message_id: string | null
+          provider_request_id: string | null
           read_at: string | null
           sent_at: string | null
           status: Database["public"]["Enums"]["campaign_recipient_status"]
@@ -82,12 +86,16 @@ export type Database = {
           attempts?: number
           campaign_id: string
           contact_id: string
+          correlation_id?: string | null
           created_at?: string
           delivered_at?: string | null
           id?: string
           last_error?: string | null
           next_retry_at?: string | null
+          provider_error_code?: string | null
+          provider_error_message?: string | null
           provider_message_id?: string | null
+          provider_request_id?: string | null
           read_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["campaign_recipient_status"]
@@ -98,12 +106,16 @@ export type Database = {
           attempts?: number
           campaign_id?: string
           contact_id?: string
+          correlation_id?: string | null
           created_at?: string
           delivered_at?: string | null
           id?: string
           last_error?: string | null
           next_retry_at?: string | null
+          provider_error_code?: string | null
+          provider_error_message?: string | null
           provider_message_id?: string | null
+          provider_request_id?: string | null
           read_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["campaign_recipient_status"]
@@ -261,6 +273,10 @@ export type Database = {
       }
       channels: {
         Row: {
+          blocked_at: string | null
+          blocked_by_provider: boolean | null
+          blocked_error_code: string | null
+          blocked_reason: string | null
           created_at: string
           id: string
           last_connected_at: string | null
@@ -276,6 +292,10 @@ export type Database = {
           verified_name: string | null
         }
         Insert: {
+          blocked_at?: string | null
+          blocked_by_provider?: boolean | null
+          blocked_error_code?: string | null
+          blocked_reason?: string | null
           created_at?: string
           id?: string
           last_connected_at?: string | null
@@ -291,6 +311,10 @@ export type Database = {
           verified_name?: string | null
         }
         Update: {
+          blocked_at?: string | null
+          blocked_by_provider?: boolean | null
+          blocked_error_code?: string | null
+          blocked_reason?: string | null
           created_at?: string
           id?: string
           last_connected_at?: string | null
@@ -737,6 +761,7 @@ export type Database = {
           contact_id: string
           content: string | null
           conversation_id: string
+          correlation_id: string | null
           created_at: string
           deleted_at: string | null
           delivered_at: string | null
@@ -749,6 +774,7 @@ export type Database = {
           media_mime_type: string | null
           media_url: string | null
           provider_message_id: string | null
+          provider_request_id: string | null
           read_at: string | null
           reply_to_message_id: string | null
           sent_at: string | null
@@ -764,6 +790,7 @@ export type Database = {
           contact_id: string
           content?: string | null
           conversation_id: string
+          correlation_id?: string | null
           created_at?: string
           deleted_at?: string | null
           delivered_at?: string | null
@@ -776,6 +803,7 @@ export type Database = {
           media_mime_type?: string | null
           media_url?: string | null
           provider_message_id?: string | null
+          provider_request_id?: string | null
           read_at?: string | null
           reply_to_message_id?: string | null
           sent_at?: string | null
@@ -791,6 +819,7 @@ export type Database = {
           contact_id?: string
           content?: string | null
           conversation_id?: string
+          correlation_id?: string | null
           created_at?: string
           deleted_at?: string | null
           delivered_at?: string | null
@@ -803,6 +832,7 @@ export type Database = {
           media_mime_type?: string | null
           media_url?: string | null
           provider_message_id?: string | null
+          provider_request_id?: string | null
           read_at?: string | null
           reply_to_message_id?: string | null
           sent_at?: string | null
@@ -925,6 +955,7 @@ export type Database = {
       }
       mt_webhook_events: {
         Row: {
+          affects_channel_status: boolean | null
           channel_id: string | null
           event_type: string
           id: string
@@ -936,11 +967,14 @@ export type Database = {
           processed: boolean
           processing_error: string | null
           provider: string
+          provider_error_code: string | null
+          provider_error_message: string | null
           rate_limited: boolean | null
           received_at: string
           tenant_id: string | null
         }
         Insert: {
+          affects_channel_status?: boolean | null
           channel_id?: string | null
           event_type: string
           id?: string
@@ -952,11 +986,14 @@ export type Database = {
           processed?: boolean
           processing_error?: string | null
           provider: string
+          provider_error_code?: string | null
+          provider_error_message?: string | null
           rate_limited?: boolean | null
           received_at?: string
           tenant_id?: string | null
         }
         Update: {
+          affects_channel_status?: boolean | null
           channel_id?: string | null
           event_type?: string
           id?: string
@@ -968,6 +1005,8 @@ export type Database = {
           processed?: boolean
           processing_error?: string | null
           provider?: string
+          provider_error_code?: string | null
+          provider_error_message?: string | null
           rate_limited?: boolean | null
           received_at?: string
           tenant_id?: string | null

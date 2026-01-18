@@ -23,6 +23,11 @@ import {
   mapStatusToUpdate,
   normalizePhone,
 } from '../_shared/providers/mappers.ts';
+import {
+  isChannelBlockingError,
+  isPaymentError,
+  PAYMENT_ERROR_CODES,
+} from '../_shared/providers/errors.ts';
 
 // ============================================
 // CORS HEADERS
@@ -407,14 +412,51 @@ async function insertInboundMessageIdempotent(
 
 /**
  * Atualiza status de mensagem outbound E campaign_recipients se aplicável
+ * CRÍTICO: Também detecta erros 131042 e bloqueia o canal
  */
 async function updateOutboundMessageStatus(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   tenantId: string,
+  channelId: string | null,
   event: StatusUpdateEvent,
   ctx?: LogContext
 ): Promise<boolean> {
   const statusUpdate = mapStatusToUpdate(event);
+  
+  // Extrair código de erro se existir
+  const errorCode = event.error?.code || statusUpdate.error_code;
+  const errorDetail = event.error?.detail || statusUpdate.error_detail;
+  
+  // CRÍTICO: Detectar erro 131042 (problema de pagamento)
+  const isPaymentBlockingError = isPaymentError(errorCode, errorDetail) ||
+                                  (errorCode && PAYMENT_ERROR_CODES.includes(errorCode)) ||
+                                  (errorDetail && errorDetail.includes('131042'));
+  
+  const isChannelBlocking = isChannelBlockingError(errorCode, errorDetail) || isPaymentBlockingError;
+  
+  // Se é erro que bloqueia canal, marcar canal como bloqueado
+  if (isChannelBlocking && channelId) {
+    const blockReason = isPaymentBlockingError ? 'PAYMENT_ISSUE' : 'PROVIDER_BLOCKED';
+    
+    if (ctx) log('error', `🚨 CHANNEL BLOCKING ERROR detected via webhook: ${errorCode}`, ctx, {
+      error_code: errorCode,
+      error_detail: errorDetail,
+      block_reason: blockReason,
+    });
+    
+    await supabase
+      .from('channels')
+      .update({
+        blocked_by_provider: true,
+        blocked_reason: errorDetail || 'Provider blocked this channel',
+        blocked_at: new Date().toISOString(),
+        blocked_error_code: errorCode || '131042',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', channelId);
+    
+    if (ctx) log('warn', `🔒 Channel ${channelId} BLOCKED due to: ${blockReason}`, ctx);
+  }
   
   // Buscar mensagem por provider_message_id
   const { data: message } = await supabase
@@ -463,7 +505,7 @@ async function updateOutboundMessageStatus(
   }
   
   // 2. CRITICAL: Também atualizar campaign_recipients pelo provider_message_id
-  // Isso garante que campanhas mostrem "Entregue" / "Lido"
+  // Isso garante que campanhas mostrem "Entregue" / "Lido" / "Falha"
   const campaignRecipientUpdate: Record<string, unknown> = {
     status: statusUpdate.status,
     updated_at: new Date().toISOString(),
@@ -476,7 +518,9 @@ async function updateOutboundMessageStatus(
     campaignRecipientUpdate.read_at = statusUpdate.read_at.toISOString();
   }
   if (statusUpdate.status === 'failed') {
-    campaignRecipientUpdate.last_error = statusUpdate.error_detail || statusUpdate.error_code || 'Unknown error';
+    campaignRecipientUpdate.last_error = `[${errorCode || 'ERROR'}] ${errorDetail || 'Unknown error'}`;
+    campaignRecipientUpdate.provider_error_code = errorCode || null;
+    campaignRecipientUpdate.provider_error_message = errorDetail || null;
   }
   
   const { data: campaignRecipient, error: crError } = await supabase
@@ -493,10 +537,16 @@ async function updateOutboundMessageStatus(
       recipient_id: campaignRecipient.id,
       campaign_id: campaignRecipient.campaign_id,
       new_status: statusUpdate.status,
+      error_code: errorCode,
     });
     
     // 3. Atualizar contadores da campanha
     await updateCampaignCounters(supabase, campaignRecipient.campaign_id, ctx);
+  }
+  
+  // 4. Salvar erro no webhook event para análise
+  if (errorCode || isChannelBlocking) {
+    // Não temos o webhookEventId aqui, mas o caller pode fazer isso
   }
   
   return message !== null || campaignRecipient !== null;
@@ -586,11 +636,12 @@ async function processInboundMessage(
 async function processStatusUpdate(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   tenantId: string,
+  channelId: string | null,
   event: StatusUpdateEvent,
   ctx: LogContext
 ): Promise<boolean> {
   try {
-    return await updateOutboundMessageStatus(supabase, tenantId, event, ctx);
+    return await updateOutboundMessageStatus(supabase, tenantId, channelId, event, ctx);
   } catch (error) {
     log('error', 'Error processing status update', ctx, { error: String(error) });
     return false;
@@ -847,7 +898,7 @@ async function processWebhookAsync(
             status: statusEvent.status,
             error: statusEvent.error,
           });
-          const result = await processStatusUpdate(supabase, tenantId, statusEvent, ctx);
+          const result = await processStatusUpdate(supabase, tenantId, channelId, statusEvent, ctx);
           if (result) {
             messagesUpdated++;
           } else {

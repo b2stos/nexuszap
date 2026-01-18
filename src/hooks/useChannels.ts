@@ -36,6 +36,11 @@ export interface Channel {
   last_connected_at: string | null;
   created_at: string;
   updated_at: string;
+  // Campos de bloqueio por erro do provedor (ex: 131042)
+  blocked_by_provider?: boolean;
+  blocked_reason?: string | null;
+  blocked_at?: string | null;
+  blocked_error_code?: string | null;
   provider?: {
     id: string;
     name: string;

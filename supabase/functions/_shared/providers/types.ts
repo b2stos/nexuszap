@@ -185,6 +185,7 @@ export type ErrorCategory =
   | 'invalid_request'// Payload malformado
   | 'template_error' // Template não aprovado, variáveis erradas
   | 'recipient_error'// Número inválido, bloqueado
+  | 'payment_error'  // Problema de pagamento/billing (ex: 131042)
   | 'temporary'      // Erro temporário do provider
   | 'unknown';
 
@@ -194,6 +195,8 @@ export interface ProviderError {
   detail: string;
   is_retryable: boolean;
   raw?: unknown;
+  /** Se true, este erro deve bloquear todo o canal (ex: 131042) */
+  blocks_channel?: boolean;
 }
 
 // ============================================
