@@ -199,7 +199,7 @@ export function WebhookMonitor() {
         <CardHeader>
           <CardTitle>Webhooks Recebidos (Tempo Real)</CardTitle>
         <CardDescription>
-          Últimos 50 eventos recebidos da Base360
+          Últimos eventos de status do seu canal WhatsApp
         </CardDescription>
         </CardHeader>
         <CardContent>
@@ -210,7 +210,7 @@ export function WebhookMonitor() {
                   <XCircle className="h-12 w-12 mx-auto mb-2 opacity-50" />
                   <p>Nenhum webhook recebido ainda</p>
                   <p className="text-sm mt-1">
-                    Configure o webhook no painel Base360
+                    Verifique a configuração do webhook no seu canal
                   </p>
                 </div>
               ) : (
