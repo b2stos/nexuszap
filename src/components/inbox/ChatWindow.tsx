@@ -497,8 +497,8 @@ export function ChatWindow({
   }
   
   return (
-    <div className="flex flex-col h-full min-h-0 bg-background relative">
-      {/* Header */}
+    <div className="flex flex-col h-full min-h-0 bg-background relative isolate">
+      {/* Header - fixed height */}
       <ChatHeader
         conversation={conversation} 
         windowStatus={windowStatus}
@@ -508,83 +508,87 @@ export function ChatWindow({
         onTogglePin={handleTogglePin}
       />
       
-      {/* Messages - iOS Safari compatible scroll */}
-      <ScrollArea className="flex-1 min-h-0 overflow-y-auto" ref={scrollRef} style={{ WebkitOverflowScrolling: 'touch' }}>
-        <div className="p-4">
-          {isLoading ? (
-            <MessageSkeleton />
-          ) : messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-              <MessageCircle className="w-12 h-12 opacity-50 mb-2" />
-              <p className="font-medium">Nenhuma mensagem ainda</p>
-              <p className="text-sm text-center mt-1">
-                {windowStatus.isOpen 
-                  ? 'Digite uma mensagem para iniciar a conversa'
-                  : 'Envie um template para iniciar a conversa'}
-              </p>
-            </div>
-          ) : (
-            messagesWithDates.map((item, index) => {
-              if (item.type === 'date' && item.date) {
-                return <DateSeparator key={`date-${index}`} date={item.date} />;
-              }
-              if (item.type === 'message' && item.message) {
-                return (
-                  <MessageBubble 
-                    key={item.message.id} 
-                    message={item.message} 
-                    onRetry={handleRetry}
-                    reactions={getMessageReactions(item.message.id)}
-                    onReact={handleReact}
-                    currentUserId={user?.id}
-                  />
-                );
-              }
-              return null;
-            })
-          )}
-          
-          {/* Typing indicator at bottom of messages */}
-          {typingText && (
-            <div className="flex justify-start mb-2">
-              <div className="bg-card border border-border rounded-lg px-3 py-2 rounded-bl-none">
-                <TypingIndicator typingText={typingText} />
+      {/* Messages area - takes remaining space */}
+      <div className="flex-1 min-h-0 overflow-hidden relative">
+        <ScrollArea className="h-full" ref={scrollRef} style={{ WebkitOverflowScrolling: 'touch' }}>
+          <div className="p-4">
+            {isLoading ? (
+              <MessageSkeleton />
+            ) : messages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+                <MessageCircle className="w-12 h-12 opacity-50 mb-2" />
+                <p className="font-medium">Nenhuma mensagem ainda</p>
+                <p className="text-sm text-center mt-1">
+                  {windowStatus.isOpen 
+                    ? 'Digite uma mensagem para iniciar a conversa'
+                    : 'Envie um template para iniciar a conversa'}
+                </p>
               </div>
-            </div>
-          )}
-        </div>
-      </ScrollArea>
-      
-      {/* Scroll to bottom button */}
-      <ScrollToBottomButton 
-        visible={showScrollButton} 
-        onClick={() => scrollToBottom()}
-        unreadCount={conversation.unread_count}
-        hasNewMessage={hasNewMessage}
-      />
-      
-      {/* Composer - Text or Template based on window status */}
-      {windowStatus.isOpen ? (
-        <MessageComposer
-          conversationId={conversation.id}
-          windowStatus={windowStatus}
-          onSend={handleSend}
-          isSending={sendMessage.isPending}
-          draft={currentDraft}
-          onDraftChange={handleDraftChange}
-          quickReplies={quickReplies}
-          onTyping={broadcastTyping}
-          onStopTyping={stopTyping}
-          typingText={typingText}
+            ) : (
+              messagesWithDates.map((item, index) => {
+                if (item.type === 'date' && item.date) {
+                  return <DateSeparator key={`date-${index}`} date={item.date} />;
+                }
+                if (item.type === 'message' && item.message) {
+                  return (
+                    <MessageBubble 
+                      key={item.message.id} 
+                      message={item.message} 
+                      onRetry={handleRetry}
+                      reactions={getMessageReactions(item.message.id)}
+                      onReact={handleReact}
+                      currentUserId={user?.id}
+                    />
+                  );
+                }
+                return null;
+              })
+            )}
+            
+            {/* Typing indicator at bottom of messages */}
+            {typingText && (
+              <div className="flex justify-start mb-2">
+                <div className="bg-card border border-border rounded-lg px-3 py-2 rounded-bl-none">
+                  <TypingIndicator typingText={typingText} />
+                </div>
+              </div>
+            )}
+          </div>
+        </ScrollArea>
+        
+        {/* Scroll to bottom button - positioned absolute inside messages area */}
+        <ScrollToBottomButton 
+          visible={showScrollButton} 
+          onClick={() => scrollToBottom()}
+          unreadCount={conversation.unread_count}
+          hasNewMessage={hasNewMessage}
         />
-      ) : (
-        <TemplateComposer
-          templates={templates}
-          isLoadingTemplates={templatesLoading}
-          onSend={handleSendTemplate}
-          isSending={sendTemplate.isPending}
-        />
-      )}
+      </div>
+      
+      {/* Composer - ALWAYS visible at bottom, outside scroll area */}
+      <div className="flex-shrink-0 border-t border-border bg-card">
+        {windowStatus.isOpen ? (
+          <MessageComposer
+            conversationId={conversation.id}
+            windowStatus={windowStatus}
+            onSend={handleSend}
+            isSending={sendMessage.isPending}
+            draft={currentDraft}
+            onDraftChange={handleDraftChange}
+            quickReplies={quickReplies}
+            onTyping={broadcastTyping}
+            onStopTyping={stopTyping}
+            typingText={typingText}
+          />
+        ) : (
+          <TemplateComposer
+            templates={templates}
+            isLoadingTemplates={templatesLoading}
+            onSend={handleSendTemplate}
+            isSending={sendTemplate.isPending}
+          />
+        )}
+      </div>
     </div>
   );
 }

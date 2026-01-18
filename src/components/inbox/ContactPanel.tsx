@@ -294,7 +294,7 @@ export function ContactPanel({
 }: ContactPanelProps) {
   if (!conversation || !contact) {
     return (
-      <div className="h-full bg-card border-l border-border">
+      <div className="h-full w-full bg-card flex flex-col">
         <EmptyPanel />
       </div>
     );
@@ -312,8 +312,8 @@ export function ContactPanel({
   const origin = conversation.channel?.name || 'Manual';
   
   return (
-    <div className="h-full bg-card border-l border-border flex flex-col">
-      <ScrollArea className="flex-1">
+    <div className="h-full w-full bg-card flex flex-col overflow-hidden">
+      <ScrollArea className="flex-1 w-full">
         <div className="p-4 space-y-3">
           {/* Contact Card */}
           <Card>
