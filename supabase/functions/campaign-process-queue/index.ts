@@ -19,6 +19,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { notificameProvider } from '../_shared/providers/notificame.ts';
 import { Channel, ChannelProviderConfig, TemplateVariable } from '../_shared/providers/types.ts';
+import { isChannelBlockingError, isPaymentError, PAYMENT_ERROR_CODES } from '../_shared/providers/errors.ts';
 
 // ============================================
 // CORS HEADERS
@@ -596,6 +597,9 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
     }
     
     try {
+      // Gerar correlation_id único para esta mensagem
+      const correlationId = crypto.randomUUID();
+      
       // Build template variables
       const templateVars = buildTemplateVariables(
         campaign.template.variables_schema as Record<string, SchemaVariable[]> | null,
@@ -604,6 +608,7 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         recipient.contact.name
       );
       
+      console.log(`[Campaign] Correlation ID: ${correlationId}`);
       console.log(`[Campaign] Template variables:`, JSON.stringify(templateVars));
       
       // ====================================================
@@ -634,6 +639,7 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
             updated_at: new Date().toISOString(),
             last_error: null,
             next_retry_at: null,
+            correlation_id: correlationId,
           })
           .eq('id', recipient.id);
         
@@ -651,7 +657,7 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         );
         
         stats.success++;
-        console.log(`[Campaign] ✅ CONFIRMED SENT: ${phone}, provider_message_id: ${result.provider_message_id}`);
+        console.log(`[Campaign] ✅ CONFIRMED SENT: ${phone}, provider_message_id: ${result.provider_message_id}, correlation_id: ${correlationId}`);
         
       } else {
         // ❌ FALHA
@@ -659,30 +665,63 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         const errorMessage = result.error?.detail || 'Unknown error';
         const isRetryable = result.error?.is_retryable ?? false;
         
+        // CRITICAL: Detectar erro 131042 (problema de pagamento)
+        const isPaymentBlockingError = isPaymentError(errorCode, errorMessage) || 
+                                        PAYMENT_ERROR_CODES.includes(errorCode) ||
+                                        errorMessage.includes('131042') ||
+                                        errorMessage.toLowerCase().includes('payment');
+        
+        const isChannelBlocking = result.error?.blocks_channel || 
+                                   isChannelBlockingError(errorCode, errorMessage) ||
+                                   isPaymentBlockingError;
+        
         // Check for auth errors
         const isAuthError = result.error?.category === 'auth' ||
                            errorCode.includes('TOKEN') ||
                            errorCode.includes('AUTH') ||
                            errorCode.includes('UNAUTHORIZED');
         
-        if (isAuthError) {
-          console.error(`[Campaign] 🚨 AUTH ERROR - Pausing campaign: ${errorMessage}`);
+        // Se é erro que bloqueia o canal (pagamento, auth, etc)
+        if (isChannelBlocking || isAuthError || isPaymentBlockingError) {
+          const blockReason = isPaymentBlockingError 
+            ? 'PAYMENT_ISSUE' 
+            : (isAuthError ? 'TOKEN_INVALID' : 'PROVIDER_BLOCKED');
           
+          console.error(`[Campaign] 🚨 CHANNEL BLOCKING ERROR - ${blockReason}: ${errorCode} - ${errorMessage}`);
+          
+          // Marcar mensagem como falha
           await supabase
             .from('campaign_recipients')
             .update({
               status: 'failed',
               attempts: recipient.attempts + 1,
-              last_error: errorMessage,
+              last_error: `[${errorCode}] ${errorMessage}`,
               next_retry_at: null,
               updated_at: new Date().toISOString(),
+              correlation_id: correlationId,
+              provider_error_code: errorCode,
+              provider_error_message: errorMessage,
             })
             .eq('id', recipient.id);
           
           stats.failed++;
           stats.errors.push({ phone, error: errorMessage, code: errorCode });
           
-          // PAUSE THE CAMPAIGN
+          // BLOQUEAR O CANAL
+          await supabase
+            .from('channels')
+            .update({
+              blocked_by_provider: true,
+              blocked_reason: errorMessage,
+              blocked_at: new Date().toISOString(),
+              blocked_error_code: errorCode,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', campaign.channel_id);
+          
+          console.error(`[Campaign] 🔒 Channel ${campaign.channel_id} BLOCKED due to: ${blockReason}`);
+          
+          // PAUSAR A CAMPANHA
           await supabase
             .from('mt_campaigns')
             .update({
@@ -699,7 +738,9 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
             finished: false, 
             rateLimited: false,
             errors: stats.errors,
-            paused_reason: 'TOKEN_INVALID',
+            paused_reason: blockReason,
+            channel_blocked: true,
+            blocking_error_code: errorCode,
           };
         }
         
