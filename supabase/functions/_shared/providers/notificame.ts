@@ -336,8 +336,72 @@ function parseNotificaMeNativeFormat(channel: Channel, payload: Record<string, u
   const direction = payload.direction as string;
   const message = payload.message as Record<string, unknown> | undefined;
   
+  // CRITICAL: Handle STATUS events FIRST - they DON'T have a message object!
+  // NotificaMe STATUS format:
+  // {
+  //   "type": "MESSAGE_STATUS",
+  //   "messageId": "uuid-we-saved",
+  //   "messageStatus": { "code": "DELIVERED" / "ERROR" / "SENT" / "READ" }
+  // }
+  if (msgType === 'STATUS' || msgType === 'MESSAGE_STATUS') {
+    const messageStatus = payload.messageStatus as Record<string, unknown> | undefined;
+    
+    // Status code is in messageStatus.code (DELIVERED, ERROR, SENT, READ)
+    const statusCode = String(
+      messageStatus?.code || 
+      payload.status || 
+      (message?.status as string) || 
+      ''
+    ).toUpperCase();
+    
+    // CRITICAL: Use messageId (the ID we saved when sending) NOT providerMessageId
+    const providerMessageId = String(
+      payload.messageId ||
+      payload.id || 
+      ''
+    );
+    
+    // Map NotificaMe status codes to our status
+    const mapNotificaMeStatus = (code: string): DeliveryStatus => {
+      const upperCode = code.toUpperCase();
+      if (upperCode === 'DELIVERED') return 'delivered';
+      if (upperCode === 'READ') return 'read';
+      if (upperCode === 'SENT' || upperCode === 'ACCEPTED') return 'sent';
+      if (upperCode === 'ERROR' || upperCode === 'REJECTED' || upperCode === 'FAILED') return 'failed';
+      return 'sent';
+    };
+    
+    if (statusCode && providerMessageId) {
+      const mappedStatus = mapNotificaMeStatus(statusCode);
+      
+      const event: StatusUpdateEvent = {
+        type: 'message.status',
+        provider_message_id: providerMessageId,
+        status: mappedStatus,
+        timestamp: new Date(),
+        raw: payload,
+      };
+      
+      // Extract error info for failed messages
+      if (mappedStatus === 'failed' && messageStatus?.error) {
+        const errorInfo = messageStatus.error as Record<string, unknown>;
+        event.error = {
+          code: String(errorInfo.code || statusCode),
+          detail: String(errorInfo.message || errorInfo.details || messageStatus.description || 'Unknown error'),
+        };
+      }
+      
+      console.log(`[NotificaMe] Parsed status update: ${statusCode} → ${mappedStatus} for messageId=${providerMessageId}`);
+      events.push(event);
+      return events; // Return early for status events
+    } else {
+      console.warn(`[NotificaMe] Could not parse status event - statusCode: ${statusCode}, messageId: ${providerMessageId}`);
+    }
+  }
+  
+  // For MESSAGE events, we need the message object
   if (!message) {
-    console.log('[NotificaMe] No message object in payload');
+    console.log('[NotificaMe] No message object in payload (not a MESSAGE type)');
     return events;
   }
   
@@ -418,24 +482,7 @@ function parseNotificaMeNativeFormat(channel: Channel, payload: Record<string, u
     events.push(event);
   }
   
-  // Handle STATUS type (delivery status updates)
-  if (msgType === 'STATUS' || msgType === 'MESSAGE_STATUS') {
-    const status = String(payload.status || message.status || '').toLowerCase();
-    const providerMessageId = String(payload.providerMessageId || payload.messageId || payload.id || '');
-    
-    if (status && providerMessageId) {
-      const event: StatusUpdateEvent = {
-        type: 'message.status',
-        provider_message_id: providerMessageId,
-        status: mapWebhookStatus(status),
-        timestamp: new Date(),
-        raw: payload,
-      };
-      
-      console.log(`[NotificaMe] Parsed status update: ${status} for ${providerMessageId}`);
-      events.push(event);
-    }
-  }
+  // NOTE: STATUS handling was moved to the top of this function
   
   return events;
 }
