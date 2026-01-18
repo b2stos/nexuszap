@@ -269,35 +269,17 @@ export function ChatWindow({
   const [isAtBottom, setIsAtBottom] = useState(true);
   const prevMessagesLength = useRef(messages.length);
   
+  // ============================================
+  // ALL HOOKS MUST BE CALLED BEFORE ANY RETURN
+  // (React Hook Rules - unconditional calls)
+  // ============================================
+  
   // Get user
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
   }, []);
-
-  // ============================================
-  // EMPTY STATE: Nenhuma conversa selecionada
-  // ============================================
-  if (!conversation) {
-    return (
-      <div className="flex flex-col h-full bg-muted/20">
-        <div className="flex flex-1 items-center justify-center p-8">
-          <div className="text-center max-w-sm">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-muted flex items-center justify-center">
-              <MessageCircle className="w-8 h-8 text-muted-foreground" />
-            </div>
-            <h3 className="text-lg font-semibold text-foreground mb-2">
-              Selecione uma conversa
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              Escolha uma conversa na lista à esquerda para visualizar as mensagens
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
   
-  // Hooks
+  // Mutation hooks (always called, safe even without conversation)
   const sendMessage = useSendMessage();
   const retryMessage = useRetryMessage();
   const sendTemplate = useSendTemplate();
@@ -318,7 +300,7 @@ export function ChatWindow({
   // Quick replies
   const { data: quickReplies = [] } = useQuickReplies(tenantId);
   
-  // Typing indicator
+  // Typing indicator (handles null conversation internally)
   const { 
     typingText, 
     broadcastTyping, 
@@ -491,14 +473,33 @@ export function ChatWindow({
     }
   }, [conversation, togglePinConversation]);
   
+  // ============================================
+  // EMPTY STATE: Nenhuma conversa selecionada
+  // ============================================
   if (!conversation) {
-    return <EmptyState />;
+    return (
+      <div className="flex flex-col h-full bg-muted/20">
+        <div className="flex flex-1 items-center justify-center p-8">
+          <div className="text-center max-w-sm">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-muted flex items-center justify-center">
+              <MessageCircle className="w-8 h-8 text-muted-foreground" />
+            </div>
+            <h3 className="text-lg font-semibold text-foreground mb-2">
+              Selecione uma conversa
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Escolha uma conversa na lista à esquerda para visualizar as mensagens
+            </p>
+          </div>
+        </div>
+      </div>
+    );
   }
   
   return (
     <div className="flex flex-col h-full min-h-0 bg-background relative">
       {/* Header */}
-      <ChatHeader 
+      <ChatHeader
         conversation={conversation} 
         windowStatus={windowStatus}
         onResolve={handleResolve}
