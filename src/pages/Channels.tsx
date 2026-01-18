@@ -60,6 +60,7 @@ import {
   useCreateChannel,
   useUpdateChannel,
   useDeleteChannel,
+  useUnblockChannel,
   useTestChannel,
   useValidateToken,
   getWebhookUrl,
@@ -545,6 +546,7 @@ function ChannelCard({
   
   const updateChannel = useUpdateChannel();
   const deleteChannel = useDeleteChannel();
+  const unblockChannel = useUnblockChannel();
   const testChannel = useTestChannel();
   
   const webhookUrl = getWebhookUrl(channel.id);
@@ -552,6 +554,16 @@ function ChannelCard({
   
   // Detect misconfiguration: api_key === subscription_id
   const hasMisconfiguration = config?.api_key && config?.subscription_id && config.api_key === config.subscription_id;
+  
+  // Detect if channel is blocked by provider (payment/eligibility issues)
+  const isBlockedByProvider = channel.blocked_by_provider === true;
+  const isPaymentBlock = channel.blocked_error_code === '131042' || 
+    channel.blocked_reason?.toLowerCase().includes('payment');
+    
+  const handleUnblock = async () => {
+    await unblockChannel.mutateAsync(channel.id);
+    onUpdate();
+  };
 
   const handleSave = async () => {
     const trimmedSubscriptionId = subscriptionId.trim();
@@ -815,6 +827,79 @@ function ChannelCard({
               <p className="text-muted-foreground mt-2">
                 Clique em <strong>⚙️</strong> para corrigir.
               </p>
+            </div>
+          </div>
+        )}
+        
+        {/* Provider blocking alert (payment issues, etc) */}
+        {isBlockedByProvider && (
+          <div className={`p-3 rounded-lg border flex items-start gap-3 ${
+            isPaymentBlock 
+              ? 'bg-red-500/10 border-red-500/40' 
+              : 'bg-orange-500/10 border-orange-500/40'
+          }`}>
+            <AlertTriangle className={`w-5 h-5 mt-0.5 ${isPaymentBlock ? 'text-red-600' : 'text-orange-600'}`} />
+            <div className="flex-1">
+              <p className={`font-semibold ${isPaymentBlock ? 'text-red-700' : 'text-orange-700'}`}>
+                {isPaymentBlock 
+                  ? '🚫 Bloqueado por Problema de Pagamento' 
+                  : '⚠️ Bloqueado pelo Provedor'}
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {channel.blocked_error_code && (
+                  <span className="font-mono bg-muted px-1 rounded mr-1">
+                    Erro {channel.blocked_error_code}
+                  </span>
+                )}
+                {channel.blocked_reason || 'O provedor bloqueou este canal. Verifique sua conta Meta Business.'}
+              </p>
+              {isPaymentBlock && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  A Meta retornou erro 131042 (Business eligibility payment issue). 
+                  Verifique o método de pagamento em{' '}
+                  <a 
+                    href="https://business.facebook.com/billing_hub/" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-primary underline font-medium"
+                  >
+                    Meta Business Billing
+                  </a>.
+                </p>
+              )}
+              <div className="flex gap-2 mt-3">
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  onClick={handleUnblock}
+                  disabled={unblockChannel.isPending}
+                  className="h-7"
+                >
+                  {unblockChannel.isPending ? (
+                    <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                  ) : (
+                    <RefreshCw className="w-3 h-3 mr-1" />
+                  )}
+                  Tentar Desbloquear
+                </Button>
+                {isPaymentBlock && (
+                  <Button 
+                    size="sm" 
+                    variant="default"
+                    asChild
+                    className="h-7"
+                  >
+                    <a 
+                      href="https://business.facebook.com/billing_hub/" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                    >
+                      <ExternalLink className="w-3 h-3 mr-1" />
+                      Ajustar Pagamento
+                    </a>
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         )}

@@ -1020,13 +1020,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "mt_webhook_events_message_id_fkey"
-            columns: ["message_id"]
-            isOneToOne: false
-            referencedRelation: "mt_messages"
-            referencedColumns: ["id"]
-          },
-          {
             foreignKeyName: "mt_webhook_events_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
