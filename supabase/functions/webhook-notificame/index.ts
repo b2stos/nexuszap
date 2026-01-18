@@ -117,9 +117,18 @@ async function saveWebhookEvent(
     contentType?: string;
     rawBody?: string;
     parsedBody?: unknown;
+    messageId?: string; // ID da mensagem extraído do payload
   }
 ): Promise<string | null> {
   try {
+    // Extrair message_id do payload se não fornecido
+    let messageId = options?.messageId;
+    if (!messageId && payload && typeof payload === 'object') {
+      const p = payload as Record<string, unknown>;
+      // NotificaMe: messageId está em p.messageId ou p.id
+      messageId = String(p.messageId || p.id || '') || undefined;
+    }
+    
     const { data, error } = await supabase
       .from('mt_webhook_events')
       .insert({
@@ -127,6 +136,7 @@ async function saveWebhookEvent(
         channel_id: channelId,
         provider: 'notificame',
         event_type: eventType,
+        message_id: messageId || null,
         payload_raw: {
           body: payload,
           request_id: ctx.request_id,
@@ -808,27 +818,49 @@ async function processWebhookAsync(
       return;
     }
     
-    log('info', `Parsed ${events.length} events`, ctx);
+    log('info', `Parsed ${events.length} events from webhook`, ctx, {
+      event_types: events.map(e => e.type),
+      message_ids: events.map(e => e.provider_message_id).filter(Boolean),
+    });
     
     // Process events
     let messagesCreated = 0;
     let messagesUpdated = 0;
+    let orphanEvents = 0;
     const errors: string[] = [];
     
     for (const event of events) {
       try {
         if (event.type === 'message.inbound') {
-          const result = await processInboundMessage(supabase, tenantId, channelId, event, ctx);
+          log('info', 'Processing inbound message', ctx, {
+            from: (event as InboundMessageEvent).from_phone,
+            provider_message_id: event.provider_message_id,
+          });
+          const result = await processInboundMessage(supabase, tenantId, channelId, event as InboundMessageEvent, ctx);
           if (result.success && !result.duplicate) {
             messagesCreated++;
           }
         } else if (event.type === 'message.status') {
-          const result = await processStatusUpdate(supabase, tenantId, event, ctx);
+          const statusEvent = event as StatusUpdateEvent;
+          log('info', 'Processing status update', ctx, {
+            provider_message_id: statusEvent.provider_message_id,
+            status: statusEvent.status,
+            error: statusEvent.error,
+          });
+          const result = await processStatusUpdate(supabase, tenantId, statusEvent, ctx);
           if (result) {
             messagesUpdated++;
+          } else {
+            // Status event didn't match any message - might be orphan
+            orphanEvents++;
+            log('warn', 'Orphan status event - no matching message found', ctx, {
+              provider_message_id: statusEvent.provider_message_id,
+              status: statusEvent.status,
+            });
           }
         }
       } catch (error) {
+        log('error', 'Error processing event', ctx, { error: String(error) });
         errors.push(String(error));
       }
     }
