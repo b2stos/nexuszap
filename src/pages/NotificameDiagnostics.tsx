@@ -68,6 +68,84 @@ interface HealthCheckResponse {
   };
 }
 
+/**
+ * Mapeamento de códigos de erro para diagnóstico
+ */
+function getErrorDiagnostic(code: string | null, detail: string | null): { cause: string; action: string } {
+  const errorCode = code?.toUpperCase() || '';
+  const errorDetail = detail?.toLowerCase() || '';
+  
+  // Erro 131026 - Message Undeliverable
+  if (errorCode === '131026' || errorDetail.includes('131026') || errorDetail.includes('undeliverable')) {
+    return {
+      cause: 'O número não possui WhatsApp, está bloqueado, optou por não receber mensagens (opt-out), ou o número é inválido.',
+      action: 'Verifique se o número está correto e possui WhatsApp ativo. Confirme que o contato não solicitou opt-out. Tente enviar para outro número de teste.',
+    };
+  }
+  
+  // Erro 131047 - Re-engagement message required
+  if (errorCode === '131047' || errorDetail.includes('re-engagement')) {
+    return {
+      cause: 'A janela de 24h expirou. É necessário usar um template aprovado para iniciar nova conversa.',
+      action: 'Use a função "Enviar Template" no Inbox para reabrir a conversa com um template pré-aprovado.',
+    };
+  }
+  
+  // Erro 131042 - Payment Issue
+  if (errorCode === '131042' || errorDetail.includes('131042') || errorDetail.includes('payment')) {
+    return {
+      cause: 'A conta Meta Business não possui forma de pagamento configurada ou há problema com o cartão cadastrado.',
+      action: 'Acesse business.facebook.com → Configurações → Pagamentos e configure um método de pagamento válido.',
+    };
+  }
+  
+  // Erro 401/403 - Authentication
+  if (errorCode.includes('AUTH') || errorCode === '401' || errorCode === '403' || errorDetail.includes('unauthorized') || errorDetail.includes('token')) {
+    return {
+      cause: 'O token de API está inválido, expirado ou não tem permissão para enviar mensagens.',
+      action: 'Regenere o token no painel NotificaMe e atualize em Configurações → Canais.',
+    };
+  }
+  
+  // Erro de template não encontrado
+  if (errorCode.includes('TEMPLATE') || errorDetail.includes('template not found') || errorDetail.includes('not approved')) {
+    return {
+      cause: 'O template não existe ou não está aprovado no Meta Business.',
+      action: 'Sincronize os templates (Configurações → Templates → Sincronizar) e verifique o status de aprovação.',
+    };
+  }
+  
+  // Erro de rate limit
+  if (errorCode === '429' || errorCode.includes('RATE') || errorDetail.includes('rate limit') || errorDetail.includes('too many')) {
+    return {
+      cause: 'Limite de requisições atingido. Muitas mensagens enviadas em curto período.',
+      action: 'Aguarde alguns minutos e reduza a velocidade de envio das campanhas.',
+    };
+  }
+  
+  // Erro de canal não encontrado
+  if (errorCode.includes('CHANNEL') || errorDetail.includes('channel not found') || errorDetail.includes('subscription')) {
+    return {
+      cause: 'O canal não está configurado corretamente ou o Subscription ID está incorreto.',
+      action: 'Verifique as configurações do canal em Configurações → Canais e confirme o Subscription ID.',
+    };
+  }
+  
+  // Erro 500+
+  if (errorCode.startsWith('5') || errorDetail.includes('internal') || errorDetail.includes('server error')) {
+    return {
+      cause: 'Instabilidade temporária no servidor do provedor (NotificaMe ou Meta).',
+      action: 'Aguarde alguns minutos e tente novamente. Se persistir, verifique o status do NotificaMe.',
+    };
+  }
+  
+  // Erro genérico
+  return {
+    cause: 'Erro não categorizado. Verifique os detalhes da mensagem de erro.',
+    action: 'Analise o código de erro e detalhes. Se persistir, entre em contato com o suporte.',
+  };
+}
+
 export default function NotificameDiagnostics() {
   const user = useProtectedUser();
   const { isAdmin, loading: roleLoading } = useUserRole();
@@ -295,7 +373,7 @@ export default function NotificameDiagnostics() {
               </CardContent>
             </Card>
 
-            {/* Recent Errors */}
+            {/* Recent Errors - Enhanced with cause/action */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -313,21 +391,47 @@ export default function NotificameDiagnostics() {
               </CardHeader>
               <CardContent>
                 {healthData.recent_outbound_errors?.length ? (
-                  <ScrollArea className="h-64">
-                    <div className="space-y-2">
-                      {healthData.recent_outbound_errors.map((error, idx) => (
-                        <div key={idx} className="p-3 rounded-lg border bg-destructive/5 border-destructive/20">
-                          <div className="flex items-center justify-between mb-1">
-                            <Badge variant="destructive" className="text-xs">
-                              {error.error_code || 'UNKNOWN'}
-                            </Badge>
-                            <span className="text-xs text-muted-foreground">
-                              {new Date(error.created_at).toLocaleString('pt-BR')}
-                            </span>
+                  <ScrollArea className="h-80">
+                    <div className="space-y-3">
+                      {healthData.recent_outbound_errors.map((error, idx) => {
+                        const errorInfo = getErrorDiagnostic(error.error_code, error.error_detail);
+                        return (
+                          <div key={idx} className="p-4 rounded-lg border bg-destructive/5 border-destructive/20 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <Badge variant="destructive" className="text-xs font-mono">
+                                {error.error_code || 'UNKNOWN'}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(error.created_at).toLocaleString('pt-BR')}
+                              </span>
+                            </div>
+                            
+                            <p className="text-sm font-medium text-foreground">
+                              {error.error_detail || 'Sem detalhes'}
+                            </p>
+                            
+                            {/* Causa provável */}
+                            <div className="p-2 rounded bg-orange-500/10 border border-orange-500/20">
+                              <p className="text-xs font-semibold text-orange-700 dark:text-orange-400 mb-1">
+                                💡 Causa Provável:
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {errorInfo.cause}
+                              </p>
+                            </div>
+                            
+                            {/* Ação recomendada */}
+                            <div className="p-2 rounded bg-primary/10 border border-primary/20">
+                              <p className="text-xs font-semibold text-primary mb-1">
+                                🔧 Ação Recomendada:
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {errorInfo.action}
+                              </p>
+                            </div>
                           </div>
-                          <p className="text-sm text-muted-foreground">{error.error_detail || 'Sem detalhes'}</p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </ScrollArea>
                 ) : (
