@@ -165,35 +165,49 @@ All colors MUST be HSL.
 
 /* =============================================
    Inbox Layout Stability - Prevent visual bugs
+   3-Column Layout: Sidebar | Chat | ContactPanel
    ============================================= */
 
-/* Ensure all inbox columns have proper stacking */
+/* Main flex container for 3 columns */
 .inbox-container > div {
   position: relative;
   z-index: 1;
 }
 
-/* Conversation list sidebar */
-.inbox-container aside {
+/* Left sidebar - Conversation list */
+.inbox-container > div > aside:first-of-type {
   position: relative;
   z-index: 2;
   background-color: hsl(var(--card));
+  /* Ensure proper sizing */
+  flex-shrink: 0;
+  flex-grow: 0;
 }
 
-/* Chat window main area */
-.inbox-container main {
+/* Center - Chat window (main) */
+.inbox-container > div > main {
   position: relative;
   z-index: 1;
   background-color: hsl(var(--background));
-  /* Prevent content overflow causing visual glitches */
+  /* CRITICAL: Prevent content overflow */
   overflow: hidden;
+  /* Ensure it takes remaining space */
+  flex: 1;
+  min-width: 0;
+  /* Create stacking context */
+  isolation: isolate;
 }
 
-/* Contact panel (right sidebar) */
-.inbox-container aside:last-child {
+/* Right sidebar - Contact Panel */
+.inbox-container > div > aside:last-of-type {
   position: relative;
-  z-index: 2;
+  z-index: 1;
   background-color: hsl(var(--card));
+  /* Ensure proper sizing - MUST NOT overlap chat */
+  flex-shrink: 0;
+  flex-grow: 0;
+  /* CRITICAL: Static positioning only, no overlap */
+  overflow: hidden;
 }
 
 /* ScrollArea fix for chat messages - prevent content escaping */
@@ -201,8 +215,28 @@ All colors MUST be HSL.
   contain: strict;
 }
 
+/* Message composer - always visible at bottom of chat */
+.inbox-container main > div:last-child {
+  position: relative;
+  z-index: 10;
+  background-color: hsl(var(--card));
+}
+
+/* Ensure ChatWindow uses full height with proper flex */
+.inbox-container main > div.flex-1 {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* Message bubble container - prevent layout shifts */
 .inbox-container .message-bubble-container {
   transform: translateZ(0);
   will-change: transform;
+}
+
+/* Fix for dropdown menus in inbox - ensure they appear above everything */
+.inbox-container [data-radix-popper-content-wrapper] {
+  z-index: 100 !important;
 }

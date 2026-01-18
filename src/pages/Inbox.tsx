@@ -497,7 +497,7 @@ export default function Inbox() {
               </AlertDialogContent>
             </AlertDialog>
             
-            <div className="flex-1 min-h-0 overflow-hidden">
+            <div className="flex-1 min-h-0 h-full flex flex-col overflow-hidden">
               <InboxErrorBoundary onReset={() => setActiveConversation(null)}>
                 <ChatWindow
                   conversation={activeConversation}
@@ -512,7 +512,10 @@ export default function Inbox() {
           
           {/* Right Column - Contact Panel (only visible when conversation selected on lg+) */}
           {activeConversation && (
-            <aside className="w-72 lg:w-80 flex-shrink-0 flex-grow-0 hidden lg:block border-l border-border">
+            <aside 
+              className="hidden lg:flex flex-shrink-0 flex-grow-0 border-l border-border bg-card overflow-hidden"
+              style={{ width: 320, maxWidth: 320, minWidth: 280 }}
+            >
               <ContactPanel
                 conversation={activeConversation}
                 contact={contact || activeConversation?.contact || null}
