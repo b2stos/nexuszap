@@ -305,6 +305,47 @@ export function useDeleteChannel() {
   });
 }
 
+// Unblock channel (remove provider block)
+export function useUnblockChannel() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (channelId: string) => {
+      const { data, error } = await supabase
+        .from('channels')
+        .update({
+          blocked_by_provider: false,
+          blocked_reason: null,
+          blocked_at: null,
+          blocked_error_code: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', channelId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['channels'] });
+      queryClient.invalidateQueries({ queryKey: ['channel', data.id] });
+      toast({
+        title: 'Canal desbloqueado',
+        description: 'O bloqueio foi removido. Tente enviar mensagens novamente.',
+      });
+    },
+    onError: (error) => {
+      console.error('Error unblocking channel:', error);
+      toast({
+        title: 'Erro ao desbloquear canal',
+        description: error instanceof Error ? error.message : 'Erro desconhecido',
+        variant: 'destructive',
+      });
+    },
+  });
+}
+
 // Test channel connection
 export function useTestChannel() {
   return useMutation({
