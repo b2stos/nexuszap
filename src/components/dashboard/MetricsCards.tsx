@@ -2,61 +2,70 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Send, CheckCircle2, Eye, Clock } from "lucide-react";
+import { useCurrentTenant } from "@/hooks/useInbox";
 
 export function MetricsCards() {
-  const { data: metrics } = useQuery({
-    queryKey: ["dashboard-metrics"],
+  const { data: tenant } = useCurrentTenant();
+  
+  const { data: metrics, isLoading } = useQuery({
+    queryKey: ["dashboard-metrics-mt", tenant?.tenantId],
+    enabled: !!tenant?.tenantId,
+    refetchInterval: 10000, // Polling a cada 10s para métricas em tempo real
     queryFn: async () => {
-      const { data: contacts } = await supabase
-        .from("contacts")
-        .select("id", { count: "exact" });
-
-      const { data: campaigns } = await supabase
-        .from("campaigns")
-        .select("id", { count: "exact" });
-
-      const { data: messages } = await supabase
-        .from("messages")
-        .select("status", { count: "exact" });
-
-      const { data: sent } = await supabase
-        .from("messages")
-        .select("id", { count: "exact" })
-        .in("status", ["sent", "delivered", "read"]);
-
-      const { data: delivered } = await supabase
-        .from("messages")
-        .select("id", { count: "exact" })
-        .in("status", ["delivered", "read"]);
-
-      const { data: read } = await supabase
-        .from("messages")
-        .select("id", { count: "exact" })
-        .eq("status", "read");
-
+      const tenantId = tenant!.tenantId;
       const last24Hours = new Date();
       last24Hours.setHours(last24Hours.getHours() - 24);
+      
+      // 1. Total de contatos (mt_contacts)
+      const { count: totalContacts } = await supabase
+        .from("mt_contacts")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId);
 
-      const { data: last24h } = await supabase
-        .from("messages")
-        .select("id", { count: "exact" })
-        .gte("created_at", last24Hours.toISOString())
-        .in("status", ["sent", "delivered", "read"]);
+      // 2. Total de campanhas (mt_campaigns)
+      const { count: totalCampaigns } = await supabase
+        .from("mt_campaigns")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId);
 
-      const totalContacts = contacts?.length || 0;
-      const totalCampaigns = campaigns?.length || 0;
-      const totalMessages = sent?.length || 0;
-      const deliveryRate = totalMessages > 0 ? ((delivered?.length || 0) / totalMessages) * 100 : 0;
-      const readRate = totalMessages > 0 ? ((read?.length || 0) / totalMessages) * 100 : 0;
-      const messagesLast24h = last24h?.length || 0;
+      // 3. Métricas de mensagens outbound (mt_messages) - fonte da verdade
+      const { data: messageStats } = await supabase
+        .from("mt_messages")
+        .select("status, created_at")
+        .eq("tenant_id", tenantId)
+        .eq("direction", "outbound");
+      
+      // Contar por status
+      const sentMessages = messageStats?.filter(m => 
+        ['sent', 'delivered', 'read'].includes(m.status)
+      ) || [];
+      
+      const deliveredMessages = messageStats?.filter(m => 
+        ['delivered', 'read'].includes(m.status)
+      ) || [];
+      
+      const readMessages = messageStats?.filter(m => 
+        m.status === 'read'
+      ) || [];
+      
+      // Mensagens nas últimas 24h
+      const last24hMessages = sentMessages.filter(m => 
+        new Date(m.created_at) >= last24Hours
+      );
+
+      const totalSent = sentMessages.length;
+      const totalDelivered = deliveredMessages.length;
+      const totalRead = readMessages.length;
+      const deliveryRate = totalSent > 0 ? (totalDelivered / totalSent) * 100 : 0;
+      const readRate = totalSent > 0 ? (totalRead / totalSent) * 100 : 0;
 
       return {
-        totalContacts,
-        totalCampaigns,
-        totalMessages,
+        totalContacts: totalContacts || 0,
+        totalCampaigns: totalCampaigns || 0,
+        totalMessages: totalSent,
         deliveryRate: deliveryRate.toFixed(1),
         readRate: readRate.toFixed(1),
-        messagesLast24h,
+        messagesLast24h: last24hMessages.length,
       };
     },
   });
@@ -76,7 +85,7 @@ export function MetricsCards() {
     },
     {
       title: "Mensagens Lidas",
-      value: metrics?.readRate || 0,
+      value: `${metrics?.readRate || 0}%`,
       icon: Eye,
       description: "Taxa de visualização"
     },
@@ -87,6 +96,23 @@ export function MetricsCards() {
       description: "Mensagens enviadas hoje"
     },
   ];
+
+  if (!tenant?.tenantId) {
+    return (
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+        {[1, 2, 3, 4].map((i) => (
+          <Card key={i} className="relative overflow-hidden border border-border/50 bg-card">
+            <CardHeader className="pb-2">
+              <div className="h-4 bg-muted animate-pulse rounded" />
+            </CardHeader>
+            <CardContent>
+              <div className="h-8 bg-muted animate-pulse rounded w-1/2" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">

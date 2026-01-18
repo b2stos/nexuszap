@@ -10,9 +10,11 @@ import { WelcomeModal } from "@/components/onboarding/WelcomeModal";
 import { OnboardingChecklist } from "@/components/onboarding/OnboardingChecklist";
 import { OnboardingCompletionModal } from "@/components/onboarding/OnboardingCompletionModal";
 import { useOnboarding } from "@/hooks/useOnboarding";
+import { useCurrentTenant } from "@/hooks/useInbox";
 
 export default function Dashboard() {
   const user = useProtectedUser();
+  const { data: tenant } = useCurrentTenant();
   const { showWelcome, isComplete, progress, completeStep } = useOnboarding();
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [dismissedChecklist, setDismissedChecklist] = useState(false);
@@ -41,8 +43,8 @@ export default function Dashboard() {
       />
 
       <div className="space-y-8 animate-fade-in">
-        {/* Global Payment Alert Banner */}
-        <PaymentAlertBanner />
+        {/* Global Payment Alert Banner - filtered by tenant */}
+        <PaymentAlertBanner tenantId={tenant?.tenantId} />
 
         <div className="flex items-center justify-between">
           <div>

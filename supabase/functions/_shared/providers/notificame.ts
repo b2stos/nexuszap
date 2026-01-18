@@ -337,11 +337,15 @@ function parseNotificaMeNativeFormat(channel: Channel, payload: Record<string, u
   const message = payload.message as Record<string, unknown> | undefined;
   
   // CRITICAL: Handle STATUS events FIRST - they DON'T have a message object!
-  // NotificaMe STATUS format:
+  // NotificaMe STATUS format (from webhook data):
   // {
-  //   "type": "MESSAGE_STATUS",
-  //   "messageId": "uuid-we-saved",
-  //   "messageStatus": { "code": "DELIVERED" / "ERROR" / "SENT" / "READ" }
+  //   "body": {
+  //     "messageId": "c6dc0330-...", ← NOVO ID por evento (não usar para correlação!)
+  //     "messageStatus": { 
+  //       "code": "DELIVERED" / "READ",
+  //       "providerMessageId": "L2t2YnVE..." ← wamid base64 (CONSISTENTE para correlação!)
+  //     }
+  //   }
   // }
   if (msgType === 'STATUS' || msgType === 'MESSAGE_STATUS') {
     const messageStatus = payload.messageStatus as Record<string, unknown> | undefined;
@@ -354,12 +358,19 @@ function parseNotificaMeNativeFormat(channel: Channel, payload: Record<string, u
       ''
     ).toUpperCase();
     
-    // CRITICAL: Use messageId (the ID we saved when sending) NOT providerMessageId
-    const providerMessageId = String(
-      payload.messageId ||
-      payload.id || 
-      ''
-    );
+    // CRITICAL FIX: Extract both IDs for proper correlation
+    // 1. messageId: o ID do evento (muda a cada webhook - não é o mesmo que salvamos no envio)
+    // 2. providerMessageId: o wamid base64 (consistente entre SENT → DELIVERED → READ)
+    const eventMessageId = String(payload.messageId || payload.id || '');
+    
+    // O providerMessageId vem dentro do messageStatus para DELIVERED/READ
+    const wamidBase64 = String(messageStatus?.providerMessageId || '');
+    
+    // Para correlação primária, tentar usar o eventMessageId (que pode ser nosso ID original no SENT)
+    // Para correlação secundária, usar o wamidBase64 (consistente)
+    // NOTA: No primeiro evento (SENT), eventMessageId = nosso provider_message_id
+    //       Nos eventos seguintes (DELIVERED, READ), eventMessageId é NOVO mas wamidBase64 é consistente
+    const primaryId = eventMessageId;
     
     // Map NotificaMe status codes to our status
     const mapNotificaMeStatus = (code: string): DeliveryStatus => {
@@ -371,16 +382,22 @@ function parseNotificaMeNativeFormat(channel: Channel, payload: Record<string, u
       return 'sent';
     };
     
-    if (statusCode && providerMessageId) {
+    if (statusCode && primaryId) {
       const mappedStatus = mapNotificaMeStatus(statusCode);
       
       const event: StatusUpdateEvent = {
         type: 'message.status',
-        provider_message_id: providerMessageId,
+        provider_message_id: primaryId,
         status: mappedStatus,
         timestamp: new Date(),
         raw: payload,
       };
+      
+      // CRITICAL: Attach wamidBase64 for secondary correlation
+      // This will be used by the webhook handler for phone+time reconciliation
+      if (wamidBase64) {
+        (event.raw as Record<string, unknown>).__wamid_base64 = wamidBase64;
+      }
       
       // Extract error info for failed messages
       if (mappedStatus === 'failed' && messageStatus?.error) {
@@ -391,11 +408,11 @@ function parseNotificaMeNativeFormat(channel: Channel, payload: Record<string, u
         };
       }
       
-      console.log(`[NotificaMe] Parsed status update: ${statusCode} → ${mappedStatus} for messageId=${providerMessageId}`);
+      console.log(`[NotificaMe] Parsed status update: ${statusCode} → ${mappedStatus} | eventId=${primaryId} | wamid=${wamidBase64.substring(0, 20)}...`);
       events.push(event);
       return events; // Return early for status events
     } else {
-      console.warn(`[NotificaMe] Could not parse status event - statusCode: ${statusCode}, messageId: ${providerMessageId}`);
+      console.warn(`[NotificaMe] Could not parse status event - statusCode: ${statusCode}, messageId: ${primaryId}`);
     }
   }
   

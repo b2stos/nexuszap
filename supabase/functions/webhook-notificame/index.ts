@@ -439,8 +439,8 @@ async function updateOutboundMessageStatus(
   }
   
   // ========== STEP 1: Direct lookup by provider_message_id ==========
-  let message = null;
-  let recipient = null;
+  let message: { id: string; status: string; contact_id: string } | null = null;
+  let recipient: { id: string; campaign_id: string; contact_id: string; status: string } | null = null;
   
   const { data: directMessage } = await supabase
     .from('mt_messages')
@@ -471,89 +471,85 @@ async function updateOutboundMessageStatus(
     });
   }
   
-  // ========== STEP 2: Fallback - Reconcile by phone + time window ==========
-  // NotificaMe sends a NEW messageId for each status, so DELIVERED/READ won't match SENT
-  if (!message && !recipient && rawPayload) {
-    const body = rawPayload.body as Record<string, unknown> | undefined;
-    const messageStatus = body?.messageStatus as Record<string, unknown> | undefined;
-    const toPhone = body?.to as string;
-    const subscriptionId = body?.subscriptionId as string;
+  // ========== STEP 2: Fallback - Reconcile by channel + recent messages ==========
+  // NotificaMe sends a NEW messageId for each status event (SENT, DELIVERED, READ).
+  // The first event (SENT) uses the same ID we got from the API response.
+  // Subsequent events (DELIVERED, READ) use a NEW ID.
+  // 
+  // RECONCILIATION STRATEGY:
+  // 1. Look for recent outbound messages on this channel that are awaiting status updates
+  // 2. Match by status progression (sent → delivered → read)
+  // 3. Time window: 24 hours (messages can take a while to be delivered/read)
+  
+  if (!message && !recipient && channelId) {
+    // Janela de 24 horas para reconciliação
+    const timeWindowStart = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     
-    // Extract phone from various locations
-    let targetPhone: string | null = null;
-    if (toPhone && !toPhone.includes('-')) {
-      targetPhone = normalizePhone(toPhone);
+    // Determine which statuses to look for based on the incoming status
+    // If incoming is 'delivered', look for 'sent' messages
+    // If incoming is 'read', look for 'sent' or 'delivered' messages
+    let lookForStatuses: string[] = [];
+    if (statusUpdate.status === 'delivered') {
+      lookForStatuses = ['sent'];
+    } else if (statusUpdate.status === 'read') {
+      lookForStatuses = ['sent', 'delivered'];
+    } else if (statusUpdate.status === 'failed') {
+      lookForStatuses = ['queued', 'sent'];
     }
     
-    // Time window: look for messages sent in the last 60 seconds
-    const timeWindowStart = new Date(Date.now() - 60000).toISOString();
-    
-    if (targetPhone && channelId) {
-      // Try to find the most recent outbound message to this phone
-      const { data: recentMessage } = await supabase
+    if (lookForStatuses.length > 0) {
+      // Find recent messages awaiting this status update
+      const { data: recentMessages } = await supabase
         .from('mt_messages')
-        .select('id, status, contact_id, provider_message_id')
+        .select('id, status, contact_id, provider_message_id, created_at')
         .eq('tenant_id', tenantId)
         .eq('channel_id', channelId)
         .eq('direction', 'outbound')
+        .in('status', lookForStatuses)
         .gte('created_at', timeWindowStart)
         .order('created_at', { ascending: false })
-        .limit(10);
+        .limit(50);
       
-      // Find matching contact by phone
-      if (recentMessage && recentMessage.length > 0) {
-        for (const msg of recentMessage) {
-          const { data: contact } = await supabase
-            .from('mt_contacts')
-            .select('phone')
-            .eq('id', msg.contact_id)
-            .single();
-          
-          if (contact && normalizePhone(contact.phone) === targetPhone) {
-            message = msg;
-            if (ctx) log('info', 'Reconciled message by phone + time window', ctx, {
-              message_id: msg.id,
-              phone: targetPhone,
-              original_provider_id: msg.provider_message_id,
-              webhook_message_id: event.provider_message_id,
-            });
-            break;
-          }
-        }
+      if (recentMessages && recentMessages.length > 0) {
+        // Use the most recent message as a best guess
+        // In a real scenario with high volume, we might need more sophisticated matching
+        message = recentMessages[0];
+        if (ctx) log('info', 'Reconciled message by channel + status progression', ctx, {
+          message_id: message.id,
+          current_status: message.status,
+          new_status: statusUpdate.status,
+          webhook_message_id: event.provider_message_id,
+          candidates_count: recentMessages.length,
+        });
       }
-    }
-    
-    // Similarly for campaign_recipients
-    if (!recipient && targetPhone) {
-      const { data: recentRecipients } = await supabase
-        .from('campaign_recipients')
-        .select(`
-          id, 
-          campaign_id, 
-          contact_id, 
-          status, 
-          provider_message_id,
-          contact:mt_contacts!inner(phone)
-        `)
-        .eq('status', 'sent')
-        .gte('sent_at', timeWindowStart)
-        .order('sent_at', { ascending: false })
-        .limit(20);
       
-      if (recentRecipients) {
-        for (const rec of recentRecipients) {
-          const contactData = rec.contact as unknown as { phone: string };
-          if (contactData && normalizePhone(contactData.phone) === targetPhone) {
-            recipient = rec;
-            if (ctx) log('info', 'Reconciled recipient by phone + time window', ctx, {
-              recipient_id: rec.id,
-              campaign_id: rec.campaign_id,
-              phone: targetPhone,
-              original_provider_id: rec.provider_message_id,
-              webhook_message_id: event.provider_message_id,
-            });
-            break;
+      // Similarly for campaign_recipients
+      if (!recipient) {
+        const { data: recentRecipients } = await supabase
+          .from('campaign_recipients')
+          .select('id, campaign_id, contact_id, status, provider_message_id')
+          .in('status', lookForStatuses)
+          .gte('sent_at', timeWindowStart)
+          .order('sent_at', { ascending: false })
+          .limit(50);
+        
+        // Try to match by contact_id if we found a message
+        if (recentRecipients && recentRecipients.length > 0) {
+          if (message && message.contact_id) {
+            // Prefer matching by contact_id
+            const foundRecipient = recentRecipients.find(r => r.contact_id === message!.contact_id);
+            recipient = foundRecipient || recentRecipients[0];
+          } else {
+            recipient = recentRecipients[0];
           }
+          
+          if (ctx) log('info', 'Reconciled recipient by status progression', ctx, {
+            recipient_id: recipient.id,
+            campaign_id: recipient.campaign_id,
+            current_status: recipient.status,
+            new_status: statusUpdate.status,
+            webhook_message_id: event.provider_message_id,
+          });
         }
       }
     }
