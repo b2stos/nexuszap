@@ -3,6 +3,7 @@ import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { MetricsCards } from "@/components/dashboard/MetricsCards";
 import { RecentCampaigns } from "@/components/dashboard/RecentCampaigns";
 import { WebhookMonitor } from "@/components/dashboard/WebhookMonitor";
+import { PaymentAlertBanner } from "@/components/dashboard/PaymentAlertBanner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useProtectedUser } from "@/components/auth/ProtectedRoute";
 import { WelcomeModal } from "@/components/onboarding/WelcomeModal";
@@ -40,6 +41,9 @@ export default function Dashboard() {
       />
 
       <div className="space-y-8 animate-fade-in">
+        {/* Global Payment Alert Banner */}
+        <PaymentAlertBanner />
+
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
