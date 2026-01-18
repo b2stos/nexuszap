@@ -48,6 +48,7 @@ import { formatDistanceToNow, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { CampaignHealthPanel } from "@/components/campaigns/CampaignHealthPanel";
 import { CampaignDebugPanel, DebugInfo } from "@/components/campaigns/CampaignDebugPanel";
 import { serializeError, extractTraceId, createPayloadSummary } from "@/hooks/useCampaignDebug";
 
@@ -553,6 +554,14 @@ export default function CampaignDetail() {
             </div>
           </CardContent>
         </Card>
+        
+        {/* Health Panel - Webhook Status & Delivery Confirmation */}
+        {campaignId && campaign.tenant_id && (
+          <CampaignHealthPanel 
+            campaignId={campaignId} 
+            tenantId={campaign.tenant_id} 
+          />
+        )}
         
         {/* Campaign Details */}
         <Card>
