@@ -871,22 +871,49 @@ async function handleWebhook(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const contentType = req.headers.get('content-type') || '';
   
-  // CRITICAL FIX: Extract channel_id and clean it from any extra params
-  // NotificaMe may append ?hub_access_token=... to the URL, contaminating channel_id
-  let channelId = url.searchParams.get('channel_id');
-  if (channelId) {
-    // If channelId contains "?" it means extra params were appended incorrectly
-    const questionMarkIndex = channelId.indexOf('?');
+  // CRITICAL FIX: Extract channel_id from BOTH path and query params
+  // URL formats:
+  // 1. /webhook-notificame/{channel_id} ← Path format (preferred)
+  // 2. /webhook-notificame?channel_id={channel_id} ← Query param format
+  // NotificaMe may append ?hub_access_token=... contaminating values
+  
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  
+  // 1. Try extracting from path first (e.g., /webhook-notificame/abc-uuid-123)
+  let channelId: string | null = null;
+  const pathParts = url.pathname.split('/').filter(Boolean);
+  // Find first UUID-looking segment after "webhook-notificame"
+  const funcIndex = pathParts.findIndex(p => p.includes('webhook-notificame'));
+  if (funcIndex >= 0 && pathParts[funcIndex + 1]) {
+    let candidate = pathParts[funcIndex + 1];
+    // Clean any query params that got attached
+    const questionMarkIndex = candidate.indexOf('?');
     if (questionMarkIndex > -1) {
-      channelId = channelId.substring(0, questionMarkIndex);
+      candidate = candidate.substring(0, questionMarkIndex);
     }
-    // Also strip any whitespace
-    channelId = channelId.trim();
-    // Validate UUID format (basic check)
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(channelId)) {
-      console.warn(`Invalid channel_id format after cleanup: ${channelId}`);
-      channelId = null; // Treat as test mode
+    candidate = candidate.trim();
+    if (uuidRegex.test(candidate)) {
+      channelId = candidate;
+      console.log(`[Webhook] Extracted channel_id from path: ${channelId}`);
+    }
+  }
+  
+  // 2. Fallback to query param
+  if (!channelId) {
+    let queryChannelId = url.searchParams.get('channel_id');
+    if (queryChannelId) {
+      // Clean any extra params
+      const questionMarkIndex = queryChannelId.indexOf('?');
+      if (questionMarkIndex > -1) {
+        queryChannelId = queryChannelId.substring(0, questionMarkIndex);
+      }
+      queryChannelId = queryChannelId.trim();
+      if (uuidRegex.test(queryChannelId)) {
+        channelId = queryChannelId;
+        console.log(`[Webhook] Extracted channel_id from query: ${channelId}`);
+      } else {
+        console.warn(`Invalid channel_id format in query: ${queryChannelId}`);
+      }
     }
   }
   
