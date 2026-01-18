@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { MetricsCards } from "@/components/dashboard/MetricsCards";
 import { RecentCampaigns } from "@/components/dashboard/RecentCampaigns";
-import { WebhookMonitor } from "@/components/dashboard/WebhookMonitor";
+import { WebhookMonitorMT } from "@/components/dashboard/WebhookMonitorMT";
 import { PaymentAlertBanner } from "@/components/dashboard/PaymentAlertBanner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useProtectedUser } from "@/components/auth/ProtectedRoute";
@@ -72,7 +72,7 @@ export default function Dashboard() {
           </TabsContent>
           
           <TabsContent value="webhooks">
-            <WebhookMonitor />
+            <WebhookMonitorMT />
           </TabsContent>
         </Tabs>
 
