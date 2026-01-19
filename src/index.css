@@ -164,80 +164,78 @@ All colors MUST be HSL.
 }
 
 /* =============================================
-   Inbox Layout Stability - Prevent visual bugs
-   3-Column Layout: Sidebar | Chat | ContactPanel
-   CRITICAL: Sidebar NEVER overlaps chat
+   Inbox 3-Column Layout - WhatsApp Web Style
+   LEFT: Conversation List (fixed width)
+   CENTER: Chat Window (flex-1, remaining space)
+   RIGHT: Contact Panel (fixed width)
    ============================================= */
 
-/* Main flex container for 3 columns - MUST be row */
-.inbox-container > div {
-  position: relative;
-  z-index: 1;
+/* Main row container for 3 columns */
+.inbox-row {
   display: flex !important;
   flex-direction: row !important;
-  overflow: hidden;
-  flex: 1;
+  flex: 1 1 0%;
   min-height: 0;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
 }
 
-/* Left sidebar - Conversation list - FIXED WIDTH */
-.inbox-container > div > aside:first-of-type {
+/* LEFT SIDEBAR - Conversation List - FIXED WIDTH */
+.inbox-sidebar-left {
   position: relative;
   z-index: 2;
   background-color: hsl(var(--card));
-  /* Ensure proper sizing - NO GROW */
-  flex-shrink: 0;
-  flex-grow: 0;
-  /* CRITICAL: Fixed width, no overlap */
+  /* CRITICAL: Fixed size, no grow, no shrink */
+  flex: 0 0 320px !important;
   width: 320px;
-  min-width: 320px;
+  min-width: 280px;
   max-width: 384px;
+  /* Prevent content overflow */
   overflow: hidden;
-  /* Border to separate from chat */
+  /* Border */
   border-right: 1px solid hsl(var(--border));
 }
 
 @media (min-width: 1024px) {
-  .inbox-container > div > aside:first-of-type {
+  .inbox-sidebar-left {
+    flex: 0 0 384px !important;
     width: 384px;
     min-width: 320px;
     max-width: 384px;
   }
 }
 
-/* Center - Chat window (main) - TAKES ALL REMAINING SPACE */
-.inbox-container > div > main {
+/* CENTER - Chat Window - TAKES ALL REMAINING SPACE */
+.inbox-chat-center {
   position: relative;
   z-index: 1;
   background-color: hsl(var(--background));
-  /* CRITICAL: Prevent content overflow */
-  overflow: hidden;
-  /* CRITICAL: flex-1 takes remaining space only, never more */
-  flex: 1 1 auto !important;
+  /* CRITICAL: Takes remaining space, can shrink */
+  flex: 1 1 0% !important;
   min-width: 0 !important;
-  max-width: none;
-  /* Create stacking context */
+  /* Prevent content overflow */
+  overflow: hidden;
+  /* Stacking context */
   isolation: isolate;
-  /* CRITICAL: No margins to prevent gap */
-  margin-left: 0;
-  margin-right: 0;
+  /* Display as flex column for header + messages + composer */
+  display: flex;
+  flex-direction: column;
 }
 
-/* Right sidebar - Contact Panel - FIXED WIDTH */
-.inbox-container > div > aside:last-of-type {
+/* RIGHT SIDEBAR - Contact Panel - FIXED WIDTH */
+.inbox-sidebar-right {
   position: relative;
   z-index: 1;
   background-color: hsl(var(--card));
-  /* CRITICAL: Fixed size, NO GROW */
-  flex-shrink: 0 !important;
-  flex-grow: 0 !important;
-  /* CRITICAL: Fixed width - never changes */
-  width: 320px !important;
+  /* CRITICAL: Fixed size, no grow, no shrink */
+  flex: 0 0 320px !important;
+  width: 320px;
   min-width: 280px;
-  max-width: 320px !important;
-  /* CRITICAL: Static positioning only, no overlap */
+  max-width: 360px;
+  /* Prevent content overflow */
   overflow: hidden;
-  /* Border to separate from chat */
+  /* Border */
   border-left: 1px solid hsl(var(--border));
 }
 
@@ -247,14 +245,14 @@ All colors MUST be HSL.
 }
 
 /* Message composer - always visible at bottom of chat */
-.inbox-container main > div:last-child {
+.inbox-chat-center > div:last-child {
   position: relative;
   z-index: 10;
   background-color: hsl(var(--card));
 }
 
 /* Ensure ChatWindow uses full height with proper flex */
-.inbox-container main > div.flex-1 {
+.inbox-chat-center > div.flex-1 {
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -273,15 +271,17 @@ All colors MUST be HSL.
 }
 
 /* =============================================
-   TABLET RESPONSIVE - Hide contact panel
+   TABLET RESPONSIVE (768px - 1023px)
+   Hide right sidebar, shrink left sidebar
    ============================================= */
 
 @media (min-width: 768px) and (max-width: 1023px) {
-  .inbox-container > div > aside:last-of-type {
+  .inbox-sidebar-right {
     display: none !important;
   }
   
-  .inbox-container > div > aside:first-of-type {
+  .inbox-sidebar-left {
+    flex: 0 0 300px !important;
     width: 300px;
     min-width: 280px;
     max-width: 300px;
@@ -289,20 +289,23 @@ All colors MUST be HSL.
 }
 
 /* =============================================
-   MOBILE RESPONSIVE - Chat takes full width
+   MOBILE RESPONSIVE (< 768px)
+   Full screen switching between list and chat
    ============================================= */
 
 @media (max-width: 767px) {
-  .inbox-container > div > aside:first-of-type {
-    width: 100%;
-    max-width: none;
+  .inbox-sidebar-left {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
   }
   
-  .inbox-container > div > main {
-    width: 100%;
+  .inbox-chat-center {
+    flex: 1 1 100% !important;
+    width: 100% !important;
   }
   
-  .inbox-container > div > aside:last-of-type {
+  .inbox-sidebar-right {
     display: none !important;
   }
 }

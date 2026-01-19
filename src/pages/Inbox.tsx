@@ -352,34 +352,31 @@ export default function Inbox() {
     <DashboardLayout user={user}>
       {/* Use dvh for iOS Safari compatibility */}
       <div className="inbox-container flex flex-col overflow-hidden bg-muted/30">
-        <div className="flex-1 flex overflow-hidden min-h-0 w-full">
-          {/* Left Column - Conversation List */}
+        <div className="inbox-row">
+          {/* LEFT COLUMN - Conversation List */}
           <aside 
             className={`
-              w-full md:w-80 lg:w-96 flex-shrink-0 flex-grow-0 border-r border-border bg-card
+              inbox-sidebar-left flex flex-col
               ${showMobileChat ? 'hidden md:flex' : 'flex'}
             `}
-            style={{ minWidth: 320, maxWidth: 384 }}
           >
-            <div className="h-full w-full flex flex-col">
-              <ConversationList
-                conversations={conversations}
-                isLoading={conversationsLoading}
-                activeId={activeConversation?.id}
-                filter={filter}
-                onFilterChange={setFilter}
-                onSelect={handleSelectConversation}
-                onDeleteConversation={(conversationId) => {
-                  openDeleteDialog(conversationId);
-                }}
-              />
-            </div>
+            <ConversationList
+              conversations={conversations}
+              isLoading={conversationsLoading}
+              activeId={activeConversation?.id}
+              filter={filter}
+              onFilterChange={setFilter}
+              onSelect={handleSelectConversation}
+              onDeleteConversation={(conversationId) => {
+                openDeleteDialog(conversationId);
+              }}
+            />
           </aside>
           
-          {/* Center Column - Chat (MUST have flex-1 and min-w-0) */}
+          {/* CENTER COLUMN - Chat Window */}
           <main 
             className={`
-              flex-1 min-w-0 min-h-0 flex flex-col bg-background
+              inbox-chat-center
               ${!showMobileChat ? 'hidden md:flex' : 'flex'}
             `}
           >
@@ -510,12 +507,9 @@ export default function Inbox() {
             </div>
           </main>
           
-          {/* Right Column - Contact Panel (only visible when conversation selected on lg+) */}
+          {/* RIGHT COLUMN - Contact Panel (only visible on lg+) */}
           {activeConversation && (
-            <aside 
-              className="hidden lg:flex flex-shrink-0 flex-grow-0 border-l border-border bg-card overflow-hidden"
-              style={{ width: 320, maxWidth: 320, minWidth: 280 }}
-            >
+            <aside className="inbox-sidebar-right hidden lg:flex flex-col">
               <ContactPanel
                 conversation={activeConversation}
                 contact={contact || activeConversation?.contact || null}
