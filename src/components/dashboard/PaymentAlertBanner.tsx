@@ -4,9 +4,11 @@
  * Exibe um alerta global no Dashboard quando é detectado
  * erro 131042 (Meta Business payment issue) em qualquer campanha.
  * 
- * Implementa:
- * - TTL de 30 minutos: o banner some se não houver novos erros 131042
- * - Auto-desativação: some automaticamente após um envio bem-sucedido
+ * REGRAS CRÍTICAS (evitar falsos positivos):
+ * 1. TTL de 15 minutos: o banner some após este tempo sem novos erros
+ * 2. Auto-desativação: some automaticamente após QUALQUER envio bem-sucedido
+ * 3. Só considera erros 131042 se NÃO houver sent/delivered/read recente
+ * 4. Erros antigos (antes do último sucesso) são ignorados
  */
 
 import { useQuery } from '@tanstack/react-query';
@@ -16,13 +18,17 @@ import { CreditCard, ExternalLink, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useState } from 'react';
 
-// TTL em minutos - o banner some após este tempo sem novos erros
-const PAYMENT_ERROR_TTL_MINUTES = 30;
+// TTL reduzido para 15 minutos - erros antigos não devem bloquear
+const PAYMENT_ERROR_TTL_MINUTES = 15;
+
+// Erros de pagamento conhecidos da Meta
+const PAYMENT_ERROR_CODES = ['131042', '131026', '131049'];
 
 interface PaymentIssueState {
   isActive: boolean;
   lastSeenAt: Date | null;
   hasSuccessAfterError: boolean;
+  debugInfo?: string;
 }
 
 interface PaymentAlertBannerProps {
@@ -35,89 +41,80 @@ export function PaymentAlertBanner({ tenantId }: PaymentAlertBannerProps) {
   const { data: paymentState } = useQuery({
     queryKey: ['payment-issue-check', tenantId],
     queryFn: async (): Promise<PaymentIssueState> => {
-      const ttlCutoff = new Date();
-      ttlCutoff.setMinutes(ttlCutoff.getMinutes() - PAYMENT_ERROR_TTL_MINUTES);
+      const now = new Date();
+      const ttlCutoff = new Date(now.getTime() - PAYMENT_ERROR_TTL_MINUTES * 60 * 1000);
 
-      // 1. Buscar o erro 131042 mais recente dentro da janela TTL
+      // 1. PRIMEIRO: Verificar se houve QUALQUER sucesso recente (últimos 5 min)
+      // Se sim, não mostrar banner mesmo que tenha erro
+      const recentSuccessCutoff = new Date(now.getTime() - 5 * 60 * 1000);
+      
+      const { data: recentSuccess } = await supabase
+        .from('mt_messages')
+        .select('id, sent_at')
+        .eq('direction', 'outbound')
+        .in('status', ['sent', 'delivered', 'read'])
+        .gte('sent_at', recentSuccessCutoff.toISOString())
+        .limit(1);
+      
+      if (recentSuccess && recentSuccess.length > 0) {
+        // Houve sucesso nos últimos 5 min - não mostrar banner
+        return { 
+          isActive: false, 
+          lastSeenAt: null, 
+          hasSuccessAfterError: true,
+          debugInfo: 'Recent success found, banner disabled'
+        };
+      }
+
+      // 2. Buscar o erro de pagamento mais recente dentro da janela TTL
       let lastPaymentErrorAt: Date | null = null;
 
-      // Verificar em webhooks
-      const webhookQuery = supabase
+      // Verificar em webhooks - apenas erros 131042 específicos
+      let webhookQuery = supabase
         .from('mt_webhook_events')
-        .select('received_at, payload_raw, provider_error_code')
+        .select('received_at, provider_error_code, provider_error_message')
         .gte('received_at', ttlCutoff.toISOString())
         .order('received_at', { ascending: false })
-        .limit(100);
+        .limit(50);
 
       if (tenantId) {
-        webhookQuery.eq('tenant_id', tenantId);
+        webhookQuery = webhookQuery.eq('tenant_id', tenantId);
       }
 
       const { data: webhooks } = await webhookQuery;
 
       if (webhooks) {
         for (const webhook of webhooks) {
-          // Verificar no campo provider_error_code direto
-          if (webhook.provider_error_code === '131042') {
+          // Verificar se é erro de pagamento específico
+          const errorCode = webhook.provider_error_code || '';
+          const errorMessage = (webhook.provider_error_message || '').toLowerCase();
+          
+          const isPaymentError = PAYMENT_ERROR_CODES.includes(errorCode) ||
+            errorMessage.includes('payment') ||
+            errorMessage.includes('billing') ||
+            errorMessage.includes('131042');
+          
+          if (isPaymentError) {
             const errorTime = new Date(webhook.received_at);
             if (!lastPaymentErrorAt || errorTime > lastPaymentErrorAt) {
               lastPaymentErrorAt = errorTime;
             }
-            continue;
-          }
-
-          // Verificar no payload_raw
-          const payloadRaw = webhook.payload_raw as Record<string, unknown>;
-          const body = payloadRaw?.body as Record<string, unknown>;
-          const messageStatus = body?.messageStatus as Record<string, unknown>;
-
-          if (messageStatus?.code === 'ERROR') {
-            const error = messageStatus.error as Record<string, unknown>;
-            if (String(error?.code) === '131042') {
-              const errorTime = new Date(webhook.received_at);
-              if (!lastPaymentErrorAt || errorTime > lastPaymentErrorAt) {
-                lastPaymentErrorAt = errorTime;
-              }
-            }
           }
         }
       }
 
-      // Verificar em campaign_recipients
-      const { data: failedRecipients } = await supabase
-        .from('campaign_recipients')
-        .select('last_error, updated_at')
-        .eq('status', 'failed')
-        .gte('updated_at', ttlCutoff.toISOString())
-        .order('updated_at', { ascending: false })
-        .limit(50);
-
-      if (failedRecipients) {
-        for (const recipient of failedRecipients) {
-          if (recipient.last_error?.includes('131042')) {
-            const errorTime = new Date(recipient.updated_at);
-            if (!lastPaymentErrorAt || errorTime > lastPaymentErrorAt) {
-              lastPaymentErrorAt = errorTime;
-            }
-          }
-        }
-      }
-
-      // Se não encontrou erro 131042 dentro do TTL, não está ativo
+      // Se não encontrou erro de pagamento dentro do TTL, não está ativo
       if (!lastPaymentErrorAt) {
-        return { isActive: false, lastSeenAt: null, hasSuccessAfterError: false };
+        return { 
+          isActive: false, 
+          lastSeenAt: null, 
+          hasSuccessAfterError: false,
+          debugInfo: 'No payment errors in TTL window'
+        };
       }
 
-      // 2. Verificar se houve envio bem-sucedido APÓS o último erro 131042
+      // 3. Verificar se houve QUALQUER envio bem-sucedido APÓS o último erro
       const { data: successAfterError } = await supabase
-        .from('campaign_recipients')
-        .select('id')
-        .in('status', ['sent', 'delivered', 'read'])
-        .gt('updated_at', lastPaymentErrorAt.toISOString())
-        .limit(1);
-
-      // Também verificar em mt_messages por mensagens enviadas com sucesso
-      const { data: successMessages } = await supabase
         .from('mt_messages')
         .select('id')
         .eq('direction', 'outbound')
@@ -125,28 +122,63 @@ export function PaymentAlertBanner({ tenantId }: PaymentAlertBannerProps) {
         .gt('sent_at', lastPaymentErrorAt.toISOString())
         .limit(1);
 
+      // Também verificar em campaign_recipients
+      const { data: campaignSuccessAfter } = await supabase
+        .from('campaign_recipients')
+        .select('id')
+        .in('status', ['sent', 'delivered', 'read'])
+        .gt('sent_at', lastPaymentErrorAt.toISOString())
+        .limit(1);
+
       const hasSuccessAfterError = 
         (successAfterError && successAfterError.length > 0) ||
-        (successMessages && successMessages.length > 0);
+        (campaignSuccessAfter && campaignSuccessAfter.length > 0);
 
       // Se houve sucesso após o erro, desativar o banner
       if (hasSuccessAfterError) {
         return { 
           isActive: false, 
           lastSeenAt: lastPaymentErrorAt, 
-          hasSuccessAfterError: true 
+          hasSuccessAfterError: true,
+          debugInfo: 'Success after error found, banner disabled'
         };
+      }
+
+      // 4. VALIDAÇÃO FINAL: Verificar se a campanha mais recente teve sucesso
+      // Se sim, erro é de campanha anterior e não deve bloquear
+      const { data: latestCampaign } = await supabase
+        .from('mt_campaigns')
+        .select('id, sent_count, delivered_count, failed_count, completed_at')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (latestCampaign) {
+        const hasDeliveries = (latestCampaign.delivered_count || 0) > 0;
+        const hasSent = (latestCampaign.sent_count || 0) > 0;
+        
+        // Se a campanha mais recente teve entregas, o erro é obsoleto
+        if (hasDeliveries || hasSent) {
+          return { 
+            isActive: false, 
+            lastSeenAt: lastPaymentErrorAt, 
+            hasSuccessAfterError: true,
+            debugInfo: 'Latest campaign has deliveries, error is stale'
+          };
+        }
       }
 
       // Banner ativo: erro dentro do TTL e sem sucesso posterior
       return { 
         isActive: true, 
         lastSeenAt: lastPaymentErrorAt, 
-        hasSuccessAfterError: false 
+        hasSuccessAfterError: false,
+        debugInfo: `Payment error at ${lastPaymentErrorAt.toISOString()}, no success after`
       };
     },
-    refetchInterval: 30000, // Verificar a cada 30 segundos para reagir mais rápido
+    refetchInterval: 30000,
     staleTime: 15000,
+    enabled: !dismissed, // Não executar se já foi dispensado
   });
 
   const isActive = paymentState?.isActive ?? false;
@@ -158,7 +190,7 @@ export function PaymentAlertBanner({ tenantId }: PaymentAlertBannerProps) {
   return (
     <Alert 
       variant="destructive" 
-      className="relative bg-red-500/10 border-red-500/50 mb-6"
+      className="relative bg-destructive/10 border-destructive/50 mb-6"
     >
       <CreditCard className="h-5 w-5" />
       <AlertTitle className="font-semibold">
@@ -174,7 +206,7 @@ export function PaymentAlertBanner({ tenantId }: PaymentAlertBannerProps) {
           <Button
             variant="outline"
             size="sm"
-            className="border-red-500/50 hover:bg-red-500/10"
+            className="border-destructive/50 hover:bg-destructive/10"
             onClick={() => window.open('https://business.facebook.com/billing_hub/accounts', '_blank')}
           >
             <ExternalLink className="h-4 w-4 mr-2" />
