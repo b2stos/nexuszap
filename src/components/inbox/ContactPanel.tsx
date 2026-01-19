@@ -2,6 +2,7 @@
  * ContactPanel Component
  * 
  * Painel direito com informações do contato estilo WhatsApp Web
+ * CRITICAL: Nunca sobrepõe o chat - posicionamento fixo na direita
  */
 
 import { useState } from 'react';
@@ -12,7 +13,6 @@ import {
   StickyNote, 
   User,
   CheckCircle2,
-  XCircle,
   Shield,
   Ban,
   MessageSquare,
@@ -41,6 +41,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { InboxConversation, InboxContact, WindowStatus } from '@/types/inbox';
+import { WindowCountdown } from './WindowCountdown';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
@@ -342,7 +343,7 @@ export function ContactPanel({
             </CardContent>
           </Card>
           
-          {/* 24h Window Card */}
+          {/* 24h Window Card - Com countdown em tempo real */}
           <Card className={windowStatus.isOpen ? 'border-green-500/30' : 'border-orange-500/30'}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
@@ -351,33 +352,17 @@ export function ContactPanel({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-2">
-                {windowStatus.isOpen ? (
-                  <>
-                    <CheckCircle2 className="w-5 h-5 text-green-500" />
-                    <div>
-                      <p className="font-medium text-green-600 text-sm">Janela Aberta</p>
-                      <p className="text-xs text-muted-foreground">
-                        {windowStatus.remainingFormatted}
-                      </p>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="w-5 h-5 text-orange-500" />
-                    <div>
-                      <p className="font-medium text-orange-600 text-sm">Janela Fechada</p>
-                      <p className="text-xs text-muted-foreground">
-                        Apenas templates permitidos
-                      </p>
-                    </div>
-                  </>
-                )}
-              </div>
+              <WindowCountdown windowStatus={windowStatus} />
               
               {windowStatus.closesAt && windowStatus.isOpen && (
-                <p className="text-xs text-muted-foreground mt-2 pl-7">
+                <p className="text-xs text-muted-foreground mt-2">
                   Fecha em: {format(windowStatus.closesAt, "dd/MM 'às' HH:mm", { locale: ptBR })}
+                </p>
+              )}
+              
+              {!windowStatus.isOpen && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  💡 Envie um template para reabrir a conversa
                 </p>
               )}
             </CardContent>

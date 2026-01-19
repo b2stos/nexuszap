@@ -256,6 +256,7 @@ async function upsertContactFromInbound(
 /**
  * Upsert de conversa a partir de evento inbound
  * CRITICAL: Também reativa conversas soft-deleted
+ * TOMBSTONE: Se deleted_reason = 'user_deleted', cria NOVA conversa
  */
 async function upsertConversationFromInbound(
   supabase: ReturnType<typeof getSupabaseAdmin>,
@@ -268,7 +269,7 @@ async function upsertConversationFromInbound(
   // 1. Buscar conversa existente (ativa primeiro)
   const { data: activeConv } = await supabase
     .from('conversations')
-    .select('id, status, unread_count, deleted_at')
+    .select('id, status, unread_count')
     .eq('tenant_id', tenantId)
     .eq('channel_id', channelId)
     .eq('contact_id', contactId)
@@ -278,6 +279,11 @@ async function upsertConversationFromInbound(
   
   const preview = event.text?.substring(0, 100) || 
     (event.media ? `[${event.message_type}]` : '[mensagem]');
+  
+  // Calcular janela 24h: inbound abre a janela
+  const now = event.timestamp;
+  const windowOpened = now.toISOString();
+  const windowExpires = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
   
   if (activeConv) {
     const newUnreadCount = (activeConv.unread_count || 0) + 1;
@@ -290,6 +296,8 @@ async function upsertConversationFromInbound(
         last_message_preview: preview,
         unread_count: newUnreadCount,
         status: 'open',
+        window_opened_at: windowOpened,
+        window_expires_at: windowExpires,
         updated_at: new Date().toISOString(),
       })
       .eq('id', activeConv.id);
@@ -297,10 +305,10 @@ async function upsertConversationFromInbound(
     return activeConv.id;
   }
   
-  // 2. Buscar conversa soft-deleted para reativar
+  // 2. Buscar conversa soft-deleted - verificar tombstone
   const { data: deletedConv } = await supabase
     .from('conversations')
-    .select('id, unread_count')
+    .select('id, unread_count, deleted_reason')
     .eq('tenant_id', tenantId)
     .eq('channel_id', channelId)
     .eq('contact_id', contactId)
@@ -310,28 +318,42 @@ async function upsertConversationFromInbound(
     .maybeSingle();
   
   if (deletedConv) {
-    // Reativar conversa soft-deleted
-    const newUnreadCount = (deletedConv.unread_count || 0) + 1;
-    
-    await supabase
-      .from('conversations')
-      .update({
-        deleted_at: null, // CRITICAL: Limpar deleted_at
-        last_message_at: event.timestamp.toISOString(),
-        last_inbound_at: event.timestamp.toISOString(),
-        last_message_preview: preview,
-        unread_count: newUnreadCount,
-        status: 'open',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', deletedConv.id);
-    
-    if (ctx) log('info', 'CONVERSATION_REACTIVATED', ctx, { 
-      conversation_id: deletedConv.id,
-      was_deleted: true 
-    });
-    
-    return deletedConv.id;
+    // CRITICAL: Verificar tombstone
+    if (deletedConv.deleted_reason === 'user_deleted') {
+      // Tombstone ativo: criar NOVA conversa sem histórico
+      if (ctx) log('info', 'TOMBSTONE_DETECTED', ctx, { 
+        old_conversation_id: deletedConv.id,
+        reason: 'user_deleted',
+        action: 'creating_new' 
+      });
+      // Fall through to create new conversation
+    } else {
+      // Pode reativar (deleted_reason = null ou 'system_deleted')
+      const newUnreadCount = (deletedConv.unread_count || 0) + 1;
+      
+      await supabase
+        .from('conversations')
+        .update({
+          deleted_at: null, // CRITICAL: Limpar deleted_at
+          deleted_reason: null, // Limpar tombstone
+          last_message_at: event.timestamp.toISOString(),
+          last_inbound_at: event.timestamp.toISOString(),
+          last_message_preview: preview,
+          unread_count: newUnreadCount,
+          status: 'open',
+          window_opened_at: windowOpened,
+          window_expires_at: windowExpires,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', deletedConv.id);
+      
+      if (ctx) log('info', 'CONVERSATION_REACTIVATED', ctx, { 
+        conversation_id: deletedConv.id,
+        was_deleted: true 
+      });
+      
+      return deletedConv.id;
+    }
   }
   
   // 3. Criar nova conversa
@@ -347,6 +369,9 @@ async function upsertConversationFromInbound(
       last_message_at: event.timestamp.toISOString(),
       last_inbound_at: event.timestamp.toISOString(),
       last_message_preview: preview,
+      window_opened_at: windowOpened,
+      window_expires_at: windowExpires,
+      deleted_reason: null, // Nova conversa sem tombstone
     })
     .select('id')
     .single();
@@ -357,7 +382,7 @@ async function upsertConversationFromInbound(
   }
   
   if (ctx) log('info', 'CONVERSATION_CREATED', ctx, { conversation_id: newConv.id });
-  
+
   return newConv.id;
 }
 

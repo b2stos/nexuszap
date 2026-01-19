@@ -166,23 +166,26 @@ All colors MUST be HSL.
 /* =============================================
    Inbox Layout Stability - Prevent visual bugs
    3-Column Layout: Sidebar | Chat | ContactPanel
+   CRITICAL: Sidebar NEVER overlaps chat
    ============================================= */
 
-/* Main flex container for 3 columns */
+/* Main flex container for 3 columns - MUST be row */
 .inbox-container > div {
   position: relative;
   z-index: 1;
-  display: flex;
-  flex-direction: row;
+  display: flex !important;
+  flex-direction: row !important;
   overflow: hidden;
+  flex: 1;
+  min-height: 0;
 }
 
-/* Left sidebar - Conversation list */
+/* Left sidebar - Conversation list - FIXED WIDTH */
 .inbox-container > div > aside:first-of-type {
   position: relative;
   z-index: 2;
   background-color: hsl(var(--card));
-  /* Ensure proper sizing */
+  /* Ensure proper sizing - NO GROW */
   flex-shrink: 0;
   flex-grow: 0;
   /* CRITICAL: Fixed width, no overlap */
@@ -190,6 +193,8 @@ All colors MUST be HSL.
   min-width: 320px;
   max-width: 384px;
   overflow: hidden;
+  /* Border to separate from chat */
+  border-right: 1px solid hsl(var(--border));
 }
 
 @media (min-width: 1024px) {
@@ -200,37 +205,40 @@ All colors MUST be HSL.
   }
 }
 
-/* Center - Chat window (main) */
+/* Center - Chat window (main) - TAKES ALL REMAINING SPACE */
 .inbox-container > div > main {
   position: relative;
   z-index: 1;
   background-color: hsl(var(--background));
   /* CRITICAL: Prevent content overflow */
   overflow: hidden;
-  /* Ensure it takes remaining space */
-  flex: 1 1 auto;
-  min-width: 0;
+  /* CRITICAL: flex-1 takes remaining space only, never more */
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  max-width: none;
   /* Create stacking context */
   isolation: isolate;
-  /* CRITICAL: Prevent sidebar overlap */
+  /* CRITICAL: No margins to prevent gap */
   margin-left: 0;
   margin-right: 0;
 }
 
-/* Right sidebar - Contact Panel */
+/* Right sidebar - Contact Panel - FIXED WIDTH */
 .inbox-container > div > aside:last-of-type {
   position: relative;
   z-index: 1;
   background-color: hsl(var(--card));
-  /* Ensure proper sizing - MUST NOT overlap chat */
-  flex-shrink: 0;
-  flex-grow: 0;
-  /* CRITICAL: Fixed width */
-  width: 320px;
+  /* CRITICAL: Fixed size, NO GROW */
+  flex-shrink: 0 !important;
+  flex-grow: 0 !important;
+  /* CRITICAL: Fixed width - never changes */
+  width: 320px !important;
   min-width: 280px;
-  max-width: 320px;
+  max-width: 320px !important;
   /* CRITICAL: Static positioning only, no overlap */
   overflow: hidden;
+  /* Border to separate from chat */
+  border-left: 1px solid hsl(var(--border));
 }
 
 /* ScrollArea fix for chat messages - prevent content escaping */
@@ -265,6 +273,22 @@ All colors MUST be HSL.
 }
 
 /* =============================================
+   TABLET RESPONSIVE - Hide contact panel
+   ============================================= */
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .inbox-container > div > aside:last-of-type {
+    display: none !important;
+  }
+  
+  .inbox-container > div > aside:first-of-type {
+    width: 300px;
+    min-width: 280px;
+    max-width: 300px;
+  }
+}
+
+/* =============================================
    MOBILE RESPONSIVE - Chat takes full width
    ============================================= */
 
@@ -279,6 +303,6 @@ All colors MUST be HSL.
   }
   
   .inbox-container > div > aside:last-of-type {
-    display: none;
+    display: none !important;
   }
 }
