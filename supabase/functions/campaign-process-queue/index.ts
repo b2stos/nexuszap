@@ -330,10 +330,12 @@ async function createOutboundMessageInInbox(
   sentByUserId: string | null
 ): Promise<{ conversationId: string | null; messageId: string | null }> {
   try {
-    // 1. Buscar ou criar conversa
+    // 1. Buscar conversa existente (incluindo soft-deleted para reativar)
     let conversationId: string | null = null;
+    let needsReactivation = false;
     
-    const { data: existingConv } = await supabase
+    // Primeiro: buscar conversa ativa
+    const { data: activeConv } = await supabase
       .from('conversations')
       .select('id')
       .eq('tenant_id', tenantId)
@@ -342,10 +344,31 @@ async function createOutboundMessageInInbox(
       .is('deleted_at', null)
       .maybeSingle();
     
-    if (existingConv) {
-      conversationId = existingConv.id;
+    if (activeConv) {
+      conversationId = activeConv.id;
+      console.log(`[Inbox] Using existing active conversation: ${conversationId}`);
     } else {
-      // Criar nova conversa
+      // Segundo: buscar conversa soft-deleted para reativar
+      const { data: deletedConv } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('channel_id', channelId)
+        .eq('contact_id', contactId)
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (deletedConv) {
+        conversationId = deletedConv.id;
+        needsReactivation = true;
+        console.log(`[Inbox] Reactivating soft-deleted conversation: ${conversationId}`);
+      }
+    }
+    
+    // Se não encontrou nenhuma conversa, criar nova
+    if (!conversationId) {
       const { data: newConv, error: convError } = await supabase
         .from('conversations')
         .insert({
@@ -365,6 +388,7 @@ async function createOutboundMessageInInbox(
       }
       
       conversationId = newConv.id;
+      console.log(`[Inbox] Created new conversation: ${conversationId}`);
     }
     
     // 2. Criar mensagem outbound - usar texto REAL do template
@@ -394,20 +418,30 @@ async function createOutboundMessageInInbox(
       return { conversationId, messageId: null };
     }
     
-    // 3. Atualizar conversa com última mensagem - também usar preview real
+    // 3. Atualizar conversa com última mensagem - também limpar deleted_at se necessário
     const previewContent = messageContent.length > 50 
       ? messageContent.substring(0, 50) + '...'
       : messageContent;
     
+    const updateData: Record<string, unknown> = {
+      last_message_at: new Date().toISOString(),
+      last_message_preview: previewContent,
+      updated_at: new Date().toISOString(),
+    };
+    
+    // CRITICAL: Reativar conversa se estava soft-deleted
+    if (needsReactivation) {
+      updateData.deleted_at = null;
+      updateData.status = 'open';
+      console.log(`[Inbox] Clearing deleted_at to reactivate conversation ${conversationId}`);
+    }
+    
     await supabase
       .from('conversations')
-      .update({
-        last_message_at: new Date().toISOString(),
-        last_message_preview: previewContent,
-      })
+      .update(updateData)
       .eq('id', conversationId);
     
-    console.log(`[Inbox] Created outbound message ${message.id} in conversation ${conversationId}`);
+    console.log(`[Inbox] Created outbound message ${message.id} in conversation ${conversationId} (reactivated: ${needsReactivation})`);
     
     return { conversationId, messageId: message.id };
   } catch (error) {
