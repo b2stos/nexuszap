@@ -255,6 +255,7 @@ async function upsertContactFromInbound(
 
 /**
  * Upsert de conversa a partir de evento inbound
+ * CRITICAL: Também reativa conversas soft-deleted
  */
 async function upsertConversationFromInbound(
   supabase: ReturnType<typeof getSupabaseAdmin>,
@@ -264,22 +265,22 @@ async function upsertConversationFromInbound(
   event: InboundMessageEvent,
   ctx?: LogContext
 ): Promise<string | null> {
-  // Buscar conversa existente
-  const { data: existing } = await supabase
+  // 1. Buscar conversa existente (ativa primeiro)
+  const { data: activeConv } = await supabase
     .from('conversations')
-    .select('id, status, unread_count')
+    .select('id, status, unread_count, deleted_at')
     .eq('tenant_id', tenantId)
     .eq('channel_id', channelId)
     .eq('contact_id', contactId)
-    .order('status', { ascending: true })
+    .is('deleted_at', null)
     .limit(1)
     .maybeSingle();
   
   const preview = event.text?.substring(0, 100) || 
     (event.media ? `[${event.message_type}]` : '[mensagem]');
   
-  if (existing) {
-    const newUnreadCount = (existing.unread_count || 0) + 1;
+  if (activeConv) {
+    const newUnreadCount = (activeConv.unread_count || 0) + 1;
     
     await supabase
       .from('conversations')
@@ -291,12 +292,49 @@ async function upsertConversationFromInbound(
         status: 'open',
         updated_at: new Date().toISOString(),
       })
-      .eq('id', existing.id);
+      .eq('id', activeConv.id);
     
-    return existing.id;
+    return activeConv.id;
   }
   
-  // Criar nova conversa
+  // 2. Buscar conversa soft-deleted para reativar
+  const { data: deletedConv } = await supabase
+    .from('conversations')
+    .select('id, unread_count')
+    .eq('tenant_id', tenantId)
+    .eq('channel_id', channelId)
+    .eq('contact_id', contactId)
+    .not('deleted_at', 'is', null)
+    .order('deleted_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  
+  if (deletedConv) {
+    // Reativar conversa soft-deleted
+    const newUnreadCount = (deletedConv.unread_count || 0) + 1;
+    
+    await supabase
+      .from('conversations')
+      .update({
+        deleted_at: null, // CRITICAL: Limpar deleted_at
+        last_message_at: event.timestamp.toISOString(),
+        last_inbound_at: event.timestamp.toISOString(),
+        last_message_preview: preview,
+        unread_count: newUnreadCount,
+        status: 'open',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', deletedConv.id);
+    
+    if (ctx) log('info', 'CONVERSATION_REACTIVATED', ctx, { 
+      conversation_id: deletedConv.id,
+      was_deleted: true 
+    });
+    
+    return deletedConv.id;
+  }
+  
+  // 3. Criar nova conversa
   const { data: newConv, error } = await supabase
     .from('conversations')
     .insert({
@@ -317,6 +355,8 @@ async function upsertConversationFromInbound(
     if (ctx) log('error', 'Failed to create conversation', ctx, { error: error.message });
     return null;
   }
+  
+  if (ctx) log('info', 'CONVERSATION_CREATED', ctx, { conversation_id: newConv.id });
   
   return newConv.id;
 }
