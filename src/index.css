@@ -172,6 +172,9 @@ All colors MUST be HSL.
 .inbox-container > div {
   position: relative;
   z-index: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
 }
 
 /* Left sidebar - Conversation list */
@@ -182,6 +185,19 @@ All colors MUST be HSL.
   /* Ensure proper sizing */
   flex-shrink: 0;
   flex-grow: 0;
+  /* CRITICAL: Fixed width, no overlap */
+  width: 320px;
+  min-width: 320px;
+  max-width: 384px;
+  overflow: hidden;
+}
+
+@media (min-width: 1024px) {
+  .inbox-container > div > aside:first-of-type {
+    width: 384px;
+    min-width: 320px;
+    max-width: 384px;
+  }
 }
 
 /* Center - Chat window (main) */
@@ -192,10 +208,13 @@ All colors MUST be HSL.
   /* CRITICAL: Prevent content overflow */
   overflow: hidden;
   /* Ensure it takes remaining space */
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   /* Create stacking context */
   isolation: isolate;
+  /* CRITICAL: Prevent sidebar overlap */
+  margin-left: 0;
+  margin-right: 0;
 }
 
 /* Right sidebar - Contact Panel */
@@ -206,6 +225,10 @@ All colors MUST be HSL.
   /* Ensure proper sizing - MUST NOT overlap chat */
   flex-shrink: 0;
   flex-grow: 0;
+  /* CRITICAL: Fixed width */
+  width: 320px;
+  min-width: 280px;
+  max-width: 320px;
   /* CRITICAL: Static positioning only, no overlap */
   overflow: hidden;
 }
@@ -239,4 +262,23 @@ All colors MUST be HSL.
 /* Fix for dropdown menus in inbox - ensure they appear above everything */
 .inbox-container [data-radix-popper-content-wrapper] {
   z-index: 100 !important;
+}
+
+/* =============================================
+   MOBILE RESPONSIVE - Chat takes full width
+   ============================================= */
+
+@media (max-width: 767px) {
+  .inbox-container > div > aside:first-of-type {
+    width: 100%;
+    max-width: none;
+  }
+  
+  .inbox-container > div > main {
+    width: 100%;
+  }
+  
+  .inbox-container > div > aside:last-of-type {
+    display: none;
+  }
 }
