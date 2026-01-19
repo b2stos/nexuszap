@@ -208,8 +208,9 @@ Deno.serve(async (req) => {
 
       console.log(`[inbox-delete-conversation] HARD DELETED conversation: ${conversationId}`);
     } else {
-      // Soft delete: set deleted_at timestamp
-      console.log("[inbox-delete-conversation] Performing SOFT DELETE");
+      // Soft delete: set deleted_at timestamp + deleted_reason
+      // CRITICAL: deleted_reason = 'user_deleted' prevents reactivation
+      console.log("[inbox-delete-conversation] Performing SOFT DELETE with tombstone");
 
       // Soft delete messages
       const { error: msgUpdateError, count: msgCount } = await supabaseServiceRole
@@ -229,10 +230,15 @@ Deno.serve(async (req) => {
 
       console.log(`[inbox-delete-conversation] Soft-deleted ${msgCount || 0} messages`);
 
-      // Soft delete conversation
+      // Soft delete conversation WITH tombstone reason
+      // CRITICAL: deleted_reason = 'user_deleted' blocks reactivation
       const { error: convUpdateError } = await supabaseServiceRole
         .from("conversations")
-        .update({ deleted_at: now })
+        .update({ 
+          deleted_at: now,
+          deleted_reason: 'user_deleted',  // TOMBSTONE: prevents reactivation
+          unread_count: 0,
+        })
         .eq("id", conversationId)
         .eq("tenant_id", conversation.tenant_id);
 
@@ -244,7 +250,7 @@ Deno.serve(async (req) => {
         );
       }
 
-      console.log(`[inbox-delete-conversation] SOFT DELETED conversation: ${conversationId}`);
+      console.log(`[inbox-delete-conversation] SOFT DELETED with tombstone: ${conversationId}`);
     }
 
     return new Response(

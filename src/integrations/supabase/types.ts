@@ -465,6 +465,7 @@ export type Database = {
           contact_id: string
           created_at: string
           deleted_at: string | null
+          deleted_reason: string | null
           id: string
           is_pinned: boolean
           last_inbound_at: string | null
@@ -474,6 +475,8 @@ export type Database = {
           tenant_id: string
           unread_count: number
           updated_at: string
+          window_expires_at: string | null
+          window_opened_at: string | null
         }
         Insert: {
           assigned_user_id?: string | null
@@ -481,6 +484,7 @@ export type Database = {
           contact_id: string
           created_at?: string
           deleted_at?: string | null
+          deleted_reason?: string | null
           id?: string
           is_pinned?: boolean
           last_inbound_at?: string | null
@@ -490,6 +494,8 @@ export type Database = {
           tenant_id: string
           unread_count?: number
           updated_at?: string
+          window_expires_at?: string | null
+          window_opened_at?: string | null
         }
         Update: {
           assigned_user_id?: string | null
@@ -497,6 +503,7 @@ export type Database = {
           contact_id?: string
           created_at?: string
           deleted_at?: string | null
+          deleted_reason?: string | null
           id?: string
           is_pinned?: boolean
           last_inbound_at?: string | null
@@ -506,6 +513,8 @@ export type Database = {
           tenant_id?: string
           unread_count?: number
           updated_at?: string
+          window_expires_at?: string | null
+          window_opened_at?: string | null
         }
         Relationships: [
           {

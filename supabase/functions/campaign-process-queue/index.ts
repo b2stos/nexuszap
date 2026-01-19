@@ -330,11 +330,15 @@ async function createOutboundMessageInInbox(
   sentByUserId: string | null
 ): Promise<{ conversationId: string | null; messageId: string | null }> {
   try {
-    // 1. Buscar conversa existente (incluindo soft-deleted para reativar)
+    // ============================================
+    // TOMBSTONE LOGIC: Não reativar conversas deletadas pelo usuário
+    // Se deleted_reason = 'user_deleted', criar NOVA conversa
+    // ============================================
+    
     let conversationId: string | null = null;
     let needsReactivation = false;
     
-    // Primeiro: buscar conversa ativa
+    // 1. Buscar conversa ativa
     const { data: activeConv } = await supabase
       .from('conversations')
       .select('id')
@@ -348,10 +352,11 @@ async function createOutboundMessageInInbox(
       conversationId = activeConv.id;
       console.log(`[Inbox] Using existing active conversation: ${conversationId}`);
     } else {
-      // Segundo: buscar conversa soft-deleted para reativar
+      // 2. Buscar conversa soft-deleted SEM tombstone 'user_deleted'
+      // Se deleted_reason = 'user_deleted', NÃO reativar - criar nova
       const { data: deletedConv } = await supabase
         .from('conversations')
-        .select('id')
+        .select('id, deleted_reason')
         .eq('tenant_id', tenantId)
         .eq('channel_id', channelId)
         .eq('contact_id', contactId)
@@ -361,13 +366,21 @@ async function createOutboundMessageInInbox(
         .maybeSingle();
       
       if (deletedConv) {
-        conversationId = deletedConv.id;
-        needsReactivation = true;
-        console.log(`[Inbox] Reactivating soft-deleted conversation: ${conversationId}`);
+        // CRITICAL: Verificar tombstone
+        if (deletedConv.deleted_reason === 'user_deleted') {
+          // Tombstone ativo: criar NOVA conversa sem histórico
+          console.log(`[Inbox] TOMBSTONE: conversation ${deletedConv.id} has deleted_reason=user_deleted, creating NEW`);
+          conversationId = null; // Force creation of new conversation
+        } else {
+          // Pode reativar (deleted_reason = null ou 'system_deleted')
+          conversationId = deletedConv.id;
+          needsReactivation = true;
+          console.log(`[Inbox] Reactivating soft-deleted conversation: ${conversationId}`);
+        }
       }
     }
     
-    // Se não encontrou nenhuma conversa, criar nova
+    // 3. Se não encontrou conversa ativa (ou há tombstone), criar nova
     if (!conversationId) {
       const { data: newConv, error: convError } = await supabase
         .from('conversations')
@@ -378,6 +391,7 @@ async function createOutboundMessageInInbox(
           status: 'open',
           last_message_at: new Date().toISOString(),
           last_message_preview: `📋 ${templateName}`,
+          deleted_reason: null, // Nova conversa sem tombstone
         })
         .select('id')
         .single();
@@ -388,7 +402,7 @@ async function createOutboundMessageInInbox(
       }
       
       conversationId = newConv.id;
-      console.log(`[Inbox] Created new conversation: ${conversationId}`);
+      console.log(`[Inbox] Created NEW conversation: ${conversationId}`);
     }
     
     // 2. Criar mensagem outbound - usar texto REAL do template
@@ -429,9 +443,10 @@ async function createOutboundMessageInInbox(
       updated_at: new Date().toISOString(),
     };
     
-    // CRITICAL: Reativar conversa se estava soft-deleted
+    // CRITICAL: Reativar conversa se estava soft-deleted (sem tombstone 'user_deleted')
     if (needsReactivation) {
       updateData.deleted_at = null;
+      updateData.deleted_reason = null; // Limpar tombstone
       updateData.status = 'open';
       console.log(`[Inbox] Clearing deleted_at to reactivate conversation ${conversationId}`);
     }
