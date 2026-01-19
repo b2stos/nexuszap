@@ -29,6 +29,8 @@ import Pricing from "./pages/Pricing";
 import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 import NotificameDiagnostics from "./pages/NotificameDiagnostics";
+import Install from "./pages/Install";
+import { InstallPrompt } from "./components/pwa/InstallPrompt";
 
 // Global Error Boundary to prevent white screen on errors
 class ErrorBoundary extends Component<
@@ -128,6 +130,7 @@ const App = () => (
             <Routes>
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/install" element={<Install />} />
               <Route path="/sobre" element={<About />} />
               <Route path="/termos" element={<Terms />} />
               <Route path="/privacidade" element={<Privacy />} />
@@ -150,6 +153,7 @@ const App = () => (
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>
+            <InstallPrompt delay={45000} />
           </TooltipProvider>
         </BrowserRouter>
       </QueryClientProvider>
