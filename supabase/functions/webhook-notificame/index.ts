@@ -640,6 +640,55 @@ async function updateOutboundMessageStatus(
         
         // 3. Atualizar contadores da campanha
         await updateCampaignCounters(supabase, recipient.campaign_id, ctx);
+        
+        // 4. CRITICAL FIX: Se não encontramos a mensagem no mt_messages, 
+        // buscar pelo contact_id do recipient e atualizar
+        if (!message && recipient.contact_id) {
+          const messageUpdateData: Record<string, unknown> = {
+            status: statusUpdate.status,
+          };
+          if (statusUpdate.delivered_at) messageUpdateData.delivered_at = statusUpdate.delivered_at.toISOString();
+          if (statusUpdate.read_at) messageUpdateData.read_at = statusUpdate.read_at.toISOString();
+          if (statusUpdate.failed_at) messageUpdateData.failed_at = statusUpdate.failed_at.toISOString();
+          if (statusUpdate.error_code) messageUpdateData.error_code = statusUpdate.error_code;
+          if (statusUpdate.error_detail) messageUpdateData.error_detail = statusUpdate.error_detail;
+          
+          // Determine which statuses to look for based on the incoming status
+          let lookForStatusesForMessage: string[] = [];
+          if (statusUpdate.status === 'delivered') {
+            lookForStatusesForMessage = ['sent'];
+          } else if (statusUpdate.status === 'read') {
+            lookForStatusesForMessage = ['sent', 'delivered'];
+          } else if (statusUpdate.status === 'failed') {
+            lookForStatusesForMessage = ['queued', 'sent'];
+          }
+          
+          // Buscar mensagem outbound recente do mesmo contato que ainda está em sent
+          const { data: inboxMessage } = await supabase
+            .from('mt_messages')
+            .select('id, status')
+            .eq('contact_id', recipient.contact_id)
+            .eq('direction', 'outbound')
+            .in('status', lookForStatusesForMessage.length > 0 ? lookForStatusesForMessage : ['sent', 'delivered'])
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          
+          if (inboxMessage) {
+            const { error: msgError } = await supabase
+              .from('mt_messages')
+              .update(messageUpdateData)
+              .eq('id', inboxMessage.id);
+            
+            if (!msgError) {
+              if (ctx) log('info', 'mt_messages synced from campaign_recipient', ctx, {
+                message_id: inboxMessage.id,
+                recipient_id: recipient.id,
+                new_status: statusUpdate.status,
+              });
+            }
+          }
+        }
       }
     }
   }
@@ -649,6 +698,14 @@ async function updateOutboundMessageStatus(
 
 /**
  * Recalcula contadores da campanha
+ * 
+ * REGRA DE MÉTRICAS CUMULATIVAS:
+ * - sent_count: mensagens aceitas pelo broker (status >= sent)
+ * - delivered_count: mensagens entregues (status in [delivered, read])  
+ * - read_count: mensagens lidas (status == read)
+ * - failed_count: mensagens que falharam (status == failed)
+ * 
+ * Isso garante que read_count <= delivered_count <= sent_count
  */
 async function updateCampaignCounters(
   supabase: ReturnType<typeof getSupabaseAdmin>,
@@ -666,8 +723,12 @@ async function updateCampaignCounters(
       return;
     }
     
-    const sentCount = counts.filter(r => r.status === 'sent').length;
-    const deliveredCount = counts.filter(r => r.status === 'delivered').length;
+    // CORREÇÃO: Métricas cumulativas
+    // sent = todos que passaram pelo estado sent (sent + delivered + read)
+    // delivered = todos que foram entregues (delivered + read)
+    // read = apenas os que foram lidos
+    const sentCount = counts.filter(r => ['sent', 'delivered', 'read'].includes(r.status)).length;
+    const deliveredCount = counts.filter(r => ['delivered', 'read'].includes(r.status)).length;
     const readCount = counts.filter(r => r.status === 'read').length;
     const failedCount = counts.filter(r => r.status === 'failed').length;
     
@@ -682,12 +743,13 @@ async function updateCampaignCounters(
       })
       .eq('id', campaignId);
     
-    if (ctx) log('info', 'Campaign counters updated', ctx, { 
+    if (ctx) log('info', 'Campaign counters updated (cumulative)', ctx, { 
       campaign_id: campaignId,
       sent: sentCount,
       delivered: deliveredCount,
       read: readCount,
       failed: failedCount,
+      total_recipients: counts.length,
     });
   } catch (e) {
     if (ctx) log('error', 'Exception updating campaign counters', ctx, { error: String(e) });
