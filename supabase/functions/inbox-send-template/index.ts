@@ -343,35 +343,43 @@ Deno.serve(async (req) => {
     }
 
     if (!sendResult.success) {
-      console.error('[inbox-send-template] Send failed:', sendResult.error);
+      const providerError = sendResult.error;
+      console.error('[inbox-send-template] Send failed:', JSON.stringify(providerError));
+      console.error('[inbox-send-template] Raw response:', JSON.stringify(sendResult.raw));
       
-      // Map error code for frontend handling
-      let userFriendlyError = sendResult.error?.detail || 'Falha ao enviar template';
-      let errorCategory = 'send_failed';
+      // Extract error details for frontend display
+      const errorCode = providerError?.code || 'UNKNOWN_ERROR';
+      const errorDetail = providerError?.detail || 'Falha ao enviar template';
+      const errorCategory = providerError?.category || 'unknown';
       
-      const errorCode = sendResult.error?.code || '';
+      // Build user-friendly error based on error type
+      let userFriendlyError = errorDetail;
+      let frontendCategory = 'send_failed';
       
-      if (/auth|token|unauthorized/i.test(errorCode)) {
-        errorCategory = 'authentication_error';
-        userFriendlyError = 'Token inválido ou expirado. Reconecte o NotificaMe em Configurações → Canais.';
-      } else if (/not_found|channel/i.test(errorCode)) {
-        errorCategory = 'channel_not_found';
-        userFriendlyError = 'Canal não encontrado. Verifique as configurações.';
-      } else if (/rate_limit/i.test(errorCode)) {
-        errorCategory = 'rate_limited';
-        userFriendlyError = 'Limite de envio atingido. Tente novamente em instantes.';
-      } else if (/template/i.test(errorCode)) {
-        errorCategory = 'template_error';
-        userFriendlyError = 'Template não aprovado ou não encontrado. Verifique o status do template.';
+      // Map categories to frontend-friendly names
+      if (errorCategory === 'auth') {
+        frontendCategory = 'authentication_error';
+      } else if (errorCategory === 'template_error') {
+        frontendCategory = 'template_error';
+      } else if (errorCategory === 'rate_limit') {
+        frontendCategory = 'rate_limited';
+      } else if (errorCategory === 'payment_error') {
+        frontendCategory = 'payment_error';
+      } else if (errorCategory === 'recipient_error') {
+        frontendCategory = 'recipient_error';
+      } else if (errorCode === 'NO_MESSAGE_ID') {
+        frontendCategory = 'no_confirmation';
+        // Use the detailed message from provider
+        userFriendlyError = errorDetail;
       }
       
-      // Update message as failed
+      // Update message as failed with detailed error
       const { data: failedMessage } = await supabase
         .from('mt_messages')
         .update({
           status: 'failed',
           failed_at: new Date().toISOString(),
-          error_code: errorCategory.toUpperCase(),
+          error_code: errorCode,
           error_detail: userFriendlyError,
         })
         .eq('id', message.id)
@@ -380,9 +388,12 @@ Deno.serve(async (req) => {
 
       return new Response(
         JSON.stringify({ 
-          error: errorCategory,
+          success: false,
+          error: frontendCategory,
+          error_code: errorCode,
           message: userFriendlyError,
-          is_retryable: sendResult.error?.is_retryable ?? false,
+          detail: errorDetail, // Include original detail for debugging
+          is_retryable: providerError?.is_retryable ?? false,
           data: failedMessage || { ...message, status: 'failed' },
         }),
         { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

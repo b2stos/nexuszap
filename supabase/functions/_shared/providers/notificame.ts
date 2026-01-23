@@ -735,30 +735,75 @@ export const notificameProvider: Provider = {
     console.log(`[NotificaMe] POST ${notificaMePath}`);
     console.log(`[NotificaMe] Payload:`, JSON.stringify(payload));
     
+    // Request ID for tracing
+    const requestId = crypto.randomUUID().substring(0, 8);
+    const requestStartTime = Date.now();
+    
     try {
       const response = await notificameRequest<{
+        // NotificaMe Hub formats
         id?: string;
         messageId?: string;
+        // Meta Cloud API format
         messages?: Array<{ id: string }>;
-        error?: unknown;
+        // Nested data format
+        data?: { id?: string; messageId?: string };
+        // Error formats
+        error?: { message?: string; code?: string };
+        code?: string;
+        message?: string;
       }>(config, {
         method: 'POST',
         path: notificaMePath,
         body: payload,
       });
       
-      console.log(`[NotificaMe] Response status: ${response.status}, ok: ${response.ok}`);
+      const requestDuration = Date.now() - requestStartTime;
+      console.log(`[${requestId}] Response ${response.status} in ${requestDuration}ms:`, JSON.stringify(response.data).substring(0, 500));
       
       if (!response.ok) {
         const error = extractErrorFromResponse(response.status, response.data);
-        console.error(`[NotificaMe] Send failed:`, JSON.stringify(error));
+        console.error(`[${requestId}] ❌ HTTP ERROR:`, JSON.stringify(error));
         return { success: false, raw: response.data, error };
       }
       
-      // NotificaMe may return messageId in different formats
-      const messageId = response.data.id || response.data.messageId || response.data.messages?.[0]?.id;
+      // Check for error in body
+      if (response.data.error) {
+        const errData = response.data.error;
+        console.error(`[${requestId}] ❌ ERROR IN BODY:`, JSON.stringify(errData));
+        return {
+          success: false,
+          raw: response.data,
+          error: createProviderError('invalid_request', errData.code || 'API_ERROR', errData.message || 'Erro da API'),
+        };
+      }
       
-      console.log(`[NotificaMe] Message sent successfully, provider_message_id: ${messageId}`);
+      // Extract message ID - multiple formats
+      let messageId: string | undefined;
+      const data = response.data;
+      
+      if (data.id && typeof data.id === 'string') {
+        messageId = data.id;
+      } else if (data.messageId && typeof data.messageId === 'string') {
+        messageId = data.messageId;
+      } else if (data.messages && Array.isArray(data.messages) && data.messages.length > 0) {
+        messageId = data.messages[0]?.id;
+      } else if (data.data && typeof data.data === 'object') {
+        const nestedData = data.data as Record<string, unknown>;
+        messageId = nestedData.id as string || nestedData.messageId as string;
+      }
+      
+      if (!messageId) {
+        console.error(`[${requestId}] ❌ No message ID in response:`, JSON.stringify(response.data));
+        return {
+          success: false,
+          raw: response.data,
+          error: createProviderError('invalid_request', 'NO_MESSAGE_ID', 
+            'API não retornou ID da mensagem. Verifique se a janela de 24h está aberta ou use um template.'),
+        };
+      }
+      
+      console.log(`[${requestId}] ✅ Message sent, provider_message_id: ${messageId}`);
       
       return {
         success: true,
@@ -766,7 +811,8 @@ export const notificameProvider: Provider = {
         raw: response.data,
       };
     } catch (error) {
-      console.error(`[NotificaMe] Exception during send:`, error);
+      const requestDuration = Date.now() - requestStartTime;
+      console.error(`[${requestId}] ❌ Exception after ${requestDuration}ms:`, error);
       if (error instanceof ProviderException) {
         return { success: false, raw: null, error: error.providerError };
       }
@@ -925,23 +971,68 @@ export const notificameProvider: Provider = {
     // CORRECT ENDPOINT: /channels/whatsapp/messages (same as text messages)
     const endpoint = '/channels/whatsapp/messages';
     
+    // ============================================
+    // DETAILED LOGGING FOR DEBUGGING
+    // ============================================
+    const requestStartTime = Date.now();
+    const requestId = crypto.randomUUID().substring(0, 8);
+    
+    console.log(`
+╔══════════════════════════════════════════════════════════════════
+║ [${requestId}] SEND TEMPLATE REQUEST
+╠══════════════════════════════════════════════════════════════════
+║ Provider: NotificaMe BSP
+║ Endpoint: POST ${endpoint}
+║ Template: ${template_name} (${language})
+║ Recipient: ${normalizePhoneNumber(to)}
+║ Subscription: ${subscriptionId?.substring(0, 8)}...
+║ Has Media: ${!!media}
+║ Variables: ${components.length} components
+╚══════════════════════════════════════════════════════════════════`);
+    
+    // Log payload (masked token)
+    const maskedPayload = {
+      ...payload,
+      from: subscriptionId ? `${subscriptionId.substring(0, 8)}...` : 'MISSING',
+    };
+    console.log(`[${requestId}] Payload:`, JSON.stringify(maskedPayload, null, 2));
+    
     try {
       const response = await notificameRequest<{
+        // NotificaMe Hub formats
         id?: string;
         messageId?: string;
-        messages?: Array<{ id: string }>;
-        error?: { message?: string; type?: string; code?: string };
+        // Meta Cloud API format
+        messages?: Array<{ id: string; message_status?: string }>;
+        // Nested data format (some BSPs)
+        data?: { id?: string; messageId?: string };
+        // Error formats
+        error?: { message?: string; type?: string; code?: string; error_data?: { details?: string } };
         code?: string;
         message?: string;
+        status?: string;
+        // Additional fields for debugging
+        success?: boolean;
       }>(config, {
         method: 'POST',
         path: endpoint,
         body: payload,
       });
       
+      const requestDuration = Date.now() - requestStartTime;
+      
+      console.log(`
+╔══════════════════════════════════════════════════════════════════
+║ [${requestId}] RESPONSE (${requestDuration}ms)
+╠══════════════════════════════════════════════════════════════════
+║ HTTP Status: ${response.status} (ok: ${response.ok})
+║ Response Body: ${JSON.stringify(response.data).substring(0, 500)}
+╚══════════════════════════════════════════════════════════════════`);
+      
       // Check for HTTP error status
       if (!response.ok) {
         const error = extractErrorFromResponse(response.status, response.data);
+        console.error(`[${requestId}] ❌ HTTP ERROR:`, JSON.stringify(error));
         return { success: false, raw: response.data, error };
       }
       
@@ -949,50 +1040,113 @@ export const notificameProvider: Provider = {
       // NotificaMe sometimes returns 200 OK with error object in body
       if (response.data.error) {
         const errData = response.data.error;
-        console.error('[NotificaMe] ERROR IN BODY (HTTP 200):', JSON.stringify(errData));
+        const errorCode = errData.code || errData.type || 'API_ERROR';
+        const errorMessage = errData.message || errData.error_data?.details || 'Erro desconhecido da API NotificaMe';
+        
+        console.error(`[${requestId}] ❌ ERROR IN BODY (HTTP 200):`, JSON.stringify(errData));
+        
+        // Mapear erros conhecidos para mensagens amigáveis
+        let friendlyMessage = errorMessage;
+        if (errorCode === '131047' || errorMessage.includes('re-engagement')) {
+          friendlyMessage = 'Janela de 24h expirada. Use um template para iniciar nova conversa.';
+        } else if (errorCode === '131026' || errorMessage.includes('undeliverable')) {
+          friendlyMessage = 'Mensagem não entregue. Verifique se o número possui WhatsApp ativo.';
+        } else if (errorCode === '131042' || errorMessage.includes('payment')) {
+          friendlyMessage = 'Erro de pagamento na conta WABA. Verifique o faturamento no WhatsApp Manager.';
+        } else if (errorCode === '100' || errorMessage.includes('parameter')) {
+          friendlyMessage = 'Template inválido. Verifique as variáveis e o status de aprovação.';
+        } else if (errorMessage.includes('display name') || errorMessage.includes('pending')) {
+          friendlyMessage = 'Nome de exibição pendente. Aguarde aprovação no WhatsApp Manager.';
+        }
+        
         return {
           success: false,
           raw: response.data,
-          error: createProviderError(
-            'invalid_request',
-            errData.code || errData.type || 'API_ERROR',
-            errData.message || 'Erro desconhecido da API NotificaMe'
-          ),
+          error: createProviderError('invalid_request', errorCode, friendlyMessage, errData),
         };
       }
       
       // Check for error code at root level
-      if (response.data.code && response.data.code !== 'OK' && response.data.code !== 'SUCCESS') {
-        console.error('[NotificaMe] ERROR CODE in response:', response.data.code, response.data.message);
+      if (response.data.code && !['OK', 'SUCCESS', '0', '200'].includes(String(response.data.code).toUpperCase())) {
+        const errorCode = String(response.data.code);
+        const errorMessage = response.data.message || 'Erro desconhecido da API NotificaMe';
+        
+        console.error(`[${requestId}] ❌ ERROR CODE in root:`, errorCode, errorMessage);
+        
         return {
           success: false,
           raw: response.data,
-          error: createProviderError(
-            'invalid_request',
-            response.data.code,
-            response.data.message || 'Erro desconhecido da API NotificaMe'
-          ),
+          error: createProviderError('invalid_request', errorCode, errorMessage),
         };
       }
       
-      // NotificaMe Hub returns messageId at root OR in messages array (Cloud API format)
-      const messageId = response.data.id || response.data.messageId || response.data.messages?.[0]?.id;
+      // ============================================
+      // MESSAGE ID EXTRACTION - MULTIPLE FORMATS
+      // ============================================
+      // Priority order for message ID extraction:
+      // 1. NotificaMe Hub: response.id or response.messageId
+      // 2. Meta Cloud API: response.messages[0].id
+      // 3. Nested format: response.data.id or response.data.messageId
+      // 4. Alternative keys: response.message_id, response.msgId
+      
+      let messageId: string | undefined;
+      const data = response.data;
+      
+      // Format 1: Direct ID at root (NotificaMe Hub primary format)
+      if (data.id && typeof data.id === 'string') {
+        messageId = data.id;
+        console.log(`[${requestId}] ✓ Extracted messageId from root.id: ${messageId}`);
+      }
+      // Format 2: messageId at root (NotificaMe Hub alternative)
+      else if (data.messageId && typeof data.messageId === 'string') {
+        messageId = data.messageId;
+        console.log(`[${requestId}] ✓ Extracted messageId from root.messageId: ${messageId}`);
+      }
+      // Format 3: Meta Cloud API messages array
+      else if (data.messages && Array.isArray(data.messages) && data.messages.length > 0) {
+        messageId = data.messages[0]?.id;
+        console.log(`[${requestId}] ✓ Extracted messageId from messages[0].id: ${messageId}`);
+      }
+      // Format 4: Nested data object (some BSPs wrap response)
+      else if (data.data && typeof data.data === 'object') {
+        const nestedData = data.data as Record<string, unknown>;
+        messageId = nestedData.id as string || nestedData.messageId as string;
+        if (messageId) {
+          console.log(`[${requestId}] ✓ Extracted messageId from data.data: ${messageId}`);
+        }
+      }
       
       // Validate that we got a message ID
       if (!messageId) {
-        console.error('[NotificaMe] No message ID in response:', JSON.stringify(response.data));
+        console.error(`[${requestId}] ❌ NO MESSAGE ID FOUND in response`);
+        console.error(`[${requestId}] Full response for debugging:`, JSON.stringify(response.data));
+        
+        // Tentar detectar o motivo real da falha
+        let detailMessage = 'API não retornou ID da mensagem.';
+        
+        // Verificar se há campos que indicam o problema
+        if (data.status === 'error' || data.status === 'failed') {
+          detailMessage = `Status: ${data.status}. ${data.message || 'Verifique os logs para mais detalhes.'}`;
+        } else if (!subscriptionId) {
+          detailMessage = 'Subscription ID não configurado. Vá em Configurações > Canais.';
+        } else {
+          // Adicionar sugestões comuns
+          detailMessage = 'API não retornou ID da mensagem. Possíveis causas: ' +
+            '(1) Template não aprovado ou nome incorreto, ' +
+            '(2) Número de telefone inválido ou sem WhatsApp, ' +
+            '(3) Nome de exibição pendente de aprovação, ' +
+            '(4) Variáveis do template incorretas.';
+        }
+        
         return {
           success: false,
           raw: response.data,
-          error: createProviderError(
-            'invalid_request',
-            'NO_MESSAGE_ID',
-            'API não retornou ID da mensagem - verifique se o template está aprovado e o número é válido'
-          ),
+          error: createProviderError('invalid_request', 'NO_MESSAGE_ID', detailMessage),
         };
       }
       
-      console.log(`[NotificaMe] Template sent successfully, messageId: ${messageId}`);
+      console.log(`[${requestId}] ✅ Template sent successfully!`);
+      console.log(`[${requestId}] Provider Message ID: ${messageId}`);
       
       return {
         success: true,
@@ -1000,9 +1154,18 @@ export const notificameProvider: Provider = {
         raw: response.data,
       };
     } catch (error) {
+      const requestDuration = Date.now() - requestStartTime;
+      console.error(`[${requestId}] ❌ EXCEPTION after ${requestDuration}ms:`, error);
+      
       if (error instanceof ProviderException) {
         return { success: false, raw: null, error: error.providerError };
       }
+      
+      // Log stack trace for unexpected errors
+      if (error instanceof Error) {
+        console.error(`[${requestId}] Stack trace:`, error.stack);
+      }
+      
       throw error;
     }
   },

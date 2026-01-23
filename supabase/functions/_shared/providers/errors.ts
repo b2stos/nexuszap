@@ -127,6 +127,7 @@ export function mapHttpStatusToCategory(status: number): ErrorCategory {
 
 /**
  * Extrai informações de erro de uma resposta HTTP
+ * Suporta múltiplos formatos: WhatsApp Cloud API, NotificaMe Hub, Meta direta
  */
 export function extractErrorFromResponse(
   status: number,
@@ -142,21 +143,32 @@ export function extractErrorFromResponse(
   if (body && typeof body === 'object') {
     const errorBody = body as Record<string, unknown>;
     
-    // WhatsApp Cloud API format
+    // WhatsApp Cloud API format: { error: { message, code, error_data: { details } } }
     if (errorBody.error && typeof errorBody.error === 'object') {
       const error = errorBody.error as Record<string, unknown>;
       const errorData = error.error_data as Record<string, unknown> | undefined;
       code = String(error.code || code);
       detail = String(error.message || errorData?.details || detail);
       
-      // Categorias específicas do WhatsApp
+      // Mensagens amigáveis para erros conhecidos
       if (code === '131026') {
-        return createProviderError('recipient_error', code, 'Message failed to send because more than 24 hours have passed since the customer last replied', body);
+        detail = 'Janela de 24h expirada. O cliente precisa enviar uma mensagem primeiro ou use um template.';
+        return createProviderError('recipient_error', code, detail, body);
+      }
+      if (code === '131047') {
+        detail = 'Mensagem de re-engajamento requer template. Use um template aprovado.';
+        return createProviderError('recipient_error', code, detail, body);
       }
       if (code === '132000' || code === '132001') {
+        detail = 'Template inválido ou não encontrado. Verifique o nome e status de aprovação.';
+        return createProviderError('template_error', code, detail, body);
+      }
+      if (code === '100' && detail.includes('param')) {
+        detail = 'Parâmetros do template incorretos. Verifique se todas as variáveis estão preenchidas.';
         return createProviderError('template_error', code, detail, body);
       }
       if (PAYMENT_ERROR_CODES.includes(code)) {
+        detail = 'Erro de pagamento na conta WABA. Verifique o faturamento no WhatsApp Manager.';
         return createProviderError('payment_error', code, detail, body);
       }
     }
@@ -169,16 +181,40 @@ export function extractErrorFromResponse(
       detail = String(error.message || error.details || detail);
       
       if (PAYMENT_ERROR_CODES.includes(code)) {
+        detail = 'Erro de pagamento na conta WABA. Verifique o faturamento no WhatsApp Manager.';
         return createProviderError('payment_error', code, detail, body);
       }
     }
     
-    // Generic format
+    // NotificaMe error at root level
+    if (errorBody.code) {
+      code = String(errorBody.code);
+    }
     if (errorBody.message) {
       detail = String(errorBody.message);
     }
-    if (errorBody.code) {
-      code = String(errorBody.code);
+    
+    // Nested error format (some BSPs)
+    if (errorBody.data && typeof errorBody.data === 'object') {
+      const nestedData = errorBody.data as Record<string, unknown>;
+      if (nestedData.error) {
+        detail = String(nestedData.error);
+      }
+      if (nestedData.code) {
+        code = String(nestedData.code);
+      }
+    }
+    
+    // Mapear mensagens de erro comuns para mensagens amigáveis
+    const lowerDetail = detail.toLowerCase();
+    if (lowerDetail.includes('display name') && lowerDetail.includes('pending')) {
+      detail = 'Nome de exibição do número pendente de aprovação no WhatsApp Manager.';
+    } else if (lowerDetail.includes('template') && lowerDetail.includes('not found')) {
+      detail = 'Template não encontrado. Verifique se o nome está correto e sincronize os templates.';
+    } else if (lowerDetail.includes('invalid phone') || lowerDetail.includes('recipient')) {
+      detail = 'Número de telefone inválido ou não tem WhatsApp ativo.';
+    } else if (lowerDetail.includes('rate limit') || status === 429) {
+      detail = 'Limite de envio atingido. Aguarde alguns segundos e tente novamente.';
     }
   }
   
