@@ -20,7 +20,9 @@ interface SendTemplateResponse {
   data?: InboxMessage;
   provider_message_id?: string;
   error?: string;
+  error_code?: string;
   message?: string;
+  detail?: string;
   is_retryable?: boolean;
 }
 
@@ -122,11 +124,24 @@ export function useSendTemplate() {
         
         toast.success('Template enviado com sucesso');
       } else {
-        // Handle API-level errors
-        const errorMessage = data.message || data.error || 'Falha ao enviar template';
-        toast.error('Erro ao enviar', { description: errorMessage });
+        // Handle API-level errors - extract REAL error message
+        const errorCode = data.error_code || '';
+        const errorMessage = data.detail || data.message || data.error || 'Falha ao enviar template';
         
-        // Update optimistic message to failed or remove
+        // Show more helpful error message based on code
+        let displayMessage = errorMessage;
+        if (errorCode === 'NO_MESSAGE_ID') {
+          displayMessage = 'API não retornou confirmação. Verifique template e número.';
+        } else if (errorCode.includes('131')) {
+          displayMessage = errorMessage; // Meta error codes - already translated
+        }
+        
+        toast.error('Erro ao enviar', { 
+          description: displayMessage,
+          duration: 6000, // Show longer for errors
+        });
+        
+        console.error('[useSendTemplate] API Error:', { errorCode, errorMessage, fullResponse: data });
         if (data.data) {
           queryClient.setQueryData<InboxMessage[]>(
             ['inbox-messages', conversationId],
