@@ -26,6 +26,7 @@ import {
   Scale,
   HelpCircle,
   ArrowRight,
+  Trash2,
 } from 'lucide-react';
 import {
   Tooltip,
@@ -53,6 +54,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   Alert,
   AlertDescription,
 } from '@/components/ui/alert';
@@ -67,6 +78,7 @@ import { ptBR } from 'date-fns/locale';
 import {
   useCurrentTenantForTemplates,
   useTemplates,
+  useDeleteTemplate,
   Template,
 } from '@/hooks/useTemplates';
 import { useQuery } from '@tanstack/react-query';
@@ -165,6 +177,10 @@ function TemplatesContent() {
   const [statusFilter, setStatusFilter] = useState<StatusFilterCategory>('all');
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
   const [revalidatingId, setRevalidatingId] = useState<string | null>(null);
+  const [templateToDelete, setTemplateToDelete] = useState<Template | null>(null);
+  
+  // Delete mutation
+  const deleteTemplate = useDeleteTemplate();
   
   // Get user
   useEffect(() => {
@@ -217,6 +233,16 @@ function TemplatesContent() {
     } finally {
       setRevalidatingId(null);
     }
+  };
+
+  // Handle delete template
+  const handleDeleteTemplate = () => {
+    if (!templateToDelete || !tenantData?.tenantId) return;
+    
+    deleteTemplate.mutate(
+      { tenantId: tenantData.tenantId, templateId: templateToDelete.id },
+      { onSettled: () => setTemplateToDelete(null) }
+    );
   };
 
   // Safely filter templates with null checks
@@ -591,6 +617,26 @@ function TemplatesContent() {
                               </Tooltip>
                             </TooltipProvider>
                             
+                            {/* Delete button */}
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                    disabled={deleteTemplate.isPending}
+                                    onClick={() => setTemplateToDelete(template)}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Excluir template</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                            
                             {/* CTA button */}
                             {(() => {
                               const canonical = dbStatusToCanonical(template.status);
@@ -737,6 +783,42 @@ function TemplatesContent() {
             )}
           </DialogContent>
         </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={!!templateToDelete} onOpenChange={(open) => !open && setTemplateToDelete(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Excluir template?</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <p>
+                  Você está prestes a excluir o template{' '}
+                  <span className="font-semibold font-mono">"{templateToDelete?.name}"</span>.
+                </p>
+                <p className="text-muted-foreground">
+                  Esta ação remove o template apenas do Nexus Zap. O template continuará existindo na sua conta Meta/WABA.
+                  Se você sincronizar novamente, ele voltará a aparecer.
+                </p>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleteTemplate.isPending}>Cancelar</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDeleteTemplate}
+                disabled={deleteTemplate.isPending}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {deleteTemplate.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Excluindo...
+                  </>
+                ) : (
+                  'Excluir'
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </DashboardLayout>
   );
