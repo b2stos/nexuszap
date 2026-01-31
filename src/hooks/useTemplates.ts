@@ -254,9 +254,22 @@ export function useDeleteTemplate() {
       toast.success('Template excluído com sucesso');
     },
     onError: (error) => {
-      toast.error('Erro ao excluir template', {
-        description: error instanceof Error ? error.message : 'Tente novamente',
-      });
+      // Check for foreign key constraint error (template in use by campaigns)
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isForeignKeyError = errorMessage.includes('23503') || 
+        errorMessage.includes('foreign key constraint') ||
+        errorMessage.includes('still referenced');
+      
+      if (isForeignKeyError) {
+        toast.error('Template em uso', {
+          description: 'Este template está sendo usado em uma ou mais campanhas e não pode ser excluído. Exclua as campanhas primeiro.',
+          duration: 6000,
+        });
+      } else {
+        toast.error('Erro ao excluir template', {
+          description: errorMessage || 'Tente novamente',
+        });
+      }
     },
   });
 }
