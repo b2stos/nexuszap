@@ -55,7 +55,6 @@ import {
 } from '@/components/ui/dialog';
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -802,10 +801,10 @@ function TemplatesContent() {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel disabled={deleteTemplate.isPending}>Cancelar</AlertDialogCancel>
-              <AlertDialogAction
+              <Button
+                variant="destructive"
                 onClick={handleDeleteTemplate}
                 disabled={deleteTemplate.isPending}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
                 {deleteTemplate.isPending ? (
                   <>
@@ -815,7 +814,7 @@ function TemplatesContent() {
                 ) : (
                   'Excluir'
                 )}
-              </AlertDialogAction>
+              </Button>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
