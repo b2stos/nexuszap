@@ -6,6 +6,7 @@
  * - Auto-select up to limit
  * - Sent/Pending tabs
  * - Search and selection
+ * - Manual contact addition
  */
 
 import { useState, useMemo, useCallback, memo } from 'react';
@@ -25,6 +26,7 @@ import {
   Clock,
   CheckCircle2,
   AlertTriangle,
+  UserPlus,
 } from 'lucide-react';
 import { 
   useAllMTContacts, 
@@ -33,6 +35,7 @@ import {
   type CampaignContact,
   type BMLimitTier,
 } from '@/hooks/useCampaignContacts';
+import { AddMTContactDialog, type MTContact } from '@/components/contacts/AddMTContactDialog';
 
 // Selected contact with full data
 export interface SelectedContactData {
@@ -162,6 +165,7 @@ export function CampaignRecipients({
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'pending' | 'sent'>('pending');
   const [bmLimit, setBMLimit] = useState<BMLimitTier>(BM_LIMIT_TIERS[0]); // Default: 250
+  const [showAddContactDialog, setShowAddContactDialog] = useState(false);
   
   // Notify parent when BM limit changes
   const handleBMLimitChange = useCallback((tier: BMLimitTier) => {
@@ -272,6 +276,13 @@ export function CampaignRecipients({
     onSelectionChange(new Set(), []);
   }, [onSelectionChange]);
   
+  // Handle newly added contact - auto-select it
+  const handleContactAdded = useCallback((contact: MTContact) => {
+    const newSelection = new Set(selectedContactIds);
+    newSelection.add(contact.id);
+    onSelectionChange(newSelection, getSelectedContactsData(newSelection));
+  }, [selectedContactIds, onSelectionChange, getSelectedContactsData]);
+  
   // Are all visible selected?
   const allVisibleSelected = pendingContacts.length > 0 && 
     pendingContacts.every(c => selectedContactIds.has(c.id));
@@ -363,6 +374,17 @@ export function CampaignRecipients({
           >
             <Zap className="h-4 w-4" />
             Selecionar até o limite ({bmLimit.value === null ? 'todos' : remainingLimit.toLocaleString('pt-BR')})
+          </Button>
+          
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAddContactDialog(true)}
+            className="gap-2"
+          >
+            <UserPlus className="h-4 w-4" />
+            Adicionar Contato
           </Button>
           
           {selectedContactIds.size > 0 && (
@@ -497,6 +519,14 @@ export function CampaignRecipients({
             </div>
           </div>
         )}
+        
+        {/* Add Contact Dialog */}
+        <AddMTContactDialog
+          open={showAddContactDialog}
+          onOpenChange={setShowAddContactDialog}
+          tenantId={tenantId}
+          onSuccess={handleContactAdded}
+        />
       </CardContent>
     </Card>
   );
