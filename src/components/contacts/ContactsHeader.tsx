@@ -2,13 +2,15 @@ import { Button } from "@/components/ui/button";
 import { Upload, UserPlus, Download } from "lucide-react";
 import { useState } from "react";
 import { ImportContactsWithPreview } from "./ImportContactsWithPreview";
-import { AddContactDialog } from "./AddContactDialog";
+import { AddMTContactDialog } from "./AddMTContactDialog";
 import { downloadContactsCSVTemplate } from "@/utils/csvTemplateGenerator";
 import { toast } from "@/hooks/use-toast";
+import { useTenantRole } from "@/hooks/useTenantRole";
 
 export function ContactsHeader() {
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const { tenantId } = useTenantRole();
 
   const handleDownloadTemplate = () => {
     downloadContactsCSVTemplate();
@@ -17,6 +19,10 @@ export function ContactsHeader() {
       description: "Use este arquivo como exemplo para importar seus contatos",
     });
   };
+
+  if (!tenantId) {
+    return null;
+  }
 
   return (
     <>
@@ -42,7 +48,11 @@ export function ContactsHeader() {
           </Button>
         </div>
       </div>
-      <AddContactDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
+      <AddMTContactDialog 
+        open={showAddDialog} 
+        onOpenChange={setShowAddDialog} 
+        tenantId={tenantId}
+      />
       <ImportContactsWithPreview open={showImportDialog} onOpenChange={setShowImportDialog} />
     </>
   );
