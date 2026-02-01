@@ -96,6 +96,96 @@ interface ChannelWithProvider extends Channel {
   };
 }
 
+// ============================================
+// MEDIA DOWNLOAD & STORAGE
+// ============================================
+
+/**
+ * Downloads media from WhatsApp/NotificaMe URL and uploads to Supabase Storage
+ * Returns the public URL of the stored file
+ */
+async function downloadAndStoreMedia(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  mediaUrl: string,
+  tenantId: string,
+  messageId: string,
+  mimeType: string,
+  ctx?: LogContext
+): Promise<string | null> {
+  if (!mediaUrl) return null;
+  
+  try {
+    // Download the media file
+    if (ctx) log('info', 'Downloading media from provider', ctx, { url: mediaUrl.substring(0, 100) });
+    
+    const response = await fetch(mediaUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': '*/*',
+      },
+    });
+    
+    if (!response.ok) {
+      if (ctx) log('warn', 'Failed to download media', ctx, { 
+        status: response.status, 
+        statusText: response.statusText 
+      });
+      return mediaUrl; // Fallback to original URL
+    }
+    
+    const blob = await response.blob();
+    
+    // Determine file extension from mime type
+    const extMap: Record<string, string> = {
+      'audio/ogg': 'ogg',
+      'audio/mpeg': 'mp3',
+      'audio/mp4': 'm4a',
+      'audio/aac': 'aac',
+      'audio/amr': 'amr',
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/gif': 'gif',
+      'image/webp': 'webp',
+      'video/mp4': 'mp4',
+      'video/3gpp': '3gp',
+      'application/pdf': 'pdf',
+    };
+    const ext = extMap[mimeType] || mimeType.split('/')[1] || 'bin';
+    
+    // Generate unique filename
+    const filename = `${tenantId}/${messageId}.${ext}`;
+    
+    // Upload to Supabase Storage
+    const { data, error } = await supabase.storage
+      .from('inbox-media')
+      .upload(filename, blob, {
+        contentType: mimeType,
+        upsert: true,
+      });
+    
+    if (error) {
+      if (ctx) log('warn', 'Failed to upload media to storage', ctx, { error: error.message });
+      return mediaUrl; // Fallback to original URL
+    }
+    
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('inbox-media')
+      .getPublicUrl(filename);
+    
+    if (ctx) log('info', 'Media stored successfully', ctx, { 
+      original_url: mediaUrl.substring(0, 50),
+      storage_path: filename,
+      public_url: publicUrlData.publicUrl.substring(0, 80),
+    });
+    
+    return publicUrlData.publicUrl;
+  } catch (error) {
+    if (ctx) log('error', 'Exception downloading/storing media', ctx, { error: String(error) });
+    return mediaUrl; // Fallback to original URL on any error
+  }
+}
+
 interface WebhookEventRecord {
   id: string;
   status: 'received' | 'processing' | 'processed' | 'failed';
@@ -388,6 +478,7 @@ async function upsertConversationFromInbound(
 
 /**
  * Insere mensagem inbound com idempotência
+ * Downloads and stores media in Supabase Storage for permanent access
  */
 async function insertInboundMessageIdempotent(
   supabase: ReturnType<typeof getSupabaseAdmin>,
@@ -414,10 +505,28 @@ async function insertInboundMessageIdempotent(
   // Mapear tipo de mensagem
   const mappedMessage = mapInboundToMessage(event);
   
+  // Generate a unique ID for the message (for media filename)
+  const messageId = crypto.randomUUID();
+  
+  // Download and store media if present
+  let finalMediaUrl: string | undefined = mappedMessage.media_url;
+  if (mappedMessage.media_url && mappedMessage.media_mime_type) {
+    const storedUrl = await downloadAndStoreMedia(
+      supabase,
+      mappedMessage.media_url,
+      tenantId,
+      messageId,
+      mappedMessage.media_mime_type,
+      ctx
+    );
+    finalMediaUrl = storedUrl ?? mappedMessage.media_url;
+  }
+  
   // Inserir mensagem
   const { data: newMessage, error } = await supabase
     .from('mt_messages')
     .insert({
+      id: messageId, // Use the pre-generated ID
       tenant_id: tenantId,
       conversation_id: conversationId,
       channel_id: channelId,
@@ -425,7 +534,7 @@ async function insertInboundMessageIdempotent(
       direction: 'inbound',
       type: mappedMessage.type,
       content: mappedMessage.content,
-      media_url: mappedMessage.media_url,
+      media_url: finalMediaUrl,
       media_mime_type: mappedMessage.media_mime_type,
       media_filename: mappedMessage.media_filename,
       provider_message_id: event.provider_message_id,
@@ -444,6 +553,7 @@ async function insertInboundMessageIdempotent(
     conversation_id: conversationId, 
     message_id: newMessage.id,
     provider_message_id: event.provider_message_id,
+    media_stored: finalMediaUrl !== mappedMessage.media_url,
   });
   
   return { id: newMessage.id, duplicate: false };
