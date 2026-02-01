@@ -69,6 +69,7 @@ export interface ConversationFilter {
   search: string;
   unreadOnly: boolean;
   status?: 'open' | 'resolved' | 'all';
+  repliedOnly?: boolean; // Apenas conversas onde o contato respondeu
 }
 
 export interface WindowStatus {

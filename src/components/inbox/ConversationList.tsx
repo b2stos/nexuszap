@@ -73,28 +73,28 @@ export function ConversationList({
         {/* Filters */}
         <div className="flex gap-1">
           <Button
-            variant={filter.status === 'all' ? "default" : "ghost"}
+            variant={filter.repliedOnly ? "default" : "ghost"}
             size="sm"
-            onClick={() => onFilterChange({ ...filter, status: 'all', unreadOnly: false })}
+            onClick={() => onFilterChange({ ...filter, repliedOnly: true, unreadOnly: false, status: 'all' })}
             className="flex-1 h-8"
           >
-            Todas
+            Respondidas
           </Button>
           <Button
             variant={filter.unreadOnly ? "default" : "ghost"}
             size="sm"
-            onClick={() => onFilterChange({ ...filter, unreadOnly: true, status: 'all' })}
+            onClick={() => onFilterChange({ ...filter, unreadOnly: true, repliedOnly: false, status: 'all' })}
             className="flex-1 h-8"
           >
             Não lidas
           </Button>
           <Button
-            variant={filter.status === 'open' ? "default" : "ghost"}
+            variant={!filter.repliedOnly && !filter.unreadOnly && filter.status === 'all' ? "default" : "ghost"}
             size="sm"
-            onClick={() => onFilterChange({ ...filter, status: 'open', unreadOnly: false })}
+            onClick={() => onFilterChange({ ...filter, status: 'all', unreadOnly: false, repliedOnly: false })}
             className="flex-1 h-8"
           >
-            Ativas
+            Todas
           </Button>
         </div>
       </div>
@@ -114,9 +114,11 @@ export function ConversationList({
             <p className="text-sm mt-1">
               {filter.search 
                 ? 'Tente outra busca' 
-                : filter.unreadOnly 
-                  ? 'Todas as mensagens foram lidas'
-                  : 'As conversas aparecerão aqui'}
+                : filter.repliedOnly
+                  ? 'Nenhum contato respondeu ainda'
+                  : filter.unreadOnly 
+                    ? 'Todas as mensagens foram lidas'
+                    : 'As conversas aparecerão aqui'}
             </p>
           </div>
         ) : (

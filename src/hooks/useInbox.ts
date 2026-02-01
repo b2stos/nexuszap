@@ -84,6 +84,11 @@ export function useConversations(tenantId: string | undefined, filter: Conversat
         query = query.neq('status', 'archived');
       }
       
+      // Filtro de respondidas (contato enviou pelo menos 1 mensagem)
+      if (filter.repliedOnly) {
+        query = query.not('last_inbound_at', 'is', null);
+      }
+      
       const { data, error } = await query;
       
       if (error) throw error;
