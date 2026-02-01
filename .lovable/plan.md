@@ -1,177 +1,118 @@
 
-# Plano: Envio em Background + Visualizacao de Progresso
+# Plano: Filtrar Inbox para Mostrar Apenas Quem Respondeu
 
-## Problema Identificado
+## Problema
+Ao fazer disparos em massa (ex: 250 contatos), o Inbox fica cheio de conversas onde o contato **nunca respondeu**, dificultando encontrar quem realmente quer conversar.
 
-O processamento de campanhas esta vinculado ao componente `CampaignDetail.tsx`. Quando o usuario sai da pagina:
-1. O componente desmonta
-2. O `useEffect` que dispara os batches para de executar
-3. A campanha "trava" ate o usuario voltar
-
-## Solucao
-
-### Arquitetura Proposta
-
-```text
-+----------------------------------------------------------+
-|  App.tsx                                                 |
-|  +----------------------------------------------------+  |
-|  |  CampaignBackgroundProvider                        |  |
-|  |  - Monitora campanhas com status='running'         |  |
-|  |  - Dispara batches automaticamente                 |  |
-|  |  - Funciona em qualquer pagina do dashboard        |  |
-|  +----------------------------------------------------+  |
-|                                                          |
-|  +------------------+  +------------------------------+  |
-|  | DashboardSidebar |  | Qualquer Pagina (Inbox, etc) |  |
-|  | + Badge "2 ativo"|  | (nao precisa processar)      |  |
-|  | + Mini Progress  |  |                              |  |
-|  +------------------+  +------------------------------+  |
-+----------------------------------------------------------+
-```
-
-### 1. Criar CampaignBackgroundProvider
-
-Novo contexto React que:
-- Busca campanhas `running` do tenant a cada 10s
-- Para cada campanha ativa, dispara `campaign-process-queue` a cada 5s
-- Expoe estado das campanhas ativas para outros componentes
-
-| Arquivo | Alteracao |
-|---------|-----------|
-| `src/contexts/CampaignBackgroundContext.tsx` | **NOVO** - Provider para processamento em background |
-| `src/hooks/useActiveCampaigns.ts` | **NOVO** - Hook para acessar campanhas ativas |
-
-### 2. Integrar Provider no App.tsx
-
-Envolver as rotas protegidas com o provider:
-
-```tsx
-<CampaignBackgroundProvider>
-  <Routes>
-    {/* rotas do dashboard */}
-  </Routes>
-</CampaignBackgroundProvider>
-```
-
-### 3. Indicador Visual na Sidebar
-
-Adicionar badge e mini-painel no `DashboardSidebar`:
-- Badge vermelho pulsante no item "Campanhas" quando ha envios ativos
-- Clique expande mini-painel com progresso resumido
-- Link direto para pagina de detalhes
-
-| Arquivo | Alteracao |
-|---------|-----------|
-| `src/components/dashboard/DashboardSidebar.tsx` | Adicionar badge e mini-painel |
-| `src/components/dashboard/ActiveCampaignIndicator.tsx` | **NOVO** - Componente do indicador |
-
-### 4. Melhorar Visibilidade no Grid de Campanhas
-
-| Melhoria | Descricao |
-|----------|-----------|
-| Ordenacao | Campanhas `running` sempre no topo |
-| Destaque visual | Borda animada para campanhas ativas |
-| Link rapido | Botao "Ver Progresso" mais destacado |
+## Solução
+Adicionar novo filtro **"Respondidas"** que mostra apenas conversas onde o contato enviou pelo menos uma mensagem. Este será o filtro **padrão** para facilitar o atendimento.
 
 ---
 
-## Fluxo do Usuario Apos Implementacao
+## Interface Proposta
 
 ```text
-1. Usuario inicia campanha na tela de detalhes
-2. Sai para verificar Inbox
-3. >>> CampaignBackgroundProvider continua disparando batches <<<
-4. Badge na sidebar mostra "1 ativo" com progresso
-5. Usuario clica no badge → ve mini-painel com progresso
-6. Clica "Ver detalhes" → volta para CampaignDetail
-7. Campanha continua ate concluir (mesmo navegando entre paginas)
+┌─────────────────────────────────────────┐
+│ 💬 Conversas                        [5] │
+├─────────────────────────────────────────┤
+│ 🔍 Buscar por nome ou telefone...       │
+├─────────────────────────────────────────┤
+│ [Respondidas] [Não lidas] [Todas]       │  ← NOVO filtro padrão
+│     ativo                               │
+├─────────────────────────────────────────┤
+│ ✅ João Silva        ← contato respondeu│
+│    Oi, recebi a mensagem!     10:30     │
+│                                         │
+│ ✅ Maria Santos      ← contato respondeu│
+│    Quero saber mais           09:45     │
+│                                         │
+│ (contatos que não responderam ficam     │
+│  visíveis apenas no filtro "Todas")     │
+└─────────────────────────────────────────┘
 ```
 
 ---
 
-## Detalhes Tecnicos
+## Alterações Técnicas
 
-### CampaignBackgroundContext
+### 1. Atualizar Tipo `ConversationFilter`
+
+**Arquivo:** `src/types/inbox.ts`
 
 ```typescript
-interface CampaignBackgroundState {
-  activeCampaigns: Array<{
-    id: string;
-    name: string;
-    progress: number; // 0-100
-    sent: number;
-    total: number;
-    status: 'running' | 'paused';
-  }>;
-  isProcessing: boolean;
+export interface ConversationFilter {
+  search: string;
+  unreadOnly: boolean;
+  status?: 'open' | 'resolved' | 'all';
+  repliedOnly?: boolean; // NOVO: apenas conversas com resposta do contato
 }
-
-// Polling a cada 10s para campanhas ativas
-// Disparo de batch a cada 5s para cada campanha running
-// Controle de concorrencia para evitar multiplos disparos
 ```
 
-### Logica de Processamento
+### 2. Atualizar Hook `useConversations`
+
+**Arquivo:** `src/hooks/useInbox.ts`
+
+Adicionar filtro que verifica se `last_inbound_at` não é nulo:
 
 ```typescript
-// Hook interno do provider
-useEffect(() => {
-  if (runningCampaigns.length === 0) return;
-  
-  const interval = setInterval(() => {
-    runningCampaigns.forEach(campaign => {
-      // Evitar disparar se ja esta processando
-      if (!processingCampaigns.has(campaign.id)) {
-        processBatch(campaign.id);
-      }
-    });
-  }, 5000);
-  
-  return () => clearInterval(interval);
-}, [runningCampaigns]);
+// Filtro de respondidas (contato enviou pelo menos 1 mensagem)
+if (filter.repliedOnly) {
+  query = query.not('last_inbound_at', 'is', null);
+}
 ```
 
-### Indicador na Sidebar
+### 3. Atualizar UI `ConversationList`
 
-```tsx
-// Dentro de SidebarContent, no item Campanhas
-<NavLink to="/dashboard/campaigns">
-  <Send className="h-6 w-6" />
-  Campanhas
-  {activeCampaigns.length > 0 && (
-    <Badge className="bg-green-500 animate-pulse ml-auto">
-      {activeCampaigns.length} ativo
-    </Badge>
-  )}
-</NavLink>
+**Arquivo:** `src/components/inbox/ConversationList.tsx`
 
-{/* Mini painel expansivel */}
-{showMiniPanel && (
-  <ActiveCampaignIndicator campaigns={activeCampaigns} />
-)}
+- Alterar ordem dos botões: **Respondidas | Não lidas | Todas**
+- Mudar rótulo "Ativas" para "Respondidas"
+- Aplicar filtro `repliedOnly: true` ao clicar
+
+### 4. Mudar Filtro Padrão na Página Inbox
+
+**Arquivo:** `src/pages/Inbox.tsx`
+
+Inicializar estado com `repliedOnly: true`:
+
+```typescript
+const [filter, setFilter] = useState<ConversationFilter>({
+  search: '',
+  unreadOnly: false,
+  status: 'all',
+  repliedOnly: true, // PADRÃO: só quem respondeu
+});
 ```
 
 ---
 
-## Arquivos a Modificar/Criar
+## Arquivos a Modificar
 
-| Arquivo | Tipo | Descricao |
-|---------|------|-----------|
-| `src/contexts/CampaignBackgroundContext.tsx` | NOVO | Provider de processamento |
-| `src/hooks/useActiveCampaigns.ts` | NOVO | Hook para consumir o contexto |
-| `src/components/dashboard/ActiveCampaignIndicator.tsx` | NOVO | Mini-painel de progresso |
-| `src/components/dashboard/DashboardSidebar.tsx` | EDITAR | Integrar indicador |
-| `src/components/campaigns/MTCampaignsGrid.tsx` | EDITAR | Destacar campanhas ativas |
-| `src/App.tsx` | EDITAR | Envolver rotas com provider |
-| `src/pages/CampaignDetail.tsx` | EDITAR | Remover useEffect de auto-trigger (agora no provider) |
+| Arquivo | Alteração |
+|---------|-----------|
+| `src/types/inbox.ts` | Adicionar campo `repliedOnly` ao tipo |
+| `src/hooks/useInbox.ts` | Filtrar por `last_inbound_at IS NOT NULL` |
+| `src/components/inbox/ConversationList.tsx` | Novos botões de filtro |
+| `src/pages/Inbox.tsx` | Mudar filtro padrão para `repliedOnly: true` |
 
 ---
 
-## Beneficios
+## Fluxo do Usuário
 
-1. **Envio continuo**: Campanha nao para quando usuario navega
-2. **Visibilidade**: Badge + mini-painel mostram progresso em qualquer tela
-3. **Acesso rapido**: Um clique para ver detalhes da campanha ativa
-4. **Robustez**: Se a aba for fechada, campanha para (comportamento esperado em SPA)
+```text
+1. Faz disparo para 250 contatos
+2. Abre Inbox
+3. Vê apenas 5 conversas (quem respondeu) ← COMPORTAMENTO NOVO
+4. Atende os contatos interessados facilmente
+5. Se quiser ver todos, clica em "Todas"
+6. Vê os 250 contatos para acompanhamento
+```
 
+---
+
+## Benefícios
+
+- **Foco no atendimento**: Apenas conversas que precisam de resposta
+- **Performance**: Menos itens para renderizar na lista
+- **Flexibilidade**: Filtro "Todas" permite ver histórico completo quando necessário
+- **Compatível**: Não quebra funcionalidade existente, apenas muda o padrão
