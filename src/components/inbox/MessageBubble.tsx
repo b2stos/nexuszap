@@ -9,7 +9,7 @@
  * - Reações internas
  */
 
-import { useState, memo } from 'react';
+import { useState, memo, useRef } from 'react';
 import { 
   Clock, 
   Check, 
@@ -81,23 +81,62 @@ function StatusIcon({ status, errorDetail }: { status: string; errorDetail?: str
 
 // Audio player component
 function AudioPlayer({ src }: { src: string }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [duration, setDuration] = useState('0:00');
-  const [currentTime, setCurrentTime] = useState('0:00');
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [hasError, setHasError] = useState(false);
   
   const formatTime = (seconds: number) => {
+    if (!isFinite(seconds) || isNaN(seconds)) return '0:00';
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
   
+  const togglePlay = async () => {
+    if (!audioRef.current || hasError) return;
+    
+    try {
+      if (isPlaying) {
+        audioRef.current.pause();
+      } else {
+        await audioRef.current.play();
+      }
+    } catch (error) {
+      console.error('Erro ao reproduzir áudio:', error);
+      setHasError(true);
+    }
+  };
+  
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!audioRef.current || duration === 0) return;
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const percentage = clickX / rect.width;
+    const newTime = percentage * duration;
+    
+    audioRef.current.currentTime = newTime;
+  };
+  
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+  
   return (
     <div className="flex items-center gap-3 p-2 bg-background/30 rounded-lg min-w-[200px]">
       <button
-        onClick={() => setIsPlaying(!isPlaying)}
-        className="w-10 h-10 bg-primary/20 rounded-full flex items-center justify-center shrink-0 hover:bg-primary/30 transition-colors"
+        onClick={togglePlay}
+        disabled={hasError}
+        className={cn(
+          "w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-colors",
+          hasError 
+            ? "bg-destructive/20 cursor-not-allowed" 
+            : "bg-primary/20 hover:bg-primary/30"
+        )}
       >
-        {isPlaying ? (
+        {hasError ? (
+          <AlertCircle className="w-5 h-5 text-destructive" />
+        ) : isPlaying ? (
           <Pause className="w-5 h-5 text-primary" />
         ) : (
           <Play className="w-5 h-5 text-primary ml-0.5" />
@@ -106,21 +145,31 @@ function AudioPlayer({ src }: { src: string }) {
       
       <div className="flex-1 min-w-0">
         <audio
+          ref={audioRef}
           src={src}
-          onLoadedMetadata={(e) => setDuration(formatTime(e.currentTarget.duration))}
-          onTimeUpdate={(e) => setCurrentTime(formatTime(e.currentTarget.currentTime))}
+          preload="metadata"
+          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
-          className="hidden"
-          id={`audio-${src}`}
+          onEnded={() => {
+            setIsPlaying(false);
+            setCurrentTime(0);
+          }}
+          onError={() => setHasError(true)}
         />
-        <div className="h-1 bg-muted rounded-full overflow-hidden">
-          <div className="h-full bg-primary w-0 transition-all" />
+        <div 
+          className="h-1.5 bg-muted rounded-full overflow-hidden cursor-pointer"
+          onClick={handleSeek}
+        >
+          <div 
+            className="h-full bg-primary transition-all duration-100" 
+            style={{ width: `${progress}%` }}
+          />
         </div>
         <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-          <span>{currentTime}</span>
-          <span>{duration}</span>
+          <span>{formatTime(currentTime)}</span>
+          <span>{hasError ? 'Erro' : formatTime(duration)}</span>
         </div>
       </div>
     </div>
