@@ -160,26 +160,8 @@ export default function CampaignDetail() {
     }
   }, [campaign?.status, sent, failed, lastProcessedCount, lastUpdateTime, queued]);
   
-  // Auto-trigger next batch when running (continues processing)
-  useEffect(() => {
-    // ONLY trigger if campaign is actively running
-    if (campaign?.status !== 'running' || !campaignId) {
-      return;
-    }
-    
-    // Only trigger if there are queued items and not already processing
-    if (queued > 0 && !processBatch.isPending) {
-      const timer = setTimeout(() => {
-        // Double-check status before triggering (prevent race conditions)
-        if (campaign?.status === 'running') {
-          console.log('[CampaignDetail] Auto-triggering next batch...');
-          processBatch.mutate({ campaignId, speed: 'normal' });
-        }
-      }, 5000); // Wait 5 seconds between batches
-      
-      return () => clearTimeout(timer);
-    }
-  }, [campaign?.status, campaignId, queued, processBatch.isPending]);
+  // NOTE: Auto-trigger logic moved to CampaignBackgroundProvider
+  // The provider handles batch processing globally, preventing stalls when navigating away
   
   // Manual refresh handler
   const handleRefresh = useCallback(async () => {

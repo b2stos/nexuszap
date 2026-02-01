@@ -15,16 +15,21 @@ import {
   History,
   User,
   Shield,
-  ChevronRight
+  ChevronRight,
+  ChevronDown
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useTenantRole, TenantRole } from "@/hooks/useTenantRole";
+import { useActiveCampaigns } from "@/hooks/useActiveCampaigns";
+import { ActiveCampaignIndicator } from "./ActiveCampaignIndicator";
 import { supabase } from "@/integrations/supabase/client";
+import { ActiveCampaign } from "@/contexts/CampaignBackgroundContext";
 
 interface SidebarContentProps {
   isAppAdmin: boolean;
@@ -34,6 +39,9 @@ interface SidebarContentProps {
   isSuperAdmin: boolean;
   userProfile: { full_name: string | null; email: string; avatar_url: string | null } | null;
   onProfileClick: () => void;
+  activeCampaigns: ActiveCampaign[];
+  showCampaignPanel: boolean;
+  onToggleCampaignPanel: () => void;
 }
 
 function RoleBadge({ role, isSuperAdmin }: { role: TenantRole; isSuperAdmin: boolean }) {
@@ -63,10 +71,22 @@ function RoleBadge({ role, isSuperAdmin }: { role: TenantRole; isSuperAdmin: boo
   );
 }
 
-function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName, isSuperAdmin, userProfile, onProfileClick }: SidebarContentProps) {
+function SidebarContent({ 
+  isAppAdmin, 
+  tenantRole, 
+  isTenantAdmin, 
+  tenantName, 
+  isSuperAdmin, 
+  userProfile, 
+  onProfileClick,
+  activeCampaigns,
+  showCampaignPanel,
+  onToggleCampaignPanel 
+}: SidebarContentProps) {
   // Super admin sees everything
   const showAdminItems = isSuperAdmin || isTenantAdmin;
   const showSystemAdmin = isSuperAdmin || isAppAdmin;
+  const runningCampaigns = activeCampaigns.filter(c => c.status === "running");
 
   function getInitials(name: string | null) {
     if (!name) return "U";
@@ -155,14 +175,36 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName, isS
               {/* Campaigns - Admin only */}
               {showAdminItems && (
                 <li>
-                  <NavLink
-                    to="/dashboard/campaigns"
-                    className="group flex gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold hover:bg-muted"
-                    activeClassName="bg-muted text-primary"
-                  >
-                    <Send className="h-6 w-6 shrink-0" />
-                    Campanhas
-                  </NavLink>
+                  <Collapsible open={showCampaignPanel} onOpenChange={onToggleCampaignPanel}>
+                    <div className="flex items-center">
+                      <NavLink
+                        to="/dashboard/campaigns"
+                        className="group flex flex-1 gap-x-3 rounded-md p-2 text-sm leading-6 font-semibold hover:bg-muted"
+                        activeClassName="bg-muted text-primary"
+                      >
+                        <Send className="h-6 w-6 shrink-0" />
+                        Campanhas
+                        {runningCampaigns.length > 0 && (
+                          <Badge className="ml-auto bg-primary text-primary-foreground animate-pulse">
+                            {runningCampaigns.length}
+                          </Badge>
+                        )}
+                      </NavLink>
+                      {runningCampaigns.length > 0 && (
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 mr-1">
+                            <ChevronDown className={`h-4 w-4 transition-transform ${showCampaignPanel ? 'rotate-180' : ''}`} />
+                          </Button>
+                        </CollapsibleTrigger>
+                      )}
+                    </div>
+                    <CollapsibleContent>
+                      <ActiveCampaignIndicator 
+                        campaigns={runningCampaigns} 
+                        onClose={() => onToggleCampaignPanel()} 
+                      />
+                    </CollapsibleContent>
+                  </Collapsible>
                 </li>
               )}
 
@@ -273,9 +315,11 @@ function SidebarContent({ isAppAdmin, tenantRole, isTenantAdmin, tenantName, isS
 
 export function DashboardSidebar() {
   const [open, setOpen] = useState(false);
+  const [showCampaignPanel, setShowCampaignPanel] = useState(false);
   const navigate = useNavigate();
   const { isAdmin: isAppAdmin } = useUserRole();
   const { role: tenantRole, isAdmin: isTenantAdmin, tenantName, isSuperAdmin } = useTenantRole();
+  const { activeCampaigns } = useActiveCampaigns();
   const [userProfile, setUserProfile] = useState<{ full_name: string | null; email: string; avatar_url: string | null } | null>(null);
 
   useEffect(() => {
@@ -302,6 +346,10 @@ export function DashboardSidebar() {
     navigate("/dashboard/profile");
   };
 
+  const handleToggleCampaignPanel = () => {
+    setShowCampaignPanel(prev => !prev);
+  };
+
   const sidebarProps = {
     isAppAdmin,
     tenantRole,
@@ -310,6 +358,9 @@ export function DashboardSidebar() {
     isSuperAdmin,
     userProfile,
     onProfileClick: handleProfileClick,
+    activeCampaigns,
+    showCampaignPanel,
+    onToggleCampaignPanel: handleToggleCampaignPanel,
   };
 
   return (
