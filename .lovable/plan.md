@@ -1,118 +1,58 @@
 
-# Plano: Filtrar Inbox para Mostrar Apenas Quem Respondeu
+# Correção: Player de Áudio não Reproduz
 
-## Problema
-Ao fazer disparos em massa (ex: 250 contatos), o Inbox fica cheio de conversas onde o contato **nunca respondeu**, dificultando encontrar quem realmente quer conversar.
+## Problema Identificado
+
+O componente `AudioPlayer` no arquivo `src/components/inbox/MessageBubble.tsx` tem um bug:
+
+```typescript
+// CÓDIGO ATUAL (BUGADO)
+<button onClick={() => setIsPlaying(!isPlaying)}>
+  {/* Apenas troca o ícone, não toca o áudio! */}
+</button>
+
+<audio src={src} className="hidden" />
+// ↑ Elemento existe mas ninguém chama .play() ou .pause()
+```
+
+O botão **apenas alterna o estado visual** (`isPlaying`), mas **nunca chama** `audio.play()` ou `audio.pause()`.
 
 ## Solução
-Adicionar novo filtro **"Respondidas"** que mostra apenas conversas onde o contato enviou pelo menos uma mensagem. Este será o filtro **padrão** para facilitar o atendimento.
 
----
-
-## Interface Proposta
-
-```text
-┌─────────────────────────────────────────┐
-│ 💬 Conversas                        [5] │
-├─────────────────────────────────────────┤
-│ 🔍 Buscar por nome ou telefone...       │
-├─────────────────────────────────────────┤
-│ [Respondidas] [Não lidas] [Todas]       │  ← NOVO filtro padrão
-│     ativo                               │
-├─────────────────────────────────────────┤
-│ ✅ João Silva        ← contato respondeu│
-│    Oi, recebi a mensagem!     10:30     │
-│                                         │
-│ ✅ Maria Santos      ← contato respondeu│
-│    Quero saber mais           09:45     │
-│                                         │
-│ (contatos que não responderam ficam     │
-│  visíveis apenas no filtro "Todas")     │
-└─────────────────────────────────────────┘
-```
-
----
-
-## Alterações Técnicas
-
-### 1. Atualizar Tipo `ConversationFilter`
-
-**Arquivo:** `src/types/inbox.ts`
+Usar `useRef` para referenciar o elemento `<audio>` e controlar a reprodução:
 
 ```typescript
-export interface ConversationFilter {
-  search: string;
-  unreadOnly: boolean;
-  status?: 'open' | 'resolved' | 'all';
-  repliedOnly?: boolean; // NOVO: apenas conversas com resposta do contato
+function AudioPlayer({ src }: { src: string }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  // ...
+  
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    
+    if (isPlaying) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play();
+    }
+  };
+  
+  return (
+    <button onClick={togglePlay}>...</button>
+    <audio ref={audioRef} src={src} />
+  );
 }
 ```
 
-### 2. Atualizar Hook `useConversations`
-
-**Arquivo:** `src/hooks/useInbox.ts`
-
-Adicionar filtro que verifica se `last_inbound_at` não é nulo:
-
-```typescript
-// Filtro de respondidas (contato enviou pelo menos 1 mensagem)
-if (filter.repliedOnly) {
-  query = query.not('last_inbound_at', 'is', null);
-}
-```
-
-### 3. Atualizar UI `ConversationList`
-
-**Arquivo:** `src/components/inbox/ConversationList.tsx`
-
-- Alterar ordem dos botões: **Respondidas | Não lidas | Todas**
-- Mudar rótulo "Ativas" para "Respondidas"
-- Aplicar filtro `repliedOnly: true` ao clicar
-
-### 4. Mudar Filtro Padrão na Página Inbox
-
-**Arquivo:** `src/pages/Inbox.tsx`
-
-Inicializar estado com `repliedOnly: true`:
-
-```typescript
-const [filter, setFilter] = useState<ConversationFilter>({
-  search: '',
-  unreadOnly: false,
-  status: 'all',
-  repliedOnly: true, // PADRÃO: só quem respondeu
-});
-```
-
----
-
-## Arquivos a Modificar
+## Arquivo a Modificar
 
 | Arquivo | Alteração |
 |---------|-----------|
-| `src/types/inbox.ts` | Adicionar campo `repliedOnly` ao tipo |
-| `src/hooks/useInbox.ts` | Filtrar por `last_inbound_at IS NOT NULL` |
-| `src/components/inbox/ConversationList.tsx` | Novos botões de filtro |
-| `src/pages/Inbox.tsx` | Mudar filtro padrão para `repliedOnly: true` |
+| `src/components/inbox/MessageBubble.tsx` | Corrigir `AudioPlayer` para usar `useRef` e chamar `.play()/.pause()` |
 
----
+## Melhorias Adicionais
 
-## Fluxo do Usuário
-
-```text
-1. Faz disparo para 250 contatos
-2. Abre Inbox
-3. Vê apenas 5 conversas (quem respondeu) ← COMPORTAMENTO NOVO
-4. Atende os contatos interessados facilmente
-5. Se quiser ver todos, clica em "Todas"
-6. Vê os 250 contatos para acompanhamento
-```
-
----
-
-## Benefícios
-
-- **Foco no atendimento**: Apenas conversas que precisam de resposta
-- **Performance**: Menos itens para renderizar na lista
-- **Flexibilidade**: Filtro "Todas" permite ver histórico completo quando necessário
-- **Compatível**: Não quebra funcionalidade existente, apenas muda o padrão
+Além da correção principal, vou adicionar:
+1. **Barra de progresso funcional** - mostrar avanço visual da reprodução
+2. **Tratamento de erro** - caso o áudio não carregue (URL expirada do WhatsApp)
+3. **Seek** - permitir clicar na barra para pular para um ponto do áudio
