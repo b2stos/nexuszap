@@ -1,84 +1,118 @@
 
-# Plano: Adicionar Opção de Excluir Templates Sincronizados
+# Plano: Adicionar Contato Manual na Campanha e Contatos
 
 ## Contexto
-A página de Templates (`/dashboard/templates`) exibe templates sincronizados da Meta, mas não possui opção para remover templates que o usuário não deseja mais utilizar. O hook `useDeleteTemplate` já existe e está funcional.
+O usuário quer poder adicionar contatos manualmente em dois lugares:
+1. **Na tela de criar campanha** - ao selecionar destinatários
+2. **Na página de Contatos** - além da importação via arquivo
+
+Atualmente existe um `AddContactDialog` que usa a tabela `contacts` (legacy). Precisamos criar um novo componente que use a tabela `mt_contacts` (multi-tenant) para manter consistência com o sistema.
 
 ---
 
 ## Implementação
 
-### 1. Adicionar Botão de Excluir na Tabela
+### 1. Criar Componente `AddMTContactDialog`
 
-Na coluna de ações de cada template, adicionar um botão de lixeira ao lado do botão de revalidar:
+Novo dialog reutilizável para adicionar contatos na tabela `mt_contacts`:
 
-- Ícone: `Trash2` do lucide-react
-- Tooltip: "Excluir template"
-- Cor: vermelho sutil para indicar ação destrutiva
+| Campo | Validação |
+|-------|-----------|
+| Nome | Obrigatório, 1-100 caracteres |
+| Telefone | 10-15 dígitos, formato WhatsApp (DDI + número) |
+| Email | Opcional, formato email válido |
 
-### 2. Dialog de Confirmação
+**Funcionalidades:**
+- Validação com Zod
+- Normalização automática do telefone (remove caracteres não numéricos)
+- Toast de sucesso/erro
+- Invalida cache do React Query após sucesso
 
-Criar um `AlertDialog` para confirmar a exclusão antes de executar:
+### 2. Adicionar Botão no `CampaignRecipients`
 
-- Título: "Excluir template?"
-- Descrição: Nome do template + aviso que a exclusão é local e não afeta a Meta
-- Botão cancelar: "Cancelar"
-- Botão confirmar: "Excluir" (vermelho)
+Na seção de seleção de contatos, adicionar botão "Adicionar Contato" ao lado das ações rápidas:
 
-### 3. Integrar Hook de Exclusão
-
-Utilizar o hook existente `useDeleteTemplate()`:
-
-```typescript
-const deleteTemplate = useDeleteTemplate();
-
-const handleDelete = (templateId: string) => {
-  deleteTemplate.mutate({ 
-    tenantId: tenantData.tenantId, 
-    templateId 
-  });
-};
+```text
+┌─────────────────────────────────────────────────────────┐
+│  Destinatários                                          │
+├─────────────────────────────────────────────────────────┤
+│  [Selecionar até limite] [Limpar] [+ Adicionar Contato] │
+│                                                         │
+│  🔍 Buscar por nome ou telefone...                      │
+│                                                         │
+│  Lista de contatos...                                   │
+└─────────────────────────────────────────────────────────┘
 ```
+
+### 3. Atualizar `ContactsHeader` 
+
+Substituir o `AddContactDialog` pelo novo `AddMTContactDialog` para usar a tabela multi-tenant correta.
 
 ---
 
-## Arquivos Modificados
+## Arquivos a Modificar
 
 | Arquivo | Alteração |
 |---------|-----------|
-| `src/pages/Templates.tsx` | Adicionar botão delete, dialog de confirmação, e lógica de exclusão |
+| `src/components/contacts/AddMTContactDialog.tsx` | **NOVO** - Dialog reutilizável |
+| `src/components/campaigns/CampaignRecipients.tsx` | Adicionar botão e dialog |
+| `src/components/contacts/ContactsHeader.tsx` | Usar novo dialog MT |
+| `src/hooks/useCampaignContacts.ts` | Invalidar query correta após adicionar |
 
 ---
 
 ## Fluxo do Usuário
 
+**Na Campanha:**
 ```text
-1. Usuário visualiza lista de templates
-2. Clica no ícone de lixeira (🗑️) do template
-3. Dialog aparece: "Excluir template 'nome_template'?"
-4. Confirma → Template removido da lista local
-5. Toast de sucesso: "Template excluído com sucesso"
+1. Usuário cria campanha → Chega na aba de destinatários
+2. Clica em "+ Adicionar Contato"
+3. Dialog abre → Preenche nome e telefone
+4. Clica "Adicionar" → Contato aparece na lista
+5. Seleciona o contato → Continua criando campanha
 ```
 
----
-
-## Observações Importantes
-
-- **Exclusão local apenas**: O template será removido do banco de dados do Nexus Zap, mas continuará existindo na conta Meta/WABA
-- **Ressincronização**: Se o usuário sincronizar novamente, templates excluídos voltarão a aparecer
-- **Sem impacto em campanhas**: Campanhas já criadas não serão afetadas
+**Na Página de Contatos:**
+```text
+1. Usuário acessa Contatos
+2. Clica em "Adicionar Contato"
+3. Dialog abre → Preenche dados
+4. Contato aparece na tabela
+```
 
 ---
 
 ## Detalhes Técnicos
 
-**Novos imports necessários:**
-- `Trash2` de lucide-react
-- `AlertDialog` componentes de @/components/ui/alert-dialog
+**Novo componente `AddMTContactDialog`:**
+```typescript
+interface AddMTContactDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  tenantId: string;
+  onSuccess?: (contact: MTContact) => void; // Callback opcional
+}
+```
 
-**Estado adicional:**
-- `templateToDelete: Template | null` - controlar qual template será excluído
+**Schema de validação:**
+```typescript
+const mtContactSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  phone: z.string().trim().min(10).max(15).regex(/^[0-9]+$/),
+  email: z.string().email().optional().or(z.literal('')),
+});
+```
 
-**Validação:**
-- Desabilitar botão delete durante operação de exclusão
-- Mostrar loading no botão durante mutação
+**Invalidação de cache:**
+```typescript
+queryClient.invalidateQueries({ queryKey: ['mt-contacts', tenantId] });
+queryClient.invalidateQueries({ queryKey: ['all-contacts-for-campaign-paginated'] });
+```
+
+---
+
+## Observações
+
+- O telefone será normalizado (só números) antes de salvar
+- Se o contato já existir (mesmo telefone no tenant), será feito upsert
+- O novo contato ficará imediatamente disponível para seleção na campanha
