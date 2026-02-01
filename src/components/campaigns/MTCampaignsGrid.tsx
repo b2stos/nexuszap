@@ -128,10 +128,19 @@ export function MTCampaignsGrid() {
     );
   }
   
+  // Sort campaigns: running first, then paused, then others by date
+  const sortedCampaigns = [...campaigns].sort((a, b) => {
+    const statusOrder = { running: 0, paused: 1, scheduled: 2, draft: 3, done: 4, cancelled: 5 };
+    const aOrder = statusOrder[a.status] ?? 6;
+    const bOrder = statusOrder[b.status] ?? 6;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
+
   return (
     <>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {campaigns.map((campaign) => {
+        {sortedCampaigns.map((campaign) => {
           const total = campaign.total_recipients || 0;
           const sent = campaign.sent_count || 0;
           const delivered = campaign.delivered_count || 0;
@@ -146,7 +155,7 @@ export function MTCampaignsGrid() {
           const isCancelled = campaign.status === 'cancelled';
           
           return (
-            <Card key={campaign.id} className="relative">
+            <Card key={campaign.id} className={`relative ${isRunning ? 'ring-2 ring-primary/50 ring-offset-2' : ''}`}>
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
                   <div className="space-y-1 flex-1 min-w-0">

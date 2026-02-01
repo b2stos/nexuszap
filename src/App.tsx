@@ -7,6 +7,7 @@ import { HelmetProvider } from "react-helmet-async";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { AdminRoute } from "@/components/auth/AdminRoute";
 import { RequireRole } from "@/components/auth/RequireRole";
+import { CampaignBackgroundProvider } from "@/contexts/CampaignBackgroundContext";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
@@ -126,34 +127,36 @@ const App = () => (
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <TooltipProvider delayDuration={0}>
-            <Toaster />
-            <Routes>
-              <Route path="/" element={<Index />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="/install" element={<Install />} />
-              <Route path="/sobre" element={<About />} />
-              <Route path="/termos" element={<Terms />} />
-              <Route path="/privacidade" element={<Privacy />} />
-              <Route path="/como-funciona" element={<HowItWorks />} />
-              <Route path="/precos" element={<Pricing />} />
-              <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-              <Route path="/dashboard/inbox" element={<ProtectedRoute><Inbox /></ProtectedRoute>} />
-              <Route path="/dashboard/templates" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Templates /></RequireRole></ProtectedRoute>} />
-              <Route path="/dashboard/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
-              <Route path="/dashboard/campaigns" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Campaigns /></RequireRole></ProtectedRoute>} />
-              <Route path="/dashboard/campaigns/new" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><NewCampaign /></RequireRole></ProtectedRoute>} />
-              <Route path="/dashboard/campaigns/:id" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><CampaignDetail /></RequireRole></ProtectedRoute>} />
-              <Route path="/dashboard/channels" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Channels /></RequireRole></ProtectedRoute>} />
-              <Route path="/dashboard/settings" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Settings /></RequireRole></ProtectedRoute>} />
-              <Route path="/dashboard/audit-logs" element={<ProtectedRoute><AuditLogs /></ProtectedRoute>} />
-              <Route path="/dashboard/validation-test" element={<ProtectedRoute><ValidationTest /></ProtectedRoute>} />
-              <Route path="/dashboard/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
-              <Route path="/dashboard/admin" element={<ProtectedRoute><AdminRoute><Admin /></AdminRoute></ProtectedRoute>} />
-              <Route path="/dashboard/diagnostics" element={<ProtectedRoute><AdminRoute><NotificameDiagnostics /></AdminRoute></ProtectedRoute>} />
-              {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-            <InstallPrompt delay={45000} />
+            <CampaignBackgroundProvider>
+              <Toaster />
+              <Routes>
+                <Route path="/" element={<Index />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route path="/install" element={<Install />} />
+                <Route path="/sobre" element={<About />} />
+                <Route path="/termos" element={<Terms />} />
+                <Route path="/privacidade" element={<Privacy />} />
+                <Route path="/como-funciona" element={<HowItWorks />} />
+                <Route path="/precos" element={<Pricing />} />
+                <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+                <Route path="/dashboard/inbox" element={<ProtectedRoute><Inbox /></ProtectedRoute>} />
+                <Route path="/dashboard/templates" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Templates /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
+                <Route path="/dashboard/campaigns" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Campaigns /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/campaigns/new" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><NewCampaign /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/campaigns/:id" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><CampaignDetail /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/channels" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Channels /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/settings" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Settings /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/audit-logs" element={<ProtectedRoute><AuditLogs /></ProtectedRoute>} />
+                <Route path="/dashboard/validation-test" element={<ProtectedRoute><ValidationTest /></ProtectedRoute>} />
+                <Route path="/dashboard/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+                <Route path="/dashboard/admin" element={<ProtectedRoute><AdminRoute><Admin /></AdminRoute></ProtectedRoute>} />
+                <Route path="/dashboard/diagnostics" element={<ProtectedRoute><AdminRoute><NotificameDiagnostics /></AdminRoute></ProtectedRoute>} />
+                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+              <InstallPrompt delay={45000} />
+            </CampaignBackgroundProvider>
           </TooltipProvider>
         </BrowserRouter>
       </QueryClientProvider>
