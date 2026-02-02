@@ -18,6 +18,8 @@ interface RequireRoleProps {
   roles?: TenantRole[];
   /** Alternative: require admin (owner or admin) */
   requireAdmin?: boolean;
+  /** Alternative: require operator (owner, admin, or manager) */
+  requireOperator?: boolean;
   /** Redirect path for unauthorized (default: show access denied) */
   redirectTo?: string;
   /** Show inline access denied instead of full page */
@@ -28,11 +30,12 @@ export function RequireRole({
   children,
   roles,
   requireAdmin = false,
+  requireOperator = false,
   redirectTo,
   inline = false,
 }: RequireRoleProps) {
   const location = useLocation();
-  const { role, loading, isAdmin, tenantId, isSuperAdmin } = useTenantRole();
+  const { role, loading, isAdmin, canOperate, tenantId, isSuperAdmin } = useTenantRole();
 
   // Loading state
   if (loading) {
@@ -65,6 +68,8 @@ export function RequireRole({
 
   if (requireAdmin) {
     isAuthorized = isAdmin;
+  } else if (requireOperator) {
+    isAuthorized = canOperate;
   } else if (roles && roles.length > 0) {
     isAuthorized = roles.includes(role);
   } else {
