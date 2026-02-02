@@ -1,58 +1,123 @@
 
-# Correção: Player de Áudio não Reproduz
+# Plano: Acesso Operacional para Gerentes
 
-## Problema Identificado
+## Entendimento do Problema
 
-O componente `AudioPlayer` no arquivo `src/components/inbox/MessageBubble.tsx` tem um bug:
+Atualmente, existem 3 níveis de acesso:
+- **Owner/Admin**: Acesso total (incluindo segurança e equipe)
+- **Agent**: Acesso limitado (só Inbox e Contatos)
+
+Você precisa de um nível intermediário: **acesso operacional completo** mas **sem acesso administrativo**.
+
+## Solução: Promover para "Gerente"
+
+A role `manager` já existe no sistema mas não tem as permissões configuradas. Vou ativá-la para dar acesso a:
+
+| Funcionalidade | Agent | Manager | Admin/Owner |
+|----------------|-------|---------|-------------|
+| Inbox | Sim | Sim | Sim |
+| Contatos | Sim | Sim | Sim |
+| Templates | - | **Sim** | Sim |
+| Campanhas | - | **Sim** | Sim |
+| Canais | - | **Sim** | Sim |
+| Configurações (básicas) | - | **Sim** | Sim |
+| Gerenciar Equipe | - | - | Sim |
+| Painel Admin | - | - | Sim |
+| Logs de Auditoria | - | - | Sim |
+
+## Arquivos a Modificar
+
+### 1. Hook de Permissões (`src/hooks/useTenantRole.ts`)
+
+Adicionar:
+- `isManager` - verifica se é gerente
+- `canOperate` - nova permissão para acesso operacional (owner, admin, OU manager)
 
 ```typescript
-// CÓDIGO ATUAL (BUGADO)
-<button onClick={() => setIsPlaying(!isPlaying)}>
-  {/* Apenas troca o ícone, não toca o áudio! */}
-</button>
+// Novo tipo expandido
+export type TenantRole = "owner" | "admin" | "manager" | "agent" | null;
 
-<audio src={src} className="hidden" />
-// ↑ Elemento existe mas ninguém chama .play() ou .pause()
+// Novas verificações
+const isManager = context.role === "manager";
+const canOperate = isSuperAdmin || isOwner || isAdmin || isManager;
+
+// Permissões operacionais agora usam canOperate
+const canManageTemplates = canOperate;
+const canManageCampaigns = canOperate;
+const canManageChannels = canOperate;
 ```
 
-O botão **apenas alterna o estado visual** (`isPlaying`), mas **nunca chama** `audio.play()` ou `audio.pause()`.
+### 2. Componente de Proteção de Rotas (`src/components/auth/RequireRole.tsx`)
 
-## Solução
-
-Usar `useRef` para referenciar o elemento `<audio>` e controlar a reprodução:
+Adicionar prop `requireOperator`:
 
 ```typescript
-function AudioPlayer({ src }: { src: string }) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  // ...
-  
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-    
-    if (isPlaying) {
-      audioRef.current.pause();
-    } else {
-      audioRef.current.play();
-    }
-  };
-  
-  return (
-    <button onClick={togglePlay}>...</button>
-    <audio ref={audioRef} src={src} />
-  );
+interface RequireRoleProps {
+  requireAdmin?: boolean;    // Owner ou Admin
+  requireOperator?: boolean; // Owner, Admin, OU Manager (NOVO)
 }
 ```
 
-## Arquivo a Modificar
+### 3. Rotas do App (`src/App.tsx`)
+
+Trocar `requireAdmin` por `requireOperator` nas páginas operacionais:
+
+```typescript
+// Antes
+<RequireRole requireAdmin redirectTo="/dashboard">
+
+// Depois (para páginas operacionais)
+<RequireRole requireOperator redirectTo="/dashboard">
+```
+
+### 4. Sidebar (`src/components/dashboard/DashboardSidebar.tsx`)
+
+Mostrar itens operacionais para gerentes:
+
+```typescript
+// Antes
+const showAdminItems = isSuperAdmin || isTenantAdmin;
+
+// Depois
+const showOperationalItems = isSuperAdmin || isTenantAdmin || canOperate;
+```
+
+### 5. Badge de Role no Sidebar
+
+Adicionar badge para Manager:
+
+```typescript
+const config = {
+  owner: { label: "Proprietário", className: "..." },
+  admin: { label: "Admin", className: "..." },
+  manager: { label: "Gerente", className: "bg-purple-500/10 text-purple-600" }, // NOVO
+  agent: { label: "Agente", className: "..." },
+};
+```
+
+## Fluxo de Promoção
+
+1. Você acessa **Configurações → Equipe**
+2. Clica no menu de ações do usuário
+3. Seleciona **"Alterar função"**
+4. Escolhe **"Gerente"**
+5. Usuário faz login novamente
+6. Tem acesso total operacional automaticamente
+
+## Restrições Mantidas (Apenas Owner/Admin)
+
+- Painel Administrativo (`/dashboard/admin`)
+- Diagnóstico API (`/dashboard/diagnostics`)
+- Logs de Auditoria (`/dashboard/audit-logs`)
+- Gerenciamento de Equipe (em Configurações)
+- Exclusão de membros
+
+## Resumo das Alterações
 
 | Arquivo | Alteração |
 |---------|-----------|
-| `src/components/inbox/MessageBubble.tsx` | Corrigir `AudioPlayer` para usar `useRef` e chamar `.play()/.pause()` |
-
-## Melhorias Adicionais
-
-Além da correção principal, vou adicionar:
-1. **Barra de progresso funcional** - mostrar avanço visual da reprodução
-2. **Tratamento de erro** - caso o áudio não carregue (URL expirada do WhatsApp)
-3. **Seek** - permitir clicar na barra para pular para um ponto do áudio
+| `src/hooks/useTenantRole.ts` | Adicionar `isManager`, `canOperate` e exportar |
+| `src/components/auth/RequireRole.tsx` | Adicionar prop `requireOperator` |
+| `src/App.tsx` | Usar `requireOperator` em rotas operacionais |
+| `src/components/dashboard/DashboardSidebar.tsx` | Mostrar menu para managers, badge nova |
+| `src/components/settings/TeamSettings.tsx` | Já suporta manager (sem alteração) |
