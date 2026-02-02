@@ -90,26 +90,29 @@ export function extractFirstName(fullName: string | null | undefined): string | 
 
 /**
  * Conta o número de variáveis em um texto de template.
- * Procura por {{1}}, {{2}}, etc.
+ * Suporta AMBOS os formatos:
+ * - {{N}} (numérico): {{1}}, {{2}}, {{3}}
+ * - {{nome}} (nomeado): {{nome}}, {{bairro}}, {{data}}
  */
 export function countVariablesInText(text: string): number {
-  const matches = text.match(/\{\{(\d+)\}\}/g);
+  const matches = text.match(/\{\{([^}]+)\}\}/g);
   return matches ? matches.length : 0;
 }
 
 /**
  * Extrai informações de variáveis dos components do template.
+ * Suporta placeholders numéricos ({{1}}) e nomeados ({{nome}}).
  */
 export function extractTemplateVariables(components: unknown): {
-  header: { count: number; positions: number[] };
-  body: { count: number; positions: number[] };
-  button: { count: number; positions: number[] };
+  header: { count: number; positions: number[]; names: string[] };
+  body: { count: number; positions: number[]; names: string[] };
+  button: { count: number; positions: number[]; names: string[] };
   total: number;
 } {
   const result = {
-    header: { count: 0, positions: [] as number[] },
-    body: { count: 0, positions: [] as number[] },
-    button: { count: 0, positions: [] as number[] },
+    header: { count: 0, positions: [] as number[], names: [] as string[] },
+    body: { count: 0, positions: [] as number[], names: [] as string[] },
+    button: { count: 0, positions: [] as number[], names: [] as string[] },
     total: 0,
   };
   
@@ -124,21 +127,30 @@ export function extractTemplateVariables(components: unknown): {
     const type = String(comp.type || '').toUpperCase();
     const text = comp.text || '';
     
-    // Extrair posições das variáveis
-    const regex = /\{\{(\d+)\}\}/g;
+    // Extrair TODAS as variáveis (numéricas e nomeadas)
+    const regex = /\{\{([^}]+)\}\}/g;
     let match;
     const positions: number[] = [];
+    const names: string[] = [];
     
     while ((match = regex.exec(text)) !== null) {
-      positions.push(parseInt(match[1], 10));
+      const varName = match[1].trim();
+      // Se for numérico, adicionar como posição
+      const numValue = parseInt(varName, 10);
+      if (!isNaN(numValue)) {
+        positions.push(numValue);
+      }
+      names.push(varName);
     }
     
     if (type === 'HEADER') {
-      result.header.count = positions.length;
+      result.header.count = names.length;
       result.header.positions = positions;
+      result.header.names = names;
     } else if (type === 'BODY') {
-      result.body.count = positions.length;
+      result.body.count = names.length;
       result.body.positions = positions;
+      result.body.names = names;
     }
     
     // Botões com URLs dinâmicas
@@ -146,12 +158,17 @@ export function extractTemplateVariables(components: unknown): {
       for (const btn of comp.buttons) {
         const btnUrl = btn.url || '';
         let btnMatch;
-        const btnRegex = /\{\{(\d+)\}\}/g;
+        const btnRegex = /\{\{([^}]+)\}\}/g;
         while ((btnMatch = btnRegex.exec(btnUrl)) !== null) {
-          result.button.positions.push(parseInt(btnMatch[1], 10));
+          const varName = btnMatch[1].trim();
+          const numValue = parseInt(varName, 10);
+          if (!isNaN(numValue)) {
+            result.button.positions.push(numValue);
+          }
+          result.button.names.push(varName);
         }
       }
-      result.button.count = result.button.positions.length;
+      result.button.count = result.button.names.length;
     }
   }
   
@@ -161,8 +178,8 @@ export function extractTemplateVariables(components: unknown): {
 
 /**
  * Gera mapeamentos padrão para os parâmetros do template.
- * - Primeiro parâmetro do body: primeiro nome do contato
- * - Outros: variáveis a serem preenchidas
+ * - Variáveis com nome 'nome', 'name', 'cliente' → primeiro nome do contato
+ * - Outras variáveis → mapeadas por nome ou índice
  */
 export function generateDefaultMappings(
   components: unknown,
@@ -171,58 +188,65 @@ export function generateDefaultMappings(
   const variables = extractTemplateVariables(components);
   const mappings: ParamMapping[] = [];
   
+  // Nomes de variáveis que devem ser mapeadas para o nome do contato
+  const nameVariablePatterns = ['nome', 'name', 'primeiro_nome', 'first_name', 'cliente'];
+  
   // Mapeamentos para BODY
-  variables.body.positions.forEach((position, idx) => {
+  variables.body.names.forEach((varName, idx) => {
     const schemaVar = variablesSchema?.body?.[idx];
+    const isNameVariable = nameVariablePatterns.includes(varName.toLowerCase());
+    const position = variables.body.positions[idx] || (idx + 1);
     
-    if (idx === 0) {
-      // Primeiro parâmetro: primeiro nome por padrão
+    if (isNameVariable || idx === 0) {
+      // Variável de nome → primeiro nome do contato
       mappings.push({
         paramIndex: position,
         component: 'body',
         source: 'contact_field',
         sourceKey: 'first_name',
         fallback: 'Olá',
-        label: schemaVar?.label || `Variável ${position}`,
+        label: schemaVar?.label || varName || `Variável ${position}`,
       });
     } else {
-      // Outros: variável de campanha
+      // Outras variáveis → variável de campanha
       mappings.push({
         paramIndex: position,
         component: 'body',
         source: 'campaign_variable',
-        sourceKey: schemaVar?.key || `var_${position}`,
+        sourceKey: schemaVar?.key || varName || `var_${position}`,
         fallback: schemaVar?.fallback || '',
-        label: schemaVar?.label || `Variável ${position}`,
+        label: schemaVar?.label || varName || `Variável ${position}`,
       });
     }
   });
   
   // Mapeamentos para HEADER
-  variables.header.positions.forEach((position, idx) => {
+  variables.header.names.forEach((varName, idx) => {
     const schemaVar = variablesSchema?.header?.[idx];
+    const position = variables.header.positions[idx] || (idx + 1);
     
     mappings.push({
       paramIndex: position,
       component: 'header',
       source: 'campaign_variable',
-      sourceKey: schemaVar?.key || `header_${position}`,
+      sourceKey: schemaVar?.key || varName || `header_${position}`,
       fallback: schemaVar?.fallback || '',
-      label: schemaVar?.label || `Header ${position}`,
+      label: schemaVar?.label || varName || `Header ${position}`,
     });
   });
   
   // Mapeamentos para BUTTON
-  variables.button.positions.forEach((position, idx) => {
+  variables.button.names.forEach((varName, idx) => {
     const schemaVar = variablesSchema?.button?.[idx];
+    const position = variables.button.positions[idx] || (idx + 1);
     
     mappings.push({
       paramIndex: position,
       component: 'button',
       source: 'campaign_variable',
-      sourceKey: schemaVar?.key || `button_${position}`,
+      sourceKey: schemaVar?.key || varName || `button_${position}`,
       fallback: schemaVar?.fallback || '',
-      label: schemaVar?.label || `Botão ${position}`,
+      label: schemaVar?.label || varName || `Botão ${position}`,
     });
   });
   

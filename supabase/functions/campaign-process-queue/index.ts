@@ -241,13 +241,17 @@ function extractFirstName(fullName: string | null | undefined): string | null {
 }
 
 /**
- * Conta variáveis {{N}} nos components do template.
+ * Conta variáveis nos components do template.
+ * Suporta AMBOS os formatos:
+ * - {{N}} (numérico): {{1}}, {{2}}, {{3}}
+ * - {{nome}} (nomeado): {{nome}}, {{bairro}}, {{data}}
+ * 
  * Retorna contagem por component type.
  */
 function countTemplateVariablesFromComponents(
   components: unknown
-): { header: number; body: number; button: number; total: number } {
-  const counts = { header: 0, body: 0, button: 0, total: 0 };
+): { header: number; body: number; button: number; total: number; names: string[] } {
+  const counts = { header: 0, body: 0, button: 0, total: 0, names: [] as string[] };
   
   if (!Array.isArray(components)) return counts;
   
@@ -258,9 +262,20 @@ function countTemplateVariablesFromComponents(
     const type = String(c.type || '').toUpperCase();
     const text = String(c.text || '');
     
-    // Contar placeholders {{N}}
-    const matches = text.match(/\{\{(\d+)\}\}/g);
+    // Contar placeholders - AMBOS formatos: {{N}} ou {{nome}}
+    // Regex: {{ seguido de qualquer coisa exceto }} }}
+    const matches = text.match(/\{\{([^}]+)\}\}/g);
     const count = matches ? matches.length : 0;
+    
+    // Extrair nomes das variáveis
+    if (matches) {
+      matches.forEach(m => {
+        const name = m.replace(/\{\{|\}\}/g, '').trim();
+        if (name && !counts.names.includes(name)) {
+          counts.names.push(name);
+        }
+      });
+    }
     
     if (type === 'HEADER') {
       counts.header = count;
@@ -269,13 +284,22 @@ function countTemplateVariablesFromComponents(
     } else if (type === 'BUTTONS' && Array.isArray(c.buttons)) {
       for (const btn of c.buttons) {
         const btnUrl = String(btn.url || '');
-        const btnMatches = btnUrl.match(/\{\{(\d+)\}\}/g);
+        const btnMatches = btnUrl.match(/\{\{([^}]+)\}\}/g);
         counts.button += btnMatches ? btnMatches.length : 0;
+        if (btnMatches) {
+          btnMatches.forEach(m => {
+            const name = m.replace(/\{\{|\}\}/g, '').trim();
+            if (name && !counts.names.includes(name)) {
+              counts.names.push(name);
+            }
+          });
+        }
       }
     }
   }
   
   counts.total = counts.header + counts.body + counts.button;
+  console.log(`[TemplateParams] Detected variables: ${counts.names.join(', ') || 'none'}`);
   return counts;
 }
 
@@ -297,7 +321,7 @@ function buildTemplateVariables(
   // 1. Contar variáveis esperadas do template real
   const counts = countTemplateVariablesFromComponents(templateComponents);
   
-  console.log(`[TemplateParams] Expected counts: header=${counts.header}, body=${counts.body}, button=${counts.button}`);
+  console.log(`[TemplateParams] Expected counts: header=${counts.header}, body=${counts.body}, button=${counts.button}, names=[${counts.names.join(',')}]`);
   
   // Se não há variáveis esperadas, retornar vazio (template sem variáveis)
   if (counts.total === 0) {
@@ -313,7 +337,10 @@ function buildTemplateVariables(
     ...recipientVars,
   };
   
-  // 3. Construir BODY variables (mais comum)
+  // 3. Mapear nomes de variáveis comuns para valores de contato
+  // Detectar se alguma variável é "nome", "name", etc
+  const nameVariableNames = ['nome', 'name', 'primeiro_nome', 'first_name', 'cliente'];
+  const hasNameVariable = counts.names.some(n => nameVariableNames.includes(n.toLowerCase()));
   if (counts.body > 0) {
     const bodyVars: TemplateVariable[] = [];
     const schemaBody = variablesSchema?.body || [];
