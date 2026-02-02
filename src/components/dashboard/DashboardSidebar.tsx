@@ -35,6 +35,7 @@ interface SidebarContentProps {
   isAppAdmin: boolean;
   tenantRole: TenantRole;
   isTenantAdmin: boolean;
+  canOperate: boolean;
   tenantName: string | null;
   isSuperAdmin: boolean;
   userProfile: { full_name: string | null; email: string; avatar_url: string | null } | null;
@@ -55,9 +56,10 @@ function RoleBadge({ role, isSuperAdmin }: { role: TenantRole; isSuperAdmin: boo
 
   if (!role) return null;
 
-  const config = {
+  const config: Record<string, { label: string; className: string }> = {
     owner: { label: "Proprietário", className: "bg-amber-500/10 text-amber-600" },
     admin: { label: "Admin", className: "bg-blue-500/10 text-blue-600" },
+    manager: { label: "Gerente", className: "bg-purple-500/10 text-purple-600" },
     agent: { label: "Agente", className: "bg-green-500/10 text-green-600" },
   };
 
@@ -74,7 +76,8 @@ function RoleBadge({ role, isSuperAdmin }: { role: TenantRole; isSuperAdmin: boo
 function SidebarContent({ 
   isAppAdmin, 
   tenantRole, 
-  isTenantAdmin, 
+  isTenantAdmin,
+  canOperate, 
   tenantName, 
   isSuperAdmin, 
   userProfile, 
@@ -83,8 +86,10 @@ function SidebarContent({
   showCampaignPanel,
   onToggleCampaignPanel 
 }: SidebarContentProps) {
-  // Super admin sees everything
-  const showAdminItems = isSuperAdmin || isTenantAdmin;
+  // Operational items: visible to managers too
+  const showOperationalItems = isSuperAdmin || canOperate;
+  // Admin-only items: audit logs, system admin
+  const showAdminOnlyItems = isSuperAdmin || isTenantAdmin;
   const showSystemAdmin = isSuperAdmin || isAppAdmin;
   const runningCampaigns = activeCampaigns.filter(c => c.status === "running");
 
@@ -146,8 +151,8 @@ function SidebarContent({
                 </NavLink>
               </li>
 
-              {/* Templates - Admin only */}
-              {showAdminItems && (
+              {/* Templates - Operators (owner, admin, manager) */}
+              {showOperationalItems && (
                 <li>
                   <NavLink
                     to="/dashboard/templates"
@@ -172,8 +177,8 @@ function SidebarContent({
                 </NavLink>
               </li>
 
-              {/* Campaigns - Admin only */}
-              {showAdminItems && (
+              {/* Campaigns - Operators */}
+              {showOperationalItems && (
                 <li>
                   <Collapsible open={showCampaignPanel} onOpenChange={onToggleCampaignPanel}>
                     <div className="flex items-center">
@@ -208,8 +213,8 @@ function SidebarContent({
                 </li>
               )}
 
-              {/* Channels - Admin only */}
-              {showAdminItems && (
+              {/* Channels - Operators */}
+              {showOperationalItems && (
                 <li>
                   <NavLink
                     to="/dashboard/channels"
@@ -222,8 +227,8 @@ function SidebarContent({
                 </li>
               )}
 
-              {/* Settings - Admin only */}
-              {showAdminItems && (
+              {/* Settings - Operators */}
+              {showOperationalItems && (
                 <li>
                   <NavLink
                     to="/dashboard/settings"
@@ -236,8 +241,8 @@ function SidebarContent({
                 </li>
               )}
 
-              {/* Audit Logs - Admin only */}
-              {showAdminItems && (
+              {/* Audit Logs - Admin only (owner/admin) */}
+              {showAdminOnlyItems && (
                 <li>
                   <NavLink
                     to="/dashboard/audit-logs"
@@ -318,7 +323,7 @@ export function DashboardSidebar() {
   const [showCampaignPanel, setShowCampaignPanel] = useState(false);
   const navigate = useNavigate();
   const { isAdmin: isAppAdmin } = useUserRole();
-  const { role: tenantRole, isAdmin: isTenantAdmin, tenantName, isSuperAdmin } = useTenantRole();
+  const { role: tenantRole, isAdmin: isTenantAdmin, canOperate, tenantName, isSuperAdmin } = useTenantRole();
   const { activeCampaigns } = useActiveCampaigns();
   const [userProfile, setUserProfile] = useState<{ full_name: string | null; email: string; avatar_url: string | null } | null>(null);
 
@@ -354,6 +359,7 @@ export function DashboardSidebar() {
     isAppAdmin,
     tenantRole,
     isTenantAdmin,
+    canOperate,
     tenantName: tenantName || "",
     isSuperAdmin,
     userProfile,

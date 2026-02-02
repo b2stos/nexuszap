@@ -140,14 +140,14 @@ const App = () => (
                 <Route path="/precos" element={<Pricing />} />
                 <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                 <Route path="/dashboard/inbox" element={<ProtectedRoute><Inbox /></ProtectedRoute>} />
-                <Route path="/dashboard/templates" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Templates /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/templates" element={<ProtectedRoute><RequireRole requireOperator redirectTo="/dashboard"><Templates /></RequireRole></ProtectedRoute>} />
                 <Route path="/dashboard/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
-                <Route path="/dashboard/campaigns" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Campaigns /></RequireRole></ProtectedRoute>} />
-                <Route path="/dashboard/campaigns/new" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><NewCampaign /></RequireRole></ProtectedRoute>} />
-                <Route path="/dashboard/campaigns/:id" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><CampaignDetail /></RequireRole></ProtectedRoute>} />
-                <Route path="/dashboard/channels" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Channels /></RequireRole></ProtectedRoute>} />
-                <Route path="/dashboard/settings" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><Settings /></RequireRole></ProtectedRoute>} />
-                <Route path="/dashboard/audit-logs" element={<ProtectedRoute><AuditLogs /></ProtectedRoute>} />
+                <Route path="/dashboard/campaigns" element={<ProtectedRoute><RequireRole requireOperator redirectTo="/dashboard"><Campaigns /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/campaigns/new" element={<ProtectedRoute><RequireRole requireOperator redirectTo="/dashboard"><NewCampaign /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/campaigns/:id" element={<ProtectedRoute><RequireRole requireOperator redirectTo="/dashboard"><CampaignDetail /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/channels" element={<ProtectedRoute><RequireRole requireOperator redirectTo="/dashboard"><Channels /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/settings" element={<ProtectedRoute><RequireRole requireOperator redirectTo="/dashboard"><Settings /></RequireRole></ProtectedRoute>} />
+                <Route path="/dashboard/audit-logs" element={<ProtectedRoute><RequireRole requireAdmin redirectTo="/dashboard"><AuditLogs /></RequireRole></ProtectedRoute>} />
                 <Route path="/dashboard/validation-test" element={<ProtectedRoute><ValidationTest /></ProtectedRoute>} />
                 <Route path="/dashboard/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
                 <Route path="/dashboard/admin" element={<ProtectedRoute><AdminRoute><Admin /></AdminRoute></ProtectedRoute>} />

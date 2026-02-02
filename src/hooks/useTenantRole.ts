@@ -13,7 +13,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isSuperAdminEmail } from "@/utils/superAdmin";
 
-export type TenantRole = "owner" | "admin" | "agent" | null;
+export type TenantRole = "owner" | "admin" | "manager" | "agent" | null;
 
 interface TenantContext {
   tenantId: string | null;
@@ -27,7 +27,9 @@ interface TenantContext {
 interface UseTenantRoleReturn extends TenantContext {
   isOwner: boolean;
   isAdmin: boolean;
+  isManager: boolean;
   isAgent: boolean;
+  canOperate: boolean;
   canManageTemplates: boolean;
   canManageCampaigns: boolean;
   canManageChannels: boolean;
@@ -163,14 +165,18 @@ export function useTenantRole(): UseTenantRoleReturn {
   // Role checks - super admin always has full access
   const isOwner = isSuperAdmin || context.role === "owner";
   const isAdmin = isSuperAdmin || context.role === "owner" || context.role === "admin";
+  const isManager = context.role === "manager";
   const isAgent = !isSuperAdmin && context.role === "agent";
 
-  // Permission checks - super admin has all permissions
-  const canManageTemplates = isSuperAdmin || isAdmin;
-  const canManageCampaigns = isSuperAdmin || isAdmin;
-  const canManageChannels = isSuperAdmin || isAdmin;
-  const canViewSettings = isSuperAdmin || isAdmin;
-  const canViewAuditLogs = isSuperAdmin || isAdmin;
+  // Operational access: owner, admin, OR manager (not agent)
+  const canOperate = isSuperAdmin || isOwner || isAdmin || isManager;
+
+  // Permission checks - operational roles can manage most things
+  const canManageTemplates = canOperate;
+  const canManageCampaigns = canOperate;
+  const canManageChannels = canOperate;
+  const canViewSettings = canOperate;
+  const canViewAuditLogs = isSuperAdmin || isAdmin; // Only admin+ can view audit logs
   const canSendMessages = true; // All roles can send messages
   const canManageContacts = true; // All roles can manage contacts
 
@@ -178,7 +184,9 @@ export function useTenantRole(): UseTenantRoleReturn {
     ...context,
     isOwner,
     isAdmin,
+    isManager,
     isAgent,
+    canOperate,
     canManageTemplates,
     canManageCampaigns,
     canManageChannels,
