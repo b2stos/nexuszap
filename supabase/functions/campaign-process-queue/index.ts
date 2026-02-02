@@ -191,48 +191,233 @@ function calculateBackoff(attempt: number): number {
   return Math.floor(exponentialDelay + jitter);
 }
 
-/**
- * Constrói variáveis do template no formato esperado pelo provider
- */
+// ============================================
+// TEMPLATE PARAMS UTILITIES (INLINE)
+// Resolve erro 132000 garantindo N params = N esperados
+// ============================================
+
 interface SchemaVariable {
   type?: string;
   key?: string;
   label?: string;
+  fallback?: string;
 }
 
+interface TemplateComponentData {
+  type?: string;
+  text?: string;
+  buttons?: Array<{ type?: string; url?: string; text?: string }>;
+}
+
+/**
+ * Normaliza um valor de parâmetro.
+ * null/undefined → null, string → trim, vazio → null
+ */
+function normalizeParam(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  const stringValue = String(value).trim();
+  return stringValue.length > 0 ? stringValue : null;
+}
+
+/**
+ * Extrai o primeiro nome de um nome completo.
+ * "Bruno Bastos" → "Bruno"
+ */
+function extractFirstName(fullName: string | null | undefined): string | null {
+  const normalized = normalizeParam(fullName);
+  if (!normalized) return null;
+  
+  const parts = normalized.split(/\s+/);
+  const firstName = parts[0];
+  
+  if (firstName && firstName.length > 0) {
+    return firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * Conta variáveis {{N}} nos components do template.
+ * Retorna contagem por component type.
+ */
+function countTemplateVariablesFromComponents(
+  components: unknown
+): { header: number; body: number; button: number; total: number } {
+  const counts = { header: 0, body: 0, button: 0, total: 0 };
+  
+  if (!Array.isArray(components)) return counts;
+  
+  for (const comp of components) {
+    if (typeof comp !== 'object' || comp === null) continue;
+    
+    const c = comp as TemplateComponentData;
+    const type = String(c.type || '').toUpperCase();
+    const text = String(c.text || '');
+    
+    // Contar placeholders {{N}}
+    const matches = text.match(/\{\{(\d+)\}\}/g);
+    const count = matches ? matches.length : 0;
+    
+    if (type === 'HEADER') {
+      counts.header = count;
+    } else if (type === 'BODY') {
+      counts.body = count;
+    } else if (type === 'BUTTONS' && Array.isArray(c.buttons)) {
+      for (const btn of c.buttons) {
+        const btnUrl = String(btn.url || '');
+        const btnMatches = btnUrl.match(/\{\{(\d+)\}\}/g);
+        counts.button += btnMatches ? btnMatches.length : 0;
+      }
+    }
+  }
+  
+  counts.total = counts.header + counts.body + counts.button;
+  return counts;
+}
+
+/**
+ * Constrói variáveis do template no formato esperado pelo provider.
+ * GARANTIA: Sempre envia exatamente N params quando N são esperados.
+ * 
+ * Lógica de fallback:
+ * - Param 1 do body: primeiro nome do contato, fallback "Olá"
+ * - Outros params: valor do schema/variáveis, fallback string vazia
+ */
 function buildTemplateVariables(
+  templateComponents: unknown,
   variablesSchema: Record<string, SchemaVariable[]> | null,
   recipientVars: Record<string, string> | null,
   campaignVars: Record<string, string> | null,
   contactName: string | null
 ): Record<string, TemplateVariable[]> {
-  if (!variablesSchema) return {};
+  // 1. Contar variáveis esperadas do template real
+  const counts = countTemplateVariablesFromComponents(templateComponents);
+  
+  console.log(`[TemplateParams] Expected counts: header=${counts.header}, body=${counts.body}, button=${counts.button}`);
+  
+  // Se não há variáveis esperadas, retornar vazio (template sem variáveis)
+  if (counts.total === 0) {
+    console.log(`[TemplateParams] Template has no variables - sending empty`);
+    return {};
+  }
   
   const result: Record<string, TemplateVariable[]> = {};
   
-  // Merge variables (recipient takes precedence)
+  // 2. Merge de variáveis (recipient tem prioridade sobre campaign)
   const mergedVars: Record<string, string> = {
     ...campaignVars,
     ...recipientVars,
-    nome: contactName || recipientVars?.nome || campaignVars?.nome || '',
-    name: contactName || recipientVars?.name || campaignVars?.name || '',
-    var_1: contactName || recipientVars?.var_1 || campaignVars?.var_1 || '',
   };
   
-  // Build body variables
-  if (Array.isArray(variablesSchema.body)) {
-    result.body = variablesSchema.body.map((v, idx) => ({
-      type: (v.type || 'text') as TemplateVariable['type'],
-      value: mergedVars[v.key || ''] || mergedVars[`var_${idx + 1}`] || mergedVars[`${idx + 1}`] || contactName || '',
-    }));
+  // 3. Construir BODY variables (mais comum)
+  if (counts.body > 0) {
+    const bodyVars: TemplateVariable[] = [];
+    const schemaBody = variablesSchema?.body || [];
+    
+    for (let i = 0; i < counts.body; i++) {
+      const schemaVar = schemaBody[i];
+      let value: string | null = null;
+      
+      // Tentativas em ordem de prioridade:
+      // 1. Variável específica do recipient
+      // 2. Variável específica da campanha
+      // 3. Variável pelo índice (var_1, var_2, etc)
+      // 4. Para param 1: primeiro nome do contato
+      // 5. Fallback do schema
+      // 6. Fallback padrão
+      
+      const keyFromSchema = schemaVar?.key;
+      
+      if (keyFromSchema && mergedVars[keyFromSchema]) {
+        value = normalizeParam(mergedVars[keyFromSchema]);
+      }
+      
+      if (!value) {
+        value = normalizeParam(mergedVars[`var_${i + 1}`]);
+      }
+      
+      if (!value) {
+        value = normalizeParam(mergedVars[`${i + 1}`]);
+      }
+      
+      // Para o PRIMEIRO parâmetro, usar nome do contato
+      if (!value && i === 0) {
+        value = extractFirstName(contactName);
+        if (value) {
+          console.log(`[TemplateParams] Param 1: using first name "${value}"`);
+        }
+      }
+      
+      // Fallback do schema
+      if (!value && schemaVar?.fallback) {
+        value = normalizeParam(schemaVar.fallback);
+        console.log(`[TemplateParams] Param ${i + 1}: using schema fallback "${value}"`);
+      }
+      
+      // Fallback final
+      if (!value) {
+        value = i === 0 ? 'Olá' : '';
+        console.log(`[TemplateParams] Param ${i + 1}: using default fallback "${value}"`);
+      }
+      
+      bodyVars.push({
+        type: (schemaVar?.type || 'text') as TemplateVariable['type'],
+        value: value,
+      });
+    }
+    
+    result.body = bodyVars;
+    console.log(`[TemplateParams] Built ${bodyVars.length} body params:`, bodyVars.map(v => v.value));
   }
   
-  // Build header variables
-  if (Array.isArray(variablesSchema.header)) {
-    result.header = variablesSchema.header.map((v) => ({
-      type: (v.type || 'text') as TemplateVariable['type'],
-      value: mergedVars[v.key || ''] || '',
-    }));
+  // 4. Construir HEADER variables
+  if (counts.header > 0) {
+    const headerVars: TemplateVariable[] = [];
+    const schemaHeader = variablesSchema?.header || [];
+    
+    for (let i = 0; i < counts.header; i++) {
+      const schemaVar = schemaHeader[i];
+      let value: string | null = null;
+      
+      const keyFromSchema = schemaVar?.key;
+      if (keyFromSchema && mergedVars[keyFromSchema]) {
+        value = normalizeParam(mergedVars[keyFromSchema]);
+      }
+      
+      if (!value) {
+        value = normalizeParam(mergedVars[`header_${i + 1}`]);
+      }
+      
+      if (!value && schemaVar?.fallback) {
+        value = normalizeParam(schemaVar.fallback);
+      }
+      
+      if (!value) {
+        value = '';
+      }
+      
+      headerVars.push({
+        type: (schemaVar?.type || 'text') as TemplateVariable['type'],
+        value: value,
+      });
+    }
+    
+    result.header = headerVars;
+    console.log(`[TemplateParams] Built ${headerVars.length} header params:`, headerVars.map(v => v.value));
+  }
+  
+  // 5. Log de validação final
+  const actualBody = result.body?.length || 0;
+  const actualHeader = result.header?.length || 0;
+  
+  if (actualBody !== counts.body || actualHeader !== counts.header) {
+    console.error(`[TemplateParams] ⚠️ COUNT MISMATCH! Expected: body=${counts.body}, header=${counts.header} | Got: body=${actualBody}, header=${actualHeader}`);
+  } else {
+    console.log(`[TemplateParams] ✅ Params validated: body=${actualBody}, header=${actualHeader}`);
   }
   
   return result;
@@ -649,8 +834,9 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
       // Gerar correlation_id único para esta mensagem
       const correlationId = crypto.randomUUID();
       
-      // Build template variables
+      // Build template variables - NOVA ASSINATURA com components
       const templateVars = buildTemplateVariables(
+        campaign.template.components, // Template components para contar variáveis
         campaign.template.variables_schema as Record<string, SchemaVariable[]> | null,
         recipient.variables,
         campaign.template_variables,
