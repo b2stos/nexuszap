@@ -52,7 +52,7 @@ export function ContactsTable() {
 
   const handleDelete = async (id: string) => {
     const { error } = await supabase
-      .from("contacts")
+      .from("mt_contacts")
       .delete()
       .eq("id", id);
 
@@ -76,7 +76,7 @@ export function ContactsTable() {
     
     setIsDeleting(true);
     const { error } = await supabase
-      .from("contacts")
+      .from("mt_contacts")
       .delete()
       .neq("id", "00000000-0000-0000-0000-000000000000"); // Deletes all rows
 
