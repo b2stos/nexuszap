@@ -1,95 +1,40 @@
 
-# Correção: Menu Lateral Incompleto para Administradores
 
-## Problema Identificado
+## Diagnóstico: Domínio nexuszap.online não abre
 
-O usuário **Vinicius de Luca** fez login mas **não está associado ao tenant** na tabela `tenant_users`. Por isso:
+### Problema identificado
 
-| Estado Atual | Resultado |
-|--------------|-----------|
-| `tenant_users.role` = `null` | `canOperate = false` |
-| Sem role atribuída | Menu limitado: Dashboard, Inbox, Contatos |
+O domínio `nexuszap.online` não está respondendo. Não consegui acessar nem `nexuszap.online`, nem `www.nexuszap.online`, nem mesmo `nexuszap.lovable.app`.
 
-O sistema está funcionando corretamente - o problema é que **novos usuários que fazem login não são automaticamente adicionados ao tenant**.
+### Causas prováveis
 
-## Solução em 2 Partes
+1. **Projeto não publicado (ou precisa de re-publicação)**: O frontend precisa ser publicado clicando no botão "Publish" / "Update" no canto superior direito do editor. Mudanças de backend (Edge Functions, migrations) são deployadas automaticamente, mas o **frontend não**.
 
-### Parte 1: Corrigir Usuário Atual (Manual Imediato)
+2. **DNS do domínio custom**: Segundo a memória do projeto, o domínio `nexuszap.online` está configurado no IONOS com A records apontando para `185.158.133.1`. Possíveis problemas:
+   - Os registros DNS podem ter sido alterados ou expirado
+   - O registro TXT `_lovable` pode não estar mais válido
+   - O domínio `www.nexuszap.online` pode não ter sido adicionado como entrada separada no Lovable
 
-Preciso adicionar Vinicius ao tenant com a role `admin`:
+3. **SSL/Certificado**: Se o DNS mudou, o certificado SSL pode ter falhado na renovação.
 
-```sql
-INSERT INTO tenant_users (user_id, tenant_id, role, is_active)
-VALUES (
-  'ff862a0f-b3bc-4bce-a336-2a65080a68c6',  -- Vinicius
-  'a41b6943-af92-4894-9c59-bf8d9f42fe3e',  -- Empresa Principal
-  'admin',
-  true
-);
-```
+### Ações recomendadas
 
-### Parte 2: Auto-Atribuição para Novos Usuários
+1. **Publicar o projeto**: Clique no botão **Publish** no canto superior direito do editor e depois em **Update** para garantir que o frontend está deployado.
 
-Criar um trigger que automaticamente associa novos usuários ao tenant com role `manager`:
+2. **Verificar status do domínio**: Vá em **Settings → Domains** no projeto Lovable e verifique o status do domínio `nexuszap.online`. Os possíveis status são:
+   - **Active** = tudo ok
+   - **Offline** = DNS mudou e não aponta mais para o Lovable
+   - **Failed** = certificado SSL não foi provisionado
+   - **Verifying** = aguardando propagação DNS
 
-```sql
--- Função que associa automaticamente novos usuários
-CREATE OR REPLACE FUNCTION auto_assign_tenant()
-RETURNS TRIGGER AS $$
-BEGIN
-  -- Buscar o primeiro tenant ativo
-  INSERT INTO tenant_users (user_id, tenant_id, role, is_active)
-  SELECT 
-    NEW.id,
-    t.id,
-    'manager',  -- Role operacional padrão
-    true
-  FROM tenants t
-  WHERE t.status = 'active'
-  LIMIT 1;
-  
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+3. **Verificar DNS no IONOS**: Confirme que os registros estão corretos:
+   - `A` record para `@` → `185.158.133.1`
+   - `A` record para `www` → `185.158.133.1`
+   - `TXT` record `_lovable` com o valor de verificação
 
--- Trigger ao criar novo profile
-CREATE TRIGGER on_profile_created_assign_tenant
-  AFTER INSERT ON profiles
-  FOR EACH ROW
-  EXECUTE FUNCTION auto_assign_tenant();
-```
+4. **Adicionar `www` no Lovable**: Se apenas `nexuszap.online` foi adicionado, adicione também `www.nexuszap.online` em Settings → Domains.
 
-## Hierarquia de Acesso Atualizada
+### Sem alterações de código necessárias
 
-| Role | Menu Lateral | Sistema |
-|------|--------------|---------|
-| **Agent** | Dashboard, Inbox, Contatos | - |
-| **Manager** | + Templates, Campanhas, Canais, Configurações | - |
-| **Admin** | + Logs de Auditoria | - |
-| **Owner** | Tudo | - |
-| **Super Admin** (você) | Tudo | Administração, Diagnóstico API |
+Este é um problema de infraestrutura/configuração, não de código. A resolução envolve verificar o painel de domínios e republicar o projeto.
 
-## Seção "Sistema" - Apenas Super Admin
-
-A lógica atual já está correta:
-
-```typescript
-// DashboardSidebar.tsx - linha 93
-const showSystemAdmin = isSuperAdmin || isAppAdmin;
-```
-
-Onde `isSuperAdmin` é verificado pelo email `bbastosb2@gmail.com` configurado em `src/utils/superAdmin.ts`.
-
-## Arquivos a Modificar
-
-| Arquivo | Alteração |
-|---------|-----------|
-| **Migração SQL** | Adicionar Vinicius ao tenant + criar trigger de auto-atribuição |
-
-## Benefício
-
-Após esta correção:
-1. **Vinicius** verá o menu completo imediatamente
-2. **Novos usuários** que fizerem login serão automaticamente atribuídos como `manager`
-3. Você pode promover/rebaixar via Configurações → Equipe
-4. A seção "Sistema" continuará aparecendo **apenas para você**
