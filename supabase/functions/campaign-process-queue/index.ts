@@ -18,7 +18,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { notificameProvider } from '../_shared/providers/notificame.ts';
-import { Channel, ChannelProviderConfig, TemplateVariable } from '../_shared/providers/types.ts';
+import { Channel, ChannelProviderConfig, TemplateMedia, TemplateVariable } from '../_shared/providers/types.ts';
 import { isChannelBlockingError, isPaymentError, PAYMENT_ERROR_CODES } from '../_shared/providers/errors.ts';
 import { resolveTemplateContract, type TemplateContract } from '../_shared/templateParams.ts';
 
@@ -235,10 +235,10 @@ function extractFirstName(fullName: string | null | undefined): string | null {
  * Uses TemplateContract (from resolveTemplateContract) as the SINGLE SOURCE OF TRUTH.
  * 
  * Rules:
- * - 0 dynamic params → return empty (NO components sent to Meta)
+ * - 0 dynamic text params → return empty vars
  * - N body params → build exactly N body params
  * - Dynamic buttons only → build with correct index + sub_type
- * - Static media headers → skip (Meta has the file)
+ * - Header media is resolved separately (required for media templates)
  * - Never inject params when template doesn't expect them
  */
 function buildTemplateVariablesFromContract(
@@ -358,6 +358,126 @@ function buildTemplateVariablesFromContract(
   return { variables: result, buttonMeta };
 }
 
+interface MediaHeaderResolution {
+  media: TemplateMedia | null;
+  source: 'not_required' | 'campaign_var' | 'recipient_var' | 'template_example';
+  raw?: string;
+  error?: string;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function resolveTemplateMediaHeader(
+  contract: TemplateContract,
+  components: unknown,
+  campaignVars: Record<string, string> | null,
+  recipientVars: Record<string, string> | null
+): MediaHeaderResolution {
+  const headerType = contract.header.type;
+  if (!['image', 'video', 'document'].includes(headerType)) {
+    return { media: null, source: 'not_required' };
+  }
+
+  const mediaType = headerType as 'image' | 'video' | 'document';
+
+  const fromValue = (raw: string, source: MediaHeaderResolution['source']): MediaHeaderResolution => {
+    const normalized = normalizeParam(raw);
+    if (!normalized) {
+      return { media: null, source, raw, error: `Header ${mediaType}: referência vazia` };
+    }
+
+    if (isHttpUrl(normalized)) {
+      return {
+        media: { type: mediaType, url: normalized },
+        source,
+        raw: normalized,
+      };
+    }
+
+    return {
+      media: { type: mediaType, media_id: normalized },
+      source,
+      raw: normalized,
+    };
+  };
+
+  const varKeys = [
+    'header_media_url',
+    'header_url',
+    'media_url',
+    `${mediaType}_url`,
+    `header_${mediaType}_url`,
+    'header_media_id',
+    'media_id',
+    `${mediaType}_id`,
+    `header_${mediaType}_id`,
+  ];
+
+  for (const key of varKeys) {
+    const recipientValue = normalizeParam(recipientVars?.[key]);
+    if (recipientValue) return fromValue(recipientValue, 'recipient_var');
+
+    const campaignValue = normalizeParam(campaignVars?.[key]);
+    if (campaignValue) return fromValue(campaignValue, 'campaign_var');
+  }
+
+  if (Array.isArray(components)) {
+    const headerComponent = components.find((component) => {
+      if (typeof component !== 'object' || component === null) return false;
+      const comp = component as Record<string, unknown>;
+      return String(comp.type || '').toUpperCase() === 'HEADER'
+        && String(comp.format || '').toUpperCase() === mediaType.toUpperCase();
+    }) as Record<string, unknown> | undefined;
+
+    if (headerComponent) {
+      const example = (typeof headerComponent.example === 'object' && headerComponent.example !== null)
+        ? headerComponent.example as Record<string, unknown>
+        : null;
+
+      const rawCandidates: unknown[] = [
+        example?.header_handle,
+        example?.header_url,
+        example?.header_link,
+        example?.url,
+        headerComponent.header_handle,
+        headerComponent.header_url,
+      ];
+
+      const flattened = rawCandidates.flatMap((value) => {
+        if (Array.isArray(value)) {
+          return value
+            .map((item) => (typeof item === 'string' ? normalizeParam(item) : null))
+            .filter((item): item is string => Boolean(item));
+        }
+
+        if (typeof value === 'string') {
+          const normalized = normalizeParam(value);
+          return normalized ? [normalized] : [];
+        }
+
+        return [];
+      });
+
+      if (flattened.length > 0) {
+        return fromValue(flattened[0], 'template_example');
+      }
+    }
+  }
+
+  return {
+    media: null,
+    source: 'template_example',
+    error: `Template possui HEADER ${mediaType.toUpperCase()} mas não foi encontrada mídia válida (campaign_vars, recipient_vars ou example.header_handle)`
+  };
+}
+
 /**
  * Pre-send validation: checks built payload against template contract.
  * Returns { valid, errors } — if invalid, message should NOT be sent.
@@ -365,17 +485,18 @@ function buildTemplateVariablesFromContract(
 function validatePayloadAgainstContract(
   contract: TemplateContract,
   variables: Record<string, TemplateVariable[]>,
-  buttonMeta: Array<{ index: number; sub_type: string }>
+  buttonMeta: Array<{ index: number; sub_type: string }>,
+  mediaResolution: MediaHeaderResolution
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  // Rule 1: If contract expects 0 params, variables must be empty
+  // Rule 1: If contract expects 0 dynamic text params, variables must be empty
   if (contract.totalDynamicParams === 0) {
     const hasBody = variables.body && variables.body.length > 0;
     const hasHeader = variables.header && variables.header.length > 0;
     const hasButton = variables.button && variables.button.length > 0;
     if (hasBody || hasHeader || hasButton) {
-      errors.push(`Template expects 0 params but payload has: body=${variables.body?.length || 0}, header=${variables.header?.length || 0}, button=${variables.button?.length || 0}`);
+      errors.push(`Template expects 0 dynamic params but payload has: body=${variables.body?.length || 0}, header=${variables.header?.length || 0}, button=${variables.button?.length || 0}`);
     }
   }
 
@@ -391,7 +512,22 @@ function validatePayloadAgainstContract(
 
   // Rule 4: Header consistency
   if (contract.header.isMediaStatic && variables.header && variables.header.length > 0) {
-    errors.push(`Header: static media header should not have text params`);
+    errors.push('Header: static media header should not have text params');
+  }
+
+  const requiresMediaHeader = ['image', 'video', 'document'].includes(contract.header.type);
+  if (requiresMediaHeader) {
+    if (mediaResolution.error) {
+      errors.push(mediaResolution.error);
+    }
+
+    if (!mediaResolution.media) {
+      errors.push(`Header: template requires ${contract.header.type.toUpperCase()} media but payload has no media reference`);
+    } else if (!mediaResolution.media.url && !mediaResolution.media.media_id) {
+      errors.push('Header: media reference is incomplete (missing url and media_id)');
+    }
+  } else if (mediaResolution.media) {
+    errors.push(`Header: template is ${contract.header.type} but media was provided`);
   }
 
   // Rule 5: Button index must match template
@@ -820,7 +956,7 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
       
       // ── CONTRACT-DRIVEN: Resolve template contract once per batch (reuse) ──
       const contract = resolveTemplateContract(campaign.template.components);
-      
+
       // Build template variables using contract (NOT heuristic)
       const { variables: templateVars, buttonMeta } = buildTemplateVariablesFromContract(
         contract,
@@ -829,12 +965,20 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         campaign.template_variables,
         recipient.contact.name
       );
-      
+
+      // Resolve required media header (IMAGE/VIDEO/DOCUMENT)
+      const mediaResolution = resolveTemplateMediaHeader(
+        contract,
+        campaign.template.components,
+        campaign.template_variables,
+        recipient.variables
+      );
+
       // ── PRE-SEND VALIDATION ──
-      const validation = validatePayloadAgainstContract(contract, templateVars, buttonMeta);
+      const validation = validatePayloadAgainstContract(contract, templateVars, buttonMeta, mediaResolution);
       if (!validation.valid) {
         console.error(`[Contract] ❌ PAYLOAD MISMATCH PRECHECK for ${phone}:`, validation.errors);
-        
+
         // Mark as failed with clear internal error
         await supabase
           .from('campaign_recipients')
@@ -849,17 +993,18 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
             provider_error_message: validation.errors.join('; '),
           })
           .eq('id', recipient.id);
-        
+
         stats.failed++;
         stats.errors.push({ phone, error: validation.errors.join('; '), code: 'TEMPLATE_PAYLOAD_MISMATCH_PRECHECK' });
         stats.processed++;
         continue;
       }
-      
+
       console.log(`[Campaign] Correlation ID: ${correlationId}`);
-      console.log(`[Campaign] Contract: total=${contract.totalDynamicParams}, header=${contract.header.type}, body=${contract.body.dynamicParams}, dynBtns=${contract.buttons.filter(b=>b.hasDynamicParam).length}`);
+      console.log(`[Campaign] Contract: total=${contract.totalDynamicParams}, header=${contract.header.type}, body=${contract.body.dynamicParams}, dynBtns=${contract.buttons.filter(b => b.hasDynamicParam).length}`);
       console.log(`[Campaign] Template variables:`, JSON.stringify(templateVars));
-      
+      console.log(`[Campaign] Media header: required=${['image', 'video', 'document'].includes(contract.header.type)}, source=${mediaResolution.source}, hasMedia=${Boolean(mediaResolution.media)}, ref=${mediaResolution.raw || 'none'}`);
+
       // ====================================================
       // USAR PROVIDER COMPARTILHADO (mesmo formato do inbox)
       // ====================================================
@@ -869,8 +1014,8 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         template_name: campaign.template.name,
         language: campaign.template.language || 'pt_BR',
         variables: templateVars,
+        media: mediaResolution.media || undefined,
         buttonMeta: buttonMeta.length > 0 ? buttonMeta : undefined,
-        // No media for static headers — Meta already has the file
       });
       
       console.log(`[Campaign] Provider result:`, JSON.stringify({
