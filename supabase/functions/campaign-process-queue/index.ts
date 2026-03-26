@@ -818,23 +818,47 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
       // Gerar correlation_id único para esta mensagem
       const correlationId = crypto.randomUUID();
       
-      // Build template variables - NOVA ASSINATURA com components
-      const templateVars = buildTemplateVariables(
-        campaign.template.components, // Template components para contar variáveis
+      // ── CONTRACT-DRIVEN: Resolve template contract once per batch (reuse) ──
+      const contract = resolveTemplateContract(campaign.template.components);
+      
+      // Build template variables using contract (NOT heuristic)
+      const { variables: templateVars, buttonMeta } = buildTemplateVariablesFromContract(
+        contract,
         campaign.template.variables_schema as Record<string, SchemaVariable[]> | null,
         recipient.variables,
         campaign.template_variables,
         recipient.contact.name
       );
       
-      // Detectar header de mídia (IMAGE/VIDEO/DOCUMENT)
-      const mediaHeader = detectMediaHeader(campaign.template.components);
+      // ── PRE-SEND VALIDATION ──
+      const validation = validatePayloadAgainstContract(contract, templateVars, buttonMeta);
+      if (!validation.valid) {
+        console.error(`[Contract] ❌ PAYLOAD MISMATCH PRECHECK for ${phone}:`, validation.errors);
+        
+        // Mark as failed with clear internal error
+        await supabase
+          .from('campaign_recipients')
+          .update({
+            status: 'failed',
+            attempts: recipient.attempts + 1,
+            last_error: `[TEMPLATE_PAYLOAD_MISMATCH_PRECHECK] ${validation.errors.join('; ')}`,
+            next_retry_at: null,
+            updated_at: new Date().toISOString(),
+            correlation_id: correlationId,
+            provider_error_code: 'TEMPLATE_PAYLOAD_MISMATCH_PRECHECK',
+            provider_error_message: validation.errors.join('; '),
+          })
+          .eq('id', recipient.id);
+        
+        stats.failed++;
+        stats.errors.push({ phone, error: validation.errors.join('; '), code: 'TEMPLATE_PAYLOAD_MISMATCH_PRECHECK' });
+        stats.processed++;
+        continue;
+      }
       
       console.log(`[Campaign] Correlation ID: ${correlationId}`);
+      console.log(`[Campaign] Contract: total=${contract.totalDynamicParams}, header=${contract.header.type}, body=${contract.body.dynamicParams}, dynBtns=${contract.buttons.filter(b=>b.hasDynamicParam).length}`);
       console.log(`[Campaign] Template variables:`, JSON.stringify(templateVars));
-      if (mediaHeader) {
-        console.log(`[Campaign] Media header: ${mediaHeader.type} → ${mediaHeader.url.substring(0, 60)}...`);
-      }
       
       // ====================================================
       // USAR PROVIDER COMPARTILHADO (mesmo formato do inbox)
@@ -845,13 +869,8 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         template_name: campaign.template.name,
         language: campaign.template.language || 'pt_BR',
         variables: templateVars,
-        // Passar mídia do header se o template tiver IMAGE/VIDEO/DOCUMENT
-        ...(mediaHeader && {
-          media: {
-            type: mediaHeader.type,
-            url: mediaHeader.url,
-          },
-        }),
+        buttonMeta: buttonMeta.length > 0 ? buttonMeta : undefined,
+        // No media for static headers — Meta already has the file
       });
       
       console.log(`[Campaign] Provider result:`, JSON.stringify({
