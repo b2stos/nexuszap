@@ -369,21 +369,6 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
         allProcessedContacts = [...allProcessedContacts, ...batchContacts];
 
         // Prepare contacts for insertion
-        // Fetch tenant_id for current user
-        const { data: tenantUser, error: tenantError } = await supabase
-          .from("tenant_users")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .eq("is_active", true)
-          .limit(1)
-          .single();
-
-        if (tenantError || !tenantUser) {
-          throw new Error("Não foi possível identificar seu workspace. Contate o suporte.");
-        }
-
-        const tenantId = tenantUser.tenant_id;
-
         const validContactsForInsert = batchContacts
           .filter(c => c.status === "valid" || (c.status === "pending" && useAI))
           .filter(c => (c.formatted || c.phone))
