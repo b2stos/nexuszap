@@ -628,20 +628,36 @@ Deno.serve(async (req) => {
 
     console.log(`[campaign-start][${traceId}] Campaign status updated to running`);
 
-    // 7. Trigger first batch processing (fire and forget)
+    // 7. Trigger first batch processing (await response to detect errors)
     console.log(`[campaign-start][${traceId}] Triggering first batch processing...`);
     try {
       const processUrl = `${supabaseUrl}/functions/v1/campaign-process-queue`;
-      fetch(processUrl, {
+      const processResponse = await fetch(processUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${supabaseServiceKey}`,
         },
         body: JSON.stringify({ campaign_id, speed }),
-      }).catch(e => console.warn(`[campaign-start][${traceId}] Process trigger failed:`, e));
+      });
+      
+      if (!processResponse.ok) {
+        const processError = await processResponse.text().catch(() => 'Unknown error');
+        console.error(`[campaign-start][${traceId}] Process queue returned ${processResponse.status}: ${processError}`);
+        await saveAttemptLog(campaign_id, campaign.tenant_id, campaign.channel_id, templateName, 'trigger_process_queue', {
+          errorCode: 'PROCESS_QUEUE_ERROR',
+          errorMessage: `campaign-process-queue retornou ${processResponse.status}: ${processError}`,
+        });
+        // Don't fail the whole request - campaign is already enqueued
+      } else {
+        console.log(`[campaign-start][${traceId}] Process queue triggered successfully`);
+      }
     } catch (e) {
       console.warn(`[campaign-start][${traceId}] Failed to trigger processing:`, e);
+      await saveAttemptLog(campaign_id, campaign.tenant_id, campaign.channel_id, templateName, 'trigger_process_queue', {
+        errorCode: 'TRIGGER_FAILED',
+        errorMessage: e instanceof Error ? e.message : String(e),
+      });
     }
 
     // Success response
