@@ -177,6 +177,8 @@ function TemplatesContent() {
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
   const [revalidatingId, setRevalidatingId] = useState<string | null>(null);
   const [templateToDelete, setTemplateToDelete] = useState<Template | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   
   // Delete mutation
   const deleteTemplate = useDeleteTemplate();
