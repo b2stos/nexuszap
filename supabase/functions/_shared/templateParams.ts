@@ -144,8 +144,9 @@ export function countTemplateVariables(components: unknown): {
     
     if (type === 'HEADER') {
       counts.header = count;
-      // Detectar headers de mídia (IMAGE/VIDEO/DOCUMENT)
-      if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
+      // Detectar headers de mídia DINÂMICOS (com {{1}})
+      // Headers de mídia ESTÁTICOS não precisam de componente — a Meta já tem o arquivo
+      if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format) && count > 0) {
         counts.hasMediaHeader = true;
         counts.mediaHeaderFormat = format.toLowerCase();
       }
