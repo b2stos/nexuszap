@@ -956,7 +956,7 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
       
       // ── CONTRACT-DRIVEN: Resolve template contract once per batch (reuse) ──
       const contract = resolveTemplateContract(campaign.template.components);
-      
+
       // Build template variables using contract (NOT heuristic)
       const { variables: templateVars, buttonMeta } = buildTemplateVariablesFromContract(
         contract,
@@ -965,12 +965,20 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         campaign.template_variables,
         recipient.contact.name
       );
-      
+
+      // Resolve required media header (IMAGE/VIDEO/DOCUMENT)
+      const mediaResolution = resolveTemplateMediaHeader(
+        contract,
+        campaign.template.components,
+        campaign.template_variables,
+        recipient.variables
+      );
+
       // ── PRE-SEND VALIDATION ──
-      const validation = validatePayloadAgainstContract(contract, templateVars, buttonMeta);
+      const validation = validatePayloadAgainstContract(contract, templateVars, buttonMeta, mediaResolution);
       if (!validation.valid) {
         console.error(`[Contract] ❌ PAYLOAD MISMATCH PRECHECK for ${phone}:`, validation.errors);
-        
+
         // Mark as failed with clear internal error
         await supabase
           .from('campaign_recipients')
@@ -985,17 +993,18 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
             provider_error_message: validation.errors.join('; '),
           })
           .eq('id', recipient.id);
-        
+
         stats.failed++;
         stats.errors.push({ phone, error: validation.errors.join('; '), code: 'TEMPLATE_PAYLOAD_MISMATCH_PRECHECK' });
         stats.processed++;
         continue;
       }
-      
+
       console.log(`[Campaign] Correlation ID: ${correlationId}`);
-      console.log(`[Campaign] Contract: total=${contract.totalDynamicParams}, header=${contract.header.type}, body=${contract.body.dynamicParams}, dynBtns=${contract.buttons.filter(b=>b.hasDynamicParam).length}`);
+      console.log(`[Campaign] Contract: total=${contract.totalDynamicParams}, header=${contract.header.type}, body=${contract.body.dynamicParams}, dynBtns=${contract.buttons.filter(b => b.hasDynamicParam).length}`);
       console.log(`[Campaign] Template variables:`, JSON.stringify(templateVars));
-      
+      console.log(`[Campaign] Media header: required=${['image', 'video', 'document'].includes(contract.header.type)}, source=${mediaResolution.source}, hasMedia=${Boolean(mediaResolution.media)}, ref=${mediaResolution.raw || 'none'}`);
+
       // ====================================================
       // USAR PROVIDER COMPARTILHADO (mesmo formato do inbox)
       // ====================================================
@@ -1005,8 +1014,8 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         template_name: campaign.template.name,
         language: campaign.template.language || 'pt_BR',
         variables: templateVars,
+        media: mediaResolution.media || undefined,
         buttonMeta: buttonMeta.length > 0 ? buttonMeta : undefined,
-        // No media for static headers — Meta already has the file
       });
       
       console.log(`[Campaign] Provider result:`, JSON.stringify({
