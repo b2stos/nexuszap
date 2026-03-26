@@ -1,40 +1,59 @@
 
 
-## Diagnóstico: Domínio nexuszap.online não abre
+# Correção: Importação de Contatos + Erro de Disparo de Campanha
 
-### Problema identificado
+## Problema 1: Importação de Contatos Não Funciona
 
-O domínio `nexuszap.online` não está respondendo. Não consegui acessar nem `nexuszap.online`, nem `www.nexuszap.online`, nem mesmo `nexuszap.lovable.app`.
+**Causa raiz**: O componente `ImportContactsWithPreview.tsx` insere contatos na tabela **legada** `contacts` (linha 392), mas o sistema multi-tenant lê da tabela `mt_contacts`. Os contatos são salvos no lugar errado e nunca aparecem.
 
-### Causas prováveis
+Além disso, a IA de importação está detectando **valores** como nomes de colunas em vez dos cabeçalhos reais (log mostra: `nameColumn: "adao rodrigues"`, `phoneColumn: "11947441699"` — esses são dados, não cabeçalhos).
 
-1. **Projeto não publicado (ou precisa de re-publicação)**: O frontend precisa ser publicado clicando no botão "Publish" / "Update" no canto superior direito do editor. Mudanças de backend (Edge Functions, migrations) são deployadas automaticamente, mas o **frontend não**.
+## Problema 2: Erro no Disparo de Campanha
 
-2. **DNS do domínio custom**: Segundo a memória do projeto, o domínio `nexuszap.online` está configurado no IONOS com A records apontando para `185.158.133.1`. Possíveis problemas:
-   - Os registros DNS podem ter sido alterados ou expirado
-   - O registro TXT `_lovable` pode não estar mais válido
-   - O domínio `www.nexuszap.online` pode não ter sido adicionado como entrada separada no Lovable
+**Causa raiz provável**: A Edge Function `campaign-process-queue` é chamada via `fetch` fire-and-forget (linha 635 do `campaign-start`). Se houver timeout ou falha silenciosa, o usuário vê erro genérico de "webhook". Preciso verificar se o erro está na validação do canal ou no processamento.
 
-3. **SSL/Certificado**: Se o DNS mudou, o certificado SSL pode ter falhado na renovação.
+---
 
-### Ações recomendadas
+## Plano de Correção
 
-1. **Publicar o projeto**: Clique no botão **Publish** no canto superior direito do editor e depois em **Update** para garantir que o frontend está deployado.
+### 1. Corrigir ImportContactsWithPreview — inserir em `mt_contacts`
 
-2. **Verificar status do domínio**: Vá em **Settings → Domains** no projeto Lovable e verifique o status do domínio `nexuszap.online`. Os possíveis status são:
-   - **Active** = tudo ok
-   - **Offline** = DNS mudou e não aponta mais para o Lovable
-   - **Failed** = certificado SSL não foi provisionado
-   - **Verifying** = aguardando propagação DNS
+**Arquivo**: `src/components/contacts/ImportContactsWithPreview.tsx`
 
-3. **Verificar DNS no IONOS**: Confirme que os registros estão corretos:
-   - `A` record para `@` → `185.158.133.1`
-   - `A` record para `www` → `185.158.133.1`
-   - `TXT` record `_lovable` com o valor de verificação
+- Linha 357-398: Trocar a inserção de `contacts` (legada) para `mt_contacts` (multi-tenant)
+- Buscar `tenant_id` do usuário logado via `tenant_users`
+- Usar campos corretos: `tenant_id`, `phone`, `name`, `email` (sem `user_id`, sem `import_batch_id`)
+- Upsert com `onConflict: 'tenant_id,phone'`
+- Invalidar queries corretas: `['mt-contacts']` e `['mt-contacts-count']`
 
-4. **Adicionar `www` no Lovable**: Se apenas `nexuszap.online` foi adicionado, adicione também `www.nexuszap.online` em Settings → Domains.
+### 2. Corrigir Edge Function smart-contact-import — detecção de colunas
 
-### Sem alterações de código necessárias
+**Arquivo**: `supabase/functions/smart-contact-import/index.ts`
 
-Este é um problema de infraestrutura/configuração, não de código. A resolução envolve verificar o painel de domínios e republicar o projeto.
+- A IA está confundindo valores com cabeçalhos quando a planilha não tem cabeçalhos claros ou quando os dados da primeira linha são passados como "headers"
+- Melhorar o prompt para diferenciar explicitamente "primeira linha = cabeçalhos" vs "primeira linha = dados"
+- Adicionar fallback: se a IA retornar um valor que parece ser um telefone como `phoneColumn`, detectar isso e tentar usar índices numéricos ou heurísticas locais
+
+### 3. Verificar e corrigir fluxo de disparo de campanha
+
+**Arquivo**: `supabase/functions/campaign-start/index.ts`
+
+- Adicionar logs mais detalhados no ponto de trigger do `campaign-process-queue`
+- Garantir que erros do `campaign-process-queue` sejam propagados adequadamente
+- Verificar se o CORS headers inclui todos os headers necessários (adicionar headers Supabase client)
+
+### 4. Atualizar CORS em ambas Edge Functions
+
+Os CORS headers atuais não incluem os headers do Supabase client SDK (`x-supabase-client-platform`, etc.), o que pode causar falhas de preflight.
+
+---
+
+## Arquivos a Modificar
+
+| Arquivo | Alteração |
+|---------|-----------|
+| `src/components/contacts/ImportContactsWithPreview.tsx` | Inserir em `mt_contacts` com `tenant_id` |
+| `supabase/functions/smart-contact-import/index.ts` | Melhorar detecção de colunas pela IA |
+| `supabase/functions/campaign-start/index.ts` | Atualizar CORS headers |
+| `supabase/functions/campaign-process-queue/index.ts` | Atualizar CORS headers |
 
