@@ -81,6 +81,11 @@ export interface SendTemplateRequest {
   language: string;
   variables?: Record<string, TemplateVariable[]>; // keyed by component type: header, body, button
   media?: TemplateMedia;
+  /** Explicit button metadata — index and sub_type from template contract */
+  buttonMeta?: Array<{
+    index: number;
+    sub_type: 'url' | 'quick_reply' | 'phone_number';
+  }>;
 }
 
 export interface UploadMediaRequest {

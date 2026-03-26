@@ -862,8 +862,8 @@ export const notificameProvider: Provider = {
     // Build components array for template variables
     const components: Array<Record<string, unknown>> = [];
     
-    // Header with media
-    if (media) {
+    // Header with media (only when explicitly provided)
+    if (media && media.url) {
       const headerComponent: Record<string, unknown> = {
         type: 'header',
         parameters: [],
@@ -889,70 +889,101 @@ export const notificameProvider: Provider = {
         }];
       }
       
-      components.push(headerComponent);
+      // Only add if parameters were actually built
+      if ((headerComponent.parameters as unknown[]).length > 0) {
+        components.push(headerComponent);
+      }
     }
     
-    // Header variables (text)
+    // Header variables (text) — only if non-empty values
     if (variables?.header?.length) {
-      const existing = components.find(c => c.type === 'header');
-      if (existing) {
-        (existing.parameters as unknown[]).push(...variables.header.map(v => ({
-          type: 'text',
-          text: v.value,
-        })));
-      } else {
-        components.push({
-          type: 'header',
-          parameters: variables.header.map(v => ({
+      const validHeaderParams = variables.header.filter(v => v.value != null && v.value !== '');
+      if (validHeaderParams.length > 0) {
+        const existing = components.find(c => c.type === 'header');
+        if (existing) {
+          (existing.parameters as unknown[]).push(...validHeaderParams.map(v => ({
             type: 'text',
             text: v.value,
-          })),
+          })));
+        } else {
+          components.push({
+            type: 'header',
+            parameters: validHeaderParams.map(v => ({
+              type: 'text',
+              text: v.value,
+            })),
+          });
+        }
+      }
+    }
+    
+    // Body variables — only if non-empty
+    if (variables?.body?.length) {
+      const bodyParams = variables.body.map(v => {
+        if (v.type === 'currency') {
+          return {
+            type: 'currency',
+            currency: {
+              code: v.currency_code,
+              amount_1000: v.amount_1000,
+              fallback_value: v.value,
+            },
+          };
+        }
+        if (v.type === 'date_time') {
+          return {
+            type: 'date_time',
+            date_time: {
+              fallback_value: v.fallback_value || v.value,
+            },
+          };
+        }
+        return { type: 'text', text: v.value };
+      });
+      
+      if (bodyParams.length > 0) {
+        components.push({
+          type: 'body',
+          parameters: bodyParams,
         });
       }
     }
     
-    // Body variables
-    if (variables?.body?.length) {
-      components.push({
-        type: 'body',
-        parameters: variables.body.map(v => {
-          if (v.type === 'currency') {
-            return {
-              type: 'currency',
-              currency: {
-                code: v.currency_code,
-                amount_1000: v.amount_1000,
-                fallback_value: v.value,
-              },
-            };
-          }
-          if (v.type === 'date_time') {
-            return {
-              type: 'date_time',
-              date_time: {
-                fallback_value: v.fallback_value || v.value,
-              },
-            };
-          }
-          return { type: 'text', text: v.value };
-        }),
-      });
+    // Button variables — CONTRACT-DRIVEN: use explicit buttonMeta when available
+    if (variables?.button?.length) {
+      if (request.buttonMeta?.length) {
+        // Use explicit metadata from template contract (index + sub_type)
+        request.buttonMeta.forEach((meta, i) => {
+          const v = variables!.button![i];
+          if (!v || v.value == null || v.value === '') return; // skip empty
+          components.push({
+            type: 'button',
+            sub_type: meta.sub_type,
+            index: meta.index,
+            parameters: [{ type: 'text', text: v.value }],
+          });
+        });
+      } else {
+        // Legacy fallback — assume URL buttons with sequential index
+        variables.button.forEach((v, index) => {
+          if (v.value == null || v.value === '') return; // skip empty
+          components.push({
+            type: 'button',
+            sub_type: 'url',
+            index,
+            parameters: [{ type: 'text', text: v.value }],
+          });
+        });
+      }
     }
     
-    // Button variables (URL buttons need special handling)
-    if (variables?.button?.length) {
-      variables.button.forEach((v, index) => {
-        components.push({
-          type: 'button',
-          sub_type: 'url',
-          index,
-          parameters: [{ type: 'text', text: v.value }],
-        });
-      });
-    }
+    // CRITICAL: Filter out any components with empty parameters arrays
+    const validComponents = components.filter(c => {
+      const params = c.parameters as unknown[];
+      return params && params.length > 0;
+    });
     
     // NotificaMe Hub Native Format (VERIFIED from official n8n node)
-    // Uses "contents" array with template object inside
     const payload = {
       from: subscriptionId,
       to: normalizePhoneNumber(to),
@@ -962,11 +993,19 @@ export const notificameProvider: Provider = {
           template: {
             name: template_name,
             language: { code: language },
-            ...(components.length > 0 && { components }),
+            ...(validComponents.length > 0 && { components: validComponents }),
           },
         },
       ],
     };
+    
+    // AUDIT LOG: Template contract vs payload diff
+    console.log(`[NotificaMe] 📋 TEMPLATE AUDIT:
+  name=${template_name}, language=${language}
+  hasMedia=${!!media}, mediaUrl=${media?.url?.substring(0, 40) || 'none'}
+  validComponents=${validComponents.length}
+  componentTypes=[${validComponents.map(c => c.type).join(',')}]
+  buttonMeta=${JSON.stringify(request.buttonMeta || 'none')}`);
     
     // CORRECT ENDPOINT: /channels/whatsapp/messages (same as text messages)
     const endpoint = '/channels/whatsapp/messages';
