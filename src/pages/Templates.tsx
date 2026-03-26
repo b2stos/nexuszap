@@ -71,6 +71,7 @@ import { ImportTemplatesDialog } from '@/components/templates/ImportTemplatesDia
 import { TemplatesErrorBoundary } from '@/components/templates/TemplatesErrorBoundary';
 import { MetaAccountInfo } from '@/components/templates/MetaAccountInfo';
 import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 import { User } from '@supabase/supabase-js';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -392,6 +393,17 @@ function TemplatesContent() {
               <RefreshCw className={`h-4 w-4 mr-2 ${templatesLoading ? 'animate-spin' : ''}`} />
               Atualizar
             </Button>
+            {metaTemplates.length > 0 && (
+              <Button 
+                variant="outline" 
+                onClick={() => setShowBulkDeleteConfirm(true)}
+                size="sm"
+                className="text-destructive hover:text-destructive border-destructive/30 hover:bg-destructive/10"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Limpar Todos
+              </Button>
+            )}
             <Button 
               variant="default" 
               onClick={handleImport}
