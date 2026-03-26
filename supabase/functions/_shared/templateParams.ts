@@ -121,8 +121,10 @@ export function countTemplateVariables(components: unknown): {
   body: number;
   button: number;
   total: number;
+  hasMediaHeader: boolean;
+  mediaHeaderFormat: string | null;
 } {
-  const counts = { header: 0, body: 0, button: 0, total: 0 };
+  const counts = { header: 0, body: 0, button: 0, total: 0, hasMediaHeader: false, mediaHeaderFormat: null as string | null };
   
   if (!Array.isArray(components)) {
     return counts;
@@ -133,6 +135,7 @@ export function countTemplateVariables(components: unknown): {
     
     const comp = component as Record<string, unknown>;
     const type = String(comp.type || '').toUpperCase();
+    const format = String(comp.format || '').toUpperCase();
     const text = String(comp.text || '');
     
     // Contar placeholders {{N}} no texto
@@ -141,6 +144,11 @@ export function countTemplateVariables(components: unknown): {
     
     if (type === 'HEADER') {
       counts.header = count;
+      // Detectar headers de mídia (IMAGE/VIDEO/DOCUMENT)
+      if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
+        counts.hasMediaHeader = true;
+        counts.mediaHeaderFormat = format.toLowerCase();
+      }
     } else if (type === 'BODY') {
       counts.body = count;
     } else if (type === 'BUTTONS') {
