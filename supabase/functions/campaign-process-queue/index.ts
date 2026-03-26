@@ -20,6 +20,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { notificameProvider } from '../_shared/providers/notificame.ts';
 import { Channel, ChannelProviderConfig, TemplateVariable } from '../_shared/providers/types.ts';
 import { isChannelBlockingError, isPaymentError, PAYMENT_ERROR_CODES } from '../_shared/providers/errors.ts';
+import { resolveTemplateContract, type TemplateContract } from '../_shared/templateParams.ts';
 
 // ============================================
 // CORS HEADERS
@@ -192,8 +193,7 @@ function calculateBackoff(attempt: number): number {
 }
 
 // ============================================
-// TEMPLATE PARAMS UTILITIES (INLINE)
-// Resolve erro 132000 garantindo N params = N esperados
+// TEMPLATE PARAMS — CONTRACT-DRIVEN BUILDER
 // ============================================
 
 interface SchemaVariable {
@@ -203,64 +203,8 @@ interface SchemaVariable {
   fallback?: string;
 }
 
-interface TemplateComponentData {
-  type?: string;
-  format?: string;
-  text?: string;
-  buttons?: Array<{ type?: string; url?: string; text?: string }>;
-  example?: { header_handle?: string[]; header_url?: string[] };
-}
-
-interface MediaHeaderInfo {
-  type: 'image' | 'video' | 'document';
-  url: string;
-}
-
-/**
- * Detecta se o template tem um HEADER de mídia DINÂMICO (com variável {{1}}).
- * 
- * IMPORTANTE: Headers de mídia ESTÁTICOS (sem {{1}}) NÃO devem enviar componente
- * header — a Meta já possui a imagem armazenada. Enviar uma URL expirada do
- * example.header_handle causa erro 131053 "Media upload error".
- * 
- * Só retorna info de mídia quando o header tem variável dinâmica E uma URL válida
- * foi fornecida externamente (via campaign media upload).
- */
-function detectMediaHeader(components: unknown): MediaHeaderInfo | null {
-  if (!Array.isArray(components)) return null;
-  
-  for (const comp of components) {
-    if (typeof comp !== 'object' || comp === null) continue;
-    
-    const c = comp as TemplateComponentData;
-    const type = String(c.type || '').toUpperCase();
-    const format = String(c.format || '').toUpperCase();
-    
-    if (type === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
-      // Verificar se o header tem variável dinâmica {{1}}
-      const headerText = c.text || '';
-      const hasDynamicVar = /\{\{\d+\}\}/.test(headerText);
-      
-      if (!hasDynamicVar) {
-        // Header de mídia ESTÁTICO — a Meta já tem a imagem/vídeo/documento.
-        // NÃO enviar componente header, caso contrário erro 131053.
-        console.log(`[TemplateParams] Static media header (${format}) — skipping (Meta has it stored)`);
-        return null;
-      }
-      
-      // Header DINÂMICO — precisa de URL externa (não usar example URLs que expiram)
-      console.log(`[TemplateParams] Dynamic media header detected (${format}) — needs external URL`);
-      // Retornar sem URL — o chamador deve fornecer a URL via campaign media
-      return null;
-    }
-  }
-  
-  return null;
-}
-
 /**
  * Normaliza um valor de parâmetro.
- * null/undefined → null, string → trim, vazio → null
  */
 function normalizeParam(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -274,15 +218,12 @@ function normalizeParam(value: unknown): string | null {
 
 /**
  * Extrai o primeiro nome de um nome completo.
- * "Bruno Bastos" → "Bruno"
  */
 function extractFirstName(fullName: string | null | undefined): string | null {
   const normalized = normalizeParam(fullName);
   if (!normalized) return null;
-  
   const parts = normalized.split(/\s+/);
   const firstName = parts[0];
-  
   if (firstName && firstName.length > 0) {
     return firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
   }
@@ -290,213 +231,180 @@ function extractFirstName(fullName: string | null | undefined): string | null {
 }
 
 /**
- * Conta variáveis nos components do template.
- * Suporta AMBOS os formatos:
- * - {{N}} (numérico): {{1}}, {{2}}, {{3}}
- * - {{nome}} (nomeado): {{nome}}, {{bairro}}, {{data}}
+ * CONTRACT-DRIVEN template variable builder.
+ * Uses TemplateContract (from resolveTemplateContract) as the SINGLE SOURCE OF TRUTH.
  * 
- * Retorna contagem por component type.
+ * Rules:
+ * - 0 dynamic params → return empty (NO components sent to Meta)
+ * - N body params → build exactly N body params
+ * - Dynamic buttons only → build with correct index + sub_type
+ * - Static media headers → skip (Meta has the file)
+ * - Never inject params when template doesn't expect them
  */
-function countTemplateVariablesFromComponents(
-  components: unknown
-): { header: number; body: number; button: number; total: number; names: string[] } {
-  const counts = { header: 0, body: 0, button: 0, total: 0, names: [] as string[] };
-  
-  if (!Array.isArray(components)) return counts;
-  
-  for (const comp of components) {
-    if (typeof comp !== 'object' || comp === null) continue;
-    
-    const c = comp as TemplateComponentData;
-    const type = String(c.type || '').toUpperCase();
-    const text = String(c.text || '');
-    
-    // Contar placeholders - AMBOS formatos: {{N}} ou {{nome}}
-    // Regex: {{ seguido de qualquer coisa exceto }} }}
-    const matches = text.match(/\{\{([^}]+)\}\}/g);
-    const count = matches ? matches.length : 0;
-    
-    // Extrair nomes das variáveis
-    if (matches) {
-      matches.forEach(m => {
-        const name = m.replace(/\{\{|\}\}/g, '').trim();
-        if (name && !counts.names.includes(name)) {
-          counts.names.push(name);
-        }
-      });
-    }
-    
-    if (type === 'HEADER') {
-      counts.header = count;
-    } else if (type === 'BODY') {
-      counts.body = count;
-    } else if (type === 'BUTTONS' && Array.isArray(c.buttons)) {
-      for (const btn of c.buttons) {
-        const btnUrl = String(btn.url || '');
-        const btnMatches = btnUrl.match(/\{\{([^}]+)\}\}/g);
-        counts.button += btnMatches ? btnMatches.length : 0;
-        if (btnMatches) {
-          btnMatches.forEach(m => {
-            const name = m.replace(/\{\{|\}\}/g, '').trim();
-            if (name && !counts.names.includes(name)) {
-              counts.names.push(name);
-            }
-          });
-        }
-      }
-    }
-  }
-  
-  counts.total = counts.header + counts.body + counts.button;
-  console.log(`[TemplateParams] Detected variables: ${counts.names.join(', ') || 'none'}`);
-  return counts;
-}
-
-/**
- * Constrói variáveis do template no formato esperado pelo provider.
- * GARANTIA: Sempre envia exatamente N params quando N são esperados.
- * 
- * Lógica de fallback:
- * - Param 1 do body: primeiro nome do contato, fallback "Olá"
- * - Outros params: valor do schema/variáveis, fallback string vazia
- */
-function buildTemplateVariables(
-  templateComponents: unknown,
+function buildTemplateVariablesFromContract(
+  contract: TemplateContract,
   variablesSchema: Record<string, SchemaVariable[]> | null,
   recipientVars: Record<string, string> | null,
   campaignVars: Record<string, string> | null,
   contactName: string | null
-): Record<string, TemplateVariable[]> {
-  // 1. Contar variáveis esperadas do template real
-  const counts = countTemplateVariablesFromComponents(templateComponents);
-  
-  console.log(`[TemplateParams] Expected counts: header=${counts.header}, body=${counts.body}, button=${counts.button}, names=[${counts.names.join(',')}]`);
-  
-  // Se não há variáveis esperadas, retornar vazio (template sem variáveis)
-  if (counts.total === 0) {
-    console.log(`[TemplateParams] Template has no variables - sending empty`);
-    return {};
+): {
+  variables: Record<string, TemplateVariable[]>;
+  buttonMeta: Array<{ index: number; sub_type: 'url' | 'quick_reply' | 'phone_number' }>;
+} {
+  // CONTRACT CHECK: If template has 0 dynamic params, send clean payload
+  if (contract.totalDynamicParams === 0) {
+    console.log('[Contract] ✅ Template has 0 dynamic params — clean payload (no components)');
+    return { variables: {}, buttonMeta: [] };
   }
-  
+
+  console.log(`[Contract] Building params: body=${contract.body.dynamicParams}, header=${contract.header.dynamicParams}, buttons=${contract.buttons.filter(b => b.hasDynamicParam).length}`);
+
   const result: Record<string, TemplateVariable[]> = {};
-  
-  // 2. Merge de variáveis (recipient tem prioridade sobre campaign)
-  const mergedVars: Record<string, string> = {
-    ...campaignVars,
-    ...recipientVars,
-  };
-  
-  // 3. Mapear nomes de variáveis comuns para valores de contato
-  // Detectar se alguma variável é "nome", "name", etc
-  const nameVariableNames = ['nome', 'name', 'primeiro_nome', 'first_name', 'cliente'];
-  const hasNameVariable = counts.names.some(n => nameVariableNames.includes(n.toLowerCase()));
-  if (counts.body > 0) {
+  const buttonMeta: Array<{ index: number; sub_type: 'url' | 'quick_reply' | 'phone_number' }> = [];
+  const mergedVars: Record<string, string> = { ...campaignVars, ...recipientVars };
+  const namePatterns = ['nome', 'name', 'primeiro_nome', 'first_name', 'cliente'];
+
+  // ── BODY params ──
+  if (contract.body.dynamicParams > 0) {
     const bodyVars: TemplateVariable[] = [];
     const schemaBody = variablesSchema?.body || [];
-    
-    for (let i = 0; i < counts.body; i++) {
+
+    for (let i = 0; i < contract.body.dynamicParams; i++) {
       const schemaVar = schemaBody[i];
+      const paramName = contract.body.paramNames[i] || `${i + 1}`;
       let value: string | null = null;
-      
-      // Tentativas em ordem de prioridade:
-      // 1. Variável específica do recipient
-      // 2. Variável específica da campanha
-      // 3. Variável pelo índice (var_1, var_2, etc)
-      // 4. Para param 1: primeiro nome do contato
-      // 5. Fallback do schema
-      // 6. Fallback padrão
-      
-      const keyFromSchema = schemaVar?.key;
-      
-      if (keyFromSchema && mergedVars[keyFromSchema]) {
-        value = normalizeParam(mergedVars[keyFromSchema]);
+
+      // 1. Schema key
+      if (schemaVar?.key && mergedVars[schemaVar.key]) {
+        value = normalizeParam(mergedVars[schemaVar.key]);
       }
-      
-      if (!value) {
-        value = normalizeParam(mergedVars[`var_${i + 1}`]);
+      // 2. Param name as key
+      if (!value && mergedVars[paramName]) {
+        value = normalizeParam(mergedVars[paramName]);
       }
-      
-      if (!value) {
-        value = normalizeParam(mergedVars[`${i + 1}`]);
-      }
-      
-      // Para o PRIMEIRO parâmetro, usar nome do contato
-      if (!value && i === 0) {
+      // 3. Indexed keys
+      if (!value) value = normalizeParam(mergedVars[`var_${i + 1}`]);
+      if (!value) value = normalizeParam(mergedVars[`${i + 1}`]);
+
+      // 4. First param or name-like variable → contact first name
+      const isNameVar = namePatterns.includes(paramName.toLowerCase());
+      if (!value && (i === 0 || isNameVar)) {
         value = extractFirstName(contactName);
-        if (value) {
-          console.log(`[TemplateParams] Param 1: using first name "${value}"`);
-        }
       }
-      
-      // Fallback do schema
-      if (!value && schemaVar?.fallback) {
-        value = normalizeParam(schemaVar.fallback);
-        console.log(`[TemplateParams] Param ${i + 1}: using schema fallback "${value}"`);
-      }
-      
-      // Fallback final
-      if (!value) {
-        value = i === 0 ? 'Olá' : '';
-        console.log(`[TemplateParams] Param ${i + 1}: using default fallback "${value}"`);
-      }
-      
+
+      // 5. Schema fallback
+      if (!value && schemaVar?.fallback) value = normalizeParam(schemaVar.fallback);
+      // 6. Default fallback
+      if (!value) value = i === 0 ? 'Olá' : '';
+
       bodyVars.push({
         type: (schemaVar?.type || 'text') as TemplateVariable['type'],
-        value: value,
+        value,
       });
     }
-    
     result.body = bodyVars;
-    console.log(`[TemplateParams] Built ${bodyVars.length} body params:`, bodyVars.map(v => v.value));
+    console.log(`[Contract] Body params: [${bodyVars.map(v => v.value).join(', ')}]`);
   }
-  
-  // 4. Construir HEADER variables
-  if (counts.header > 0) {
+
+  // ── HEADER params (text dynamic only) ──
+  if (contract.header.type === 'text_dynamic' && contract.header.dynamicParams > 0) {
     const headerVars: TemplateVariable[] = [];
     const schemaHeader = variablesSchema?.header || [];
-    
-    for (let i = 0; i < counts.header; i++) {
+
+    for (let i = 0; i < contract.header.dynamicParams; i++) {
       const schemaVar = schemaHeader[i];
-      let value: string | null = null;
-      
-      const keyFromSchema = schemaVar?.key;
-      if (keyFromSchema && mergedVars[keyFromSchema]) {
-        value = normalizeParam(mergedVars[keyFromSchema]);
-      }
-      
-      if (!value) {
-        value = normalizeParam(mergedVars[`header_${i + 1}`]);
-      }
-      
-      if (!value && schemaVar?.fallback) {
-        value = normalizeParam(schemaVar.fallback);
-      }
-      
-      if (!value) {
-        value = '';
-      }
-      
-      headerVars.push({
-        type: (schemaVar?.type || 'text') as TemplateVariable['type'],
-        value: value,
-      });
+      const value =
+        normalizeParam(mergedVars[schemaVar?.key || `header_${i + 1}`]) ||
+        normalizeParam(schemaVar?.fallback) ||
+        '';
+      headerVars.push({ type: 'text', value });
     }
-    
     result.header = headerVars;
-    console.log(`[TemplateParams] Built ${headerVars.length} header params:`, headerVars.map(v => v.value));
+    console.log(`[Contract] Header params: [${headerVars.map(v => v.value).join(', ')}]`);
   }
-  
-  // 5. Log de validação final
-  const actualBody = result.body?.length || 0;
-  const actualHeader = result.header?.length || 0;
-  
-  if (actualBody !== counts.body || actualHeader !== counts.header) {
-    console.error(`[TemplateParams] ⚠️ COUNT MISMATCH! Expected: body=${counts.body}, header=${counts.header} | Got: body=${actualBody}, header=${actualHeader}`);
+
+  // ── BUTTON params (only dynamic buttons) ──
+  const dynamicBtns = contract.buttons.filter(b => b.hasDynamicParam);
+  if (dynamicBtns.length > 0) {
+    const btnVars: TemplateVariable[] = [];
+    const schemaButton = variablesSchema?.button || [];
+
+    for (let i = 0; i < dynamicBtns.length; i++) {
+      const btn = dynamicBtns[i];
+      const schemaVar = schemaButton[i];
+      const value =
+        normalizeParam(mergedVars[schemaVar?.key || `button_${i + 1}`]) ||
+        normalizeParam(schemaVar?.fallback) ||
+        '';
+      btnVars.push({ type: 'text', value });
+
+      const subType = btn.type === 'URL' ? 'url'
+        : btn.type === 'QUICK_REPLY' ? 'quick_reply'
+        : 'phone_number';
+      buttonMeta.push({ index: btn.index, sub_type: subType as 'url' | 'quick_reply' | 'phone_number' });
+    }
+    result.button = btnVars;
+    console.log(`[Contract] Button params: [${btnVars.map(v => v.value).join(', ')}] meta=${JSON.stringify(buttonMeta)}`);
+  }
+
+  // ── VALIDATION LOG ──
+  const totalBuilt = (result.body?.length || 0) + (result.header?.length || 0) + (result.button?.length || 0);
+  if (totalBuilt !== contract.totalDynamicParams) {
+    console.error(`[Contract] ⚠️ COUNT MISMATCH! expected=${contract.totalDynamicParams} built=${totalBuilt}`);
   } else {
-    console.log(`[TemplateParams] ✅ Params validated: body=${actualBody}, header=${actualHeader}`);
+    console.log(`[Contract] ✅ Params validated: total=${totalBuilt}`);
   }
-  
-  return result;
+
+  return { variables: result, buttonMeta };
+}
+
+/**
+ * Pre-send validation: checks built payload against template contract.
+ * Returns { valid, errors } — if invalid, message should NOT be sent.
+ */
+function validatePayloadAgainstContract(
+  contract: TemplateContract,
+  variables: Record<string, TemplateVariable[]>,
+  buttonMeta: Array<{ index: number; sub_type: string }>
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  // Rule 1: If contract expects 0 params, variables must be empty
+  if (contract.totalDynamicParams === 0) {
+    const hasBody = variables.body && variables.body.length > 0;
+    const hasHeader = variables.header && variables.header.length > 0;
+    const hasButton = variables.button && variables.button.length > 0;
+    if (hasBody || hasHeader || hasButton) {
+      errors.push(`Template expects 0 params but payload has: body=${variables.body?.length || 0}, header=${variables.header?.length || 0}, button=${variables.button?.length || 0}`);
+    }
+  }
+
+  // Rule 2: Body count must match
+  if (contract.body.dynamicParams > 0 && (variables.body?.length || 0) !== contract.body.dynamicParams) {
+    errors.push(`Body: expected ${contract.body.dynamicParams} params, got ${variables.body?.length || 0}`);
+  }
+
+  // Rule 3: No body params when template has 0 body vars
+  if (contract.body.dynamicParams === 0 && variables.body && variables.body.length > 0) {
+    errors.push(`Body: template has 0 body vars but ${variables.body.length} params provided`);
+  }
+
+  // Rule 4: Header consistency
+  if (contract.header.isMediaStatic && variables.header && variables.header.length > 0) {
+    errors.push(`Header: static media header should not have text params`);
+  }
+
+  // Rule 5: Button index must match template
+  for (const meta of buttonMeta) {
+    const templateBtn = contract.buttons.find(b => b.index === meta.index);
+    if (!templateBtn) {
+      errors.push(`Button: index ${meta.index} not found in template`);
+    } else if (!templateBtn.hasDynamicParam) {
+      errors.push(`Button: index ${meta.index} is static but param was provided`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
 }
 
 /**
