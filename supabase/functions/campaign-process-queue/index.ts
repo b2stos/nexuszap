@@ -381,7 +381,7 @@ function resolveTemplateMediaHeader(
   recipientVars: Record<string, string> | null
 ): MediaHeaderResolution {
   const headerType = contract.header.type;
-  if (!['image', 'video', 'document'].includes(headerType)) {
+  if (!['image', 'video', 'document'].includes(headerType) || contract.header.isMediaStatic) {
     return { media: null, source: 'not_required' };
   }
 
@@ -515,7 +515,7 @@ function validatePayloadAgainstContract(
     errors.push('Header: static media header should not have text params');
   }
 
-  const requiresMediaHeader = ['image', 'video', 'document'].includes(contract.header.type);
+  const requiresMediaHeader = ['image', 'video', 'document'].includes(contract.header.type) && !contract.header.isMediaStatic;
   if (requiresMediaHeader) {
     if (mediaResolution.error) {
       errors.push(mediaResolution.error);
