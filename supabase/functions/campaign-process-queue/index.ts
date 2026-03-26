@@ -217,9 +217,14 @@ interface MediaHeaderInfo {
 }
 
 /**
- * Detecta se o template tem um HEADER de mídia (IMAGE/VIDEO/DOCUMENT).
- * Templates com header de mídia exigem que o componente header seja enviado,
- * mesmo que não haja variáveis de texto {{N}}.
+ * Detecta se o template tem um HEADER de mídia DINÂMICO (com variável {{1}}).
+ * 
+ * IMPORTANTE: Headers de mídia ESTÁTICOS (sem {{1}}) NÃO devem enviar componente
+ * header — a Meta já possui a imagem armazenada. Enviar uma URL expirada do
+ * example.header_handle causa erro 131053 "Media upload error".
+ * 
+ * Só retorna info de mídia quando o header tem variável dinâmica E uma URL válida
+ * foi fornecida externamente (via campaign media upload).
  */
 function detectMediaHeader(components: unknown): MediaHeaderInfo | null {
   if (!Array.isArray(components)) return null;
@@ -232,24 +237,21 @@ function detectMediaHeader(components: unknown): MediaHeaderInfo | null {
     const format = String(c.format || '').toUpperCase();
     
     if (type === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
-      // Extrair URL do example
-      const example = c.example;
-      let url = '';
+      // Verificar se o header tem variável dinâmica {{1}}
+      const headerText = c.text || '';
+      const hasDynamicVar = /\{\{\d+\}\}/.test(headerText);
       
-      if (example?.header_handle?.length) {
-        url = example.header_handle[0];
-      } else if (example?.header_url?.length) {
-        url = example.header_url[0];
-      }
-      
-      if (url) {
-        const mediaType = format.toLowerCase() as 'image' | 'video' | 'document';
-        console.log(`[TemplateParams] Detected media header: type=${mediaType}, url=${url.substring(0, 60)}...`);
-        return { type: mediaType, url };
-      } else {
-        console.warn(`[TemplateParams] Media header detected (${format}) but no example URL found`);
+      if (!hasDynamicVar) {
+        // Header de mídia ESTÁTICO — a Meta já tem a imagem/vídeo/documento.
+        // NÃO enviar componente header, caso contrário erro 131053.
+        console.log(`[TemplateParams] Static media header (${format}) — skipping (Meta has it stored)`);
         return null;
       }
+      
+      // Header DINÂMICO — precisa de URL externa (não usar example URLs que expiram)
+      console.log(`[TemplateParams] Dynamic media header detected (${format}) — needs external URL`);
+      // Retornar sem URL — o chamador deve fornecer a URL via campaign media
+      return null;
     }
   }
   
