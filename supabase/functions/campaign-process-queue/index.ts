@@ -18,7 +18,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { notificameProvider } from '../_shared/providers/notificame.ts';
-import { Channel, ChannelProviderConfig, TemplateVariable } from '../_shared/providers/types.ts';
+import { Channel, ChannelProviderConfig, TemplateMedia, TemplateVariable } from '../_shared/providers/types.ts';
 import { isChannelBlockingError, isPaymentError, PAYMENT_ERROR_CODES } from '../_shared/providers/errors.ts';
 import { resolveTemplateContract, type TemplateContract } from '../_shared/templateParams.ts';
 
