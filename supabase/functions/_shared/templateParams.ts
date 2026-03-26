@@ -520,3 +520,95 @@ export function generateBatchValidationReport(
     summary,
   };
 }
+
+// ============================================
+// TEMPLATE CONTRACT RESOLVER
+// ============================================
+
+/**
+ * Canonical representation of what a template expects.
+ * Used as the single source of truth for payload building & validation.
+ */
+export interface TemplateContract {
+  header: {
+    type: 'none' | 'text_static' | 'text_dynamic' | 'image' | 'video' | 'document';
+    dynamicParams: number;
+    /** true = Meta already has the file stored; do NOT send a header component */
+    isMediaStatic: boolean;
+  };
+  body: {
+    dynamicParams: number;
+    paramNames: string[]; // e.g. ['1','2'] or ['nome','bairro']
+  };
+  buttons: Array<{
+    index: number;
+    type: string; // 'URL', 'QUICK_REPLY', 'PHONE_NUMBER'
+    hasDynamicParam: boolean;
+  }>;
+  totalDynamicParams: number;
+}
+
+/**
+ * Analyzes template components and produces a canonical contract
+ * describing exactly which parameters the Meta API expects.
+ */
+export function resolveTemplateContract(components: unknown): TemplateContract {
+  const contract: TemplateContract = {
+    header: { type: 'none', dynamicParams: 0, isMediaStatic: false },
+    body: { dynamicParams: 0, paramNames: [] },
+    buttons: [],
+    totalDynamicParams: 0,
+  };
+
+  if (!Array.isArray(components)) return contract;
+
+  for (const comp of components) {
+    if (typeof comp !== 'object' || comp === null) continue;
+    const c = comp as Record<string, unknown>;
+    const type = String(c.type || '').toUpperCase();
+    const format = String(c.format || '').toUpperCase();
+    const text = String(c.text || '');
+
+    if (type === 'HEADER') {
+      if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
+        const hasVar = /\{\{\d+\}\}/.test(text);
+        contract.header.type = format.toLowerCase() as 'image' | 'video' | 'document';
+        contract.header.dynamicParams = hasVar ? 1 : 0;
+        contract.header.isMediaStatic = !hasVar;
+      } else {
+        // TEXT header (or no format = text)
+        const matches = text.match(/\{\{([^}]+)\}\}/g);
+        const count = matches ? matches.length : 0;
+        contract.header.type = count > 0 ? 'text_dynamic' : 'text_static';
+        contract.header.dynamicParams = count;
+      }
+    } else if (type === 'BODY') {
+      const matches = text.match(/\{\{([^}]+)\}\}/g);
+      contract.body.dynamicParams = matches ? matches.length : 0;
+      if (matches) {
+        contract.body.paramNames = matches.map(m => m.replace(/\{\{|\}\}/g, '').trim());
+      }
+    } else if (type === 'BUTTONS') {
+      const buttons = c.buttons as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(buttons)) {
+        buttons.forEach((btn, idx) => {
+          const btnType = String(btn.type || '').toUpperCase();
+          const btnUrl = String(btn.url || '');
+          const hasDynamic = /\{\{\d+\}\}/.test(btnUrl);
+          contract.buttons.push({
+            index: idx,
+            type: btnType,
+            hasDynamicParam: hasDynamic,
+          });
+        });
+      }
+    }
+  }
+
+  contract.totalDynamicParams =
+    contract.header.dynamicParams +
+    contract.body.dynamicParams +
+    contract.buttons.filter(b => b.hasDynamicParam).length;
+
+  return contract;
+}
