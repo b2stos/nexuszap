@@ -869,6 +869,44 @@ function TemplatesContent() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Bulk Delete Confirmation Dialog */}
+        <AlertDialog open={showBulkDeleteConfirm} onOpenChange={setShowBulkDeleteConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Limpar todos os templates?</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <p>
+                  Você está prestes a excluir <span className="font-semibold">{metaTemplates.length} template(s)</span> do Nexus Zap.
+                </p>
+                <p className="text-muted-foreground">
+                  Os templates continuarão existindo na sua conta Meta/WABA. 
+                  Após a exclusão, a sincronização será aberta automaticamente para reimportar.
+                </p>
+                <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">
+                  ⚠️ Templates vinculados a campanhas existentes não serão excluídos.
+                </p>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isBulkDeleting}>Cancelar</AlertDialogCancel>
+              <Button
+                variant="destructive"
+                onClick={handleBulkDeleteAll}
+                disabled={isBulkDeleting}
+              >
+                {isBulkDeleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Excluindo...
+                  </>
+                ) : (
+                  'Limpar e Ressincronizar'
+                )}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </DashboardLayout>
   );
