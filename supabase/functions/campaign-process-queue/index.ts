@@ -235,10 +235,10 @@ function extractFirstName(fullName: string | null | undefined): string | null {
  * Uses TemplateContract (from resolveTemplateContract) as the SINGLE SOURCE OF TRUTH.
  * 
  * Rules:
- * - 0 dynamic params → return empty (NO components sent to Meta)
+ * - 0 dynamic text params → return empty vars
  * - N body params → build exactly N body params
  * - Dynamic buttons only → build with correct index + sub_type
- * - Static media headers → skip (Meta has the file)
+ * - Header media is resolved separately (required for media templates)
  * - Never inject params when template doesn't expect them
  */
 function buildTemplateVariablesFromContract(
