@@ -279,6 +279,21 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado");
 
+      // Fetch tenant_id once before the loop
+      const { data: tenantUser, error: tenantError } = await supabase
+        .from("tenant_users")
+        .select("tenant_id")
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .limit(1)
+        .single();
+
+      if (tenantError || !tenantUser) {
+        throw new Error("Não foi possível identificar seu workspace. Contate o suporte.");
+      }
+
+      const tenantId = tenantUser.tenant_id;
+
       const totalBatches = Math.ceil(rawContactsData.length / CONTACTS_PER_BATCH);
       let totalInserted = 0;
       let totalInvalid = 0;
