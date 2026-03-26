@@ -40,48 +40,43 @@ const PAGE_SIZE = 1000; // Supabase max per request
  * Uses pagination to bypass Supabase 1000 row limit
  * This is the legacy table used by /dashboard/contacts
  */
-export function useAllMTContacts(_tenantId: string | undefined) {
+export function useAllMTContacts(tenantId: string | undefined) {
   return useQuery({
-    queryKey: ['all-contacts-for-campaign-paginated'],
+    queryKey: ['all-mt-contacts-for-campaign', tenantId],
     queryFn: async () => {
+      if (!tenantId) return [];
+
       const allContacts: CampaignContact[] = [];
       let page = 0;
       let hasMore = true;
-      
-      // Paginate through all contacts to bypass 1000 row limit
+
       while (hasMore) {
         const from = page * PAGE_SIZE;
         const to = from + PAGE_SIZE - 1;
-        
+
         const { data, error } = await supabase
-          .from('contacts')
-          .select('id, phone, name, created_at')
-          .order('created_at', { ascending: true }) // Oldest first for deterministic selection
+          .from('mt_contacts')
+          .select('id, phone, name, email, created_at')
+          .eq('tenant_id', tenantId)
+          .eq('is_blocked', false)
+          .order('created_at', { ascending: true })
           .range(from, to);
-        
+
         if (error) throw error;
-        
+
         if (data && data.length > 0) {
-          // Map to CampaignContact format (contacts table doesn't have email)
-          const mapped = data.map(c => ({
-            id: c.id,
-            phone: c.phone,
-            name: c.name,
-            email: null,
-            created_at: c.created_at,
-          })) as CampaignContact[];
-          
-          allContacts.push(...mapped);
-          hasMore = data.length === PAGE_SIZE; // If we got full page, there might be more
+          allContacts.push(...(data as CampaignContact[]));
+          hasMore = data.length === PAGE_SIZE;
           page++;
         } else {
           hasMore = false;
         }
       }
-      
+
       return allContacts;
     },
-    staleTime: 30 * 1000, // 30 seconds
+    enabled: !!tenantId,
+    staleTime: 30 * 1000,
   });
 }
 
