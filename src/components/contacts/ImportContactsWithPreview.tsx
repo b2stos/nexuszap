@@ -354,14 +354,28 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
         allProcessedContacts = [...allProcessedContacts, ...batchContacts];
 
         // Prepare contacts for insertion
+        // Fetch tenant_id for current user
+        const { data: tenantUser, error: tenantError } = await supabase
+          .from("tenant_users")
+          .select("tenant_id")
+          .eq("user_id", user.id)
+          .eq("is_active", true)
+          .limit(1)
+          .single();
+
+        if (tenantError || !tenantUser) {
+          throw new Error("Não foi possível identificar seu workspace. Contate o suporte.");
+        }
+
+        const tenantId = tenantUser.tenant_id;
+
         const validContactsForInsert = batchContacts
           .filter(c => c.status === "valid" || (c.status === "pending" && useAI))
           .filter(c => (c.formatted || c.phone))
           .map(c => ({
-            user_id: user.id,
-            name: c.name,
+            tenant_id: tenantId,
+            name: c.name || null,
             phone: c.formatted || c.phone,
-            import_batch_id: crypto.randomUUID(),
           }));
 
         // Deduplicate contacts by phone to avoid "cannot affect row a second time" error
@@ -389,9 +403,9 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
           const insertBatch = deduplicatedContacts.slice(i, i + INSERT_BATCH_SIZE);
           
           const { error } = await supabase
-            .from("contacts")
+            .from("mt_contacts")
             .upsert(insertBatch, { 
-              onConflict: 'user_id,phone',
+              onConflict: 'tenant_id,phone',
               ignoreDuplicates: false
             });
             
@@ -418,7 +432,8 @@ export function ImportContactsWithPreview({ open, onOpenChange }: ImportContacts
         }`,
       });
 
-      queryClient.invalidateQueries({ queryKey: ["contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["mt-contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["mt-contacts-count"] });
 
       setTimeout(() => {
         setFile(null);

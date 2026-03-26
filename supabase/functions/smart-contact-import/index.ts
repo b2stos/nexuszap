@@ -90,19 +90,36 @@ serve(async (req) => {
     // Pega apenas amostra para IA detectar colunas (máximo 5 linhas)
     const sampleData = rawData.slice(0, Math.min(5, rawData.length));
     
+    // Detect if first row looks like headers or data
+    const firstRow = sampleData[0];
+    const keys = Object.keys(firstRow || {});
+    
+    // Heuristic: if keys look like data values (contain digits, are long names), they're not real headers
+    const keysLookLikeHeaders = keys.some(k => {
+      const lower = k.toLowerCase().trim();
+      return ['nome', 'name', 'telefone', 'phone', 'tel', 'celular', 'contato', 'email', 'whatsapp', 'cliente', 'número', 'fone'].some(h => lower.includes(h));
+    });
+    
+    // If keys contain mostly digits or look like phone numbers, the CSV has no headers
+    const keysLookLikeData = keys.some(k => /^\d{8,}$/.test(k.replace(/\D/g, '')));
+    
+    const hasRealHeaders = keysLookLikeHeaders && !keysLookLikeData;
+    
+    console.log(`Headers detection: keys=${JSON.stringify(keys)}, looksLikeHeaders=${keysLookLikeHeaders}, looksLikeData=${keysLookLikeData}, hasRealHeaders=${hasRealHeaders}`);
+
     const systemPrompt = `Você é um assistente que analisa planilhas de contatos.
 Sua ÚNICA tarefa é identificar qual coluna contém NOMES e qual contém TELEFONES.
 
-Analise os cabeçalhos e dados de exemplo e retorne APENAS o mapeamento das colunas.
+ATENÇÃO: Os dados são passados como objetos JSON onde as CHAVES são os nomes das colunas (cabeçalhos da planilha) e os VALORES são os dados de cada linha.
+${!hasRealHeaders ? 'ATENÇÃO EXTRA: Esta planilha parece NÃO ter cabeçalhos reais. As chaves do JSON podem ser valores da primeira linha de dados. Nesse caso, identifique as colunas pelo PADRÃO dos valores (nomes de pessoas vs números de telefone) e retorne a chave que corresponde a cada tipo.' : ''}
 
-Possíveis nomes de colunas para NOME: nome, name, cliente, contato, responsável, pessoa, etc.
-Possíveis nomes de colunas para TELEFONE: telefone, phone, celular, whatsapp, tel, número, contato, fone, etc.
+Retorne APENAS as CHAVES (nomes de colunas) que contêm nomes e telefones.
 
 Retorne um JSON com APENAS esta estrutura:
 {
   "columnMapping": {
-    "nameColumn": "nome exato da coluna de nomes",
-    "phoneColumn": "nome exato da coluna de telefones"
+    "nameColumn": "chave exata do JSON que contém nomes de pessoas",
+    "phoneColumn": "chave exata do JSON que contém números de telefone"
   }
 }`;
 
@@ -172,6 +189,42 @@ Retorne APENAS o mapeamento das colunas.`;
         JSON.stringify({ error: "Não foi possível identificar as colunas de nome e telefone" }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Validate that the detected columns actually exist as keys in the data
+    const sampleKeys = Object.keys(rawData[0] || {});
+    const nameColExists = sampleKeys.includes(columnMapping.nameColumn);
+    const phoneColExists = sampleKeys.includes(columnMapping.phoneColumn);
+    
+    console.log(`Column validation: nameCol="${columnMapping.nameColumn}" exists=${nameColExists}, phoneCol="${columnMapping.phoneColumn}" exists=${phoneColExists}`);
+    
+    if (!nameColExists || !phoneColExists) {
+      // AI returned wrong column names - try fallback with heuristics
+      console.warn("AI returned invalid column names, trying heuristic fallback...");
+      
+      // Find columns by analyzing values
+      let bestNameCol: string | null = null;
+      let bestPhoneCol: string | null = null;
+      
+      for (const key of sampleKeys) {
+        const values = rawData.slice(0, 5).map((r: any) => String(r[key] || ''));
+        const hasDigitsOnly = values.every((v: string) => /^\d{8,}$/.test(v.replace(/\D/g, '')));
+        const hasLetters = values.every((v: string) => /[a-zA-ZÀ-ÿ]/.test(v) && v.length > 2);
+        
+        if (hasDigitsOnly && !bestPhoneCol) bestPhoneCol = key;
+        if (hasLetters && !bestNameCol) bestNameCol = key;
+      }
+      
+      if (bestNameCol && bestPhoneCol) {
+        columnMapping.nameColumn = bestNameCol;
+        columnMapping.phoneColumn = bestPhoneCol;
+        console.log(`Heuristic fallback: nameCol="${bestNameCol}", phoneCol="${bestPhoneCol}"`);
+      } else {
+        return new Response(
+          JSON.stringify({ error: "Não foi possível identificar as colunas automaticamente. Verifique se o arquivo tem colunas de nome e telefone." }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
     }
 
     // Agora processa TODOS os contatos localmente (muito rápido!)
