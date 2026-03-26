@@ -71,6 +71,7 @@ import { ImportTemplatesDialog } from '@/components/templates/ImportTemplatesDia
 import { TemplatesErrorBoundary } from '@/components/templates/TemplatesErrorBoundary';
 import { MetaAccountInfo } from '@/components/templates/MetaAccountInfo';
 import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 import { User } from '@supabase/supabase-js';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -177,6 +178,8 @@ function TemplatesContent() {
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
   const [revalidatingId, setRevalidatingId] = useState<string | null>(null);
   const [templateToDelete, setTemplateToDelete] = useState<Template | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   
   // Delete mutation
   const deleteTemplate = useDeleteTemplate();
@@ -242,6 +245,43 @@ function TemplatesContent() {
       { tenantId: tenantData.tenantId, templateId: templateToDelete.id },
       { onSettled: () => setTemplateToDelete(null) }
     );
+  };
+
+  // Handle bulk delete all templates
+  const handleBulkDeleteAll = async () => {
+    if (!tenantData?.tenantId) return;
+    setIsBulkDeleting(true);
+    try {
+      const { error } = await supabase
+        .from('mt_templates')
+        .delete()
+        .eq('tenant_id', tenantData.tenantId)
+        .eq('source', 'meta');
+      
+      if (error) {
+        const isForeignKeyError = error.message?.includes('23503') || 
+          error.message?.includes('foreign key constraint') ||
+          error.message?.includes('still referenced');
+        
+        if (isForeignKeyError) {
+          toast.error('Alguns templates estão em uso por campanhas e não podem ser excluídos.');
+        } else {
+          throw error;
+        }
+      } else {
+        toast.success('Todos os templates foram excluídos');
+        await refetch();
+        // Auto-open sync dialog after clearing
+        setShowBulkDeleteConfirm(false);
+        setImportOpen(true);
+      }
+    } catch (err) {
+      console.error('Bulk delete error:', err);
+      toast.error('Erro ao excluir templates');
+    } finally {
+      setIsBulkDeleting(false);
+      setShowBulkDeleteConfirm(false);
+    }
   };
 
   // Safely filter templates with null checks
@@ -353,6 +393,17 @@ function TemplatesContent() {
               <RefreshCw className={`h-4 w-4 mr-2 ${templatesLoading ? 'animate-spin' : ''}`} />
               Atualizar
             </Button>
+            {metaTemplates.length > 0 && (
+              <Button 
+                variant="outline" 
+                onClick={() => setShowBulkDeleteConfirm(true)}
+                size="sm"
+                className="text-destructive hover:text-destructive border-destructive/30 hover:bg-destructive/10"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Limpar Todos
+              </Button>
+            )}
             <Button 
               variant="default" 
               onClick={handleImport}
@@ -813,6 +864,44 @@ function TemplatesContent() {
                   </>
                 ) : (
                   'Excluir'
+                )}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Bulk Delete Confirmation Dialog */}
+        <AlertDialog open={showBulkDeleteConfirm} onOpenChange={setShowBulkDeleteConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Limpar todos os templates?</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <p>
+                  Você está prestes a excluir <span className="font-semibold">{metaTemplates.length} template(s)</span> do Nexus Zap.
+                </p>
+                <p className="text-muted-foreground">
+                  Os templates continuarão existindo na sua conta Meta/WABA. 
+                  Após a exclusão, a sincronização será aberta automaticamente para reimportar.
+                </p>
+                <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">
+                  ⚠️ Templates vinculados a campanhas existentes não serão excluídos.
+                </p>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isBulkDeleting}>Cancelar</AlertDialogCancel>
+              <Button
+                variant="destructive"
+                onClick={handleBulkDeleteAll}
+                disabled={isBulkDeleting}
+              >
+                {isBulkDeleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Excluindo...
+                  </>
+                ) : (
+                  'Limpar e Ressincronizar'
                 )}
               </Button>
             </AlertDialogFooter>
