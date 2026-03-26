@@ -246,6 +246,43 @@ function TemplatesContent() {
     );
   };
 
+  // Handle bulk delete all templates
+  const handleBulkDeleteAll = async () => {
+    if (!tenantData?.tenantId) return;
+    setIsBulkDeleting(true);
+    try {
+      const { error } = await supabase
+        .from('mt_templates')
+        .delete()
+        .eq('tenant_id', tenantData.tenantId)
+        .eq('source', 'meta');
+      
+      if (error) {
+        const isForeignKeyError = error.message?.includes('23503') || 
+          error.message?.includes('foreign key constraint') ||
+          error.message?.includes('still referenced');
+        
+        if (isForeignKeyError) {
+          toast.error('Alguns templates estão em uso por campanhas e não podem ser excluídos.');
+        } else {
+          throw error;
+        }
+      } else {
+        toast.success('Todos os templates foram excluídos');
+        await refetch();
+        // Auto-open sync dialog after clearing
+        setShowBulkDeleteConfirm(false);
+        setImportOpen(true);
+      }
+    } catch (err) {
+      console.error('Bulk delete error:', err);
+      toast.error('Erro ao excluir templates');
+    } finally {
+      setIsBulkDeleting(false);
+      setShowBulkDeleteConfirm(false);
+    }
+  };
+
   // Safely filter templates with null checks
   const safeTemplates = Array.isArray(templates) ? templates : [];
   
