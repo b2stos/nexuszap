@@ -205,8 +205,55 @@ interface SchemaVariable {
 
 interface TemplateComponentData {
   type?: string;
+  format?: string;
   text?: string;
   buttons?: Array<{ type?: string; url?: string; text?: string }>;
+  example?: { header_handle?: string[]; header_url?: string[] };
+}
+
+interface MediaHeaderInfo {
+  type: 'image' | 'video' | 'document';
+  url: string;
+}
+
+/**
+ * Detecta se o template tem um HEADER de mídia (IMAGE/VIDEO/DOCUMENT).
+ * Templates com header de mídia exigem que o componente header seja enviado,
+ * mesmo que não haja variáveis de texto {{N}}.
+ */
+function detectMediaHeader(components: unknown): MediaHeaderInfo | null {
+  if (!Array.isArray(components)) return null;
+  
+  for (const comp of components) {
+    if (typeof comp !== 'object' || comp === null) continue;
+    
+    const c = comp as TemplateComponentData;
+    const type = String(c.type || '').toUpperCase();
+    const format = String(c.format || '').toUpperCase();
+    
+    if (type === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
+      // Extrair URL do example
+      const example = c.example;
+      let url = '';
+      
+      if (example?.header_handle?.length) {
+        url = example.header_handle[0];
+      } else if (example?.header_url?.length) {
+        url = example.header_url[0];
+      }
+      
+      if (url) {
+        const mediaType = format.toLowerCase() as 'image' | 'video' | 'document';
+        console.log(`[TemplateParams] Detected media header: type=${mediaType}, url=${url.substring(0, 60)}...`);
+        return { type: mediaType, url };
+      } else {
+        console.warn(`[TemplateParams] Media header detected (${format}) but no example URL found`);
+        return null;
+      }
+    }
+  }
+  
+  return null;
 }
 
 /**
@@ -870,8 +917,14 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         recipient.contact.name
       );
       
+      // Detectar header de mídia (IMAGE/VIDEO/DOCUMENT)
+      const mediaHeader = detectMediaHeader(campaign.template.components);
+      
       console.log(`[Campaign] Correlation ID: ${correlationId}`);
       console.log(`[Campaign] Template variables:`, JSON.stringify(templateVars));
+      if (mediaHeader) {
+        console.log(`[Campaign] Media header: ${mediaHeader.type} → ${mediaHeader.url.substring(0, 60)}...`);
+      }
       
       // ====================================================
       // USAR PROVIDER COMPARTILHADO (mesmo formato do inbox)
@@ -882,6 +935,13 @@ Attempt: ${recipient.attempts + 1}/${MAX_RETRIES}
         template_name: campaign.template.name,
         language: campaign.template.language || 'pt_BR',
         variables: templateVars,
+        // Passar mídia do header se o template tiver IMAGE/VIDEO/DOCUMENT
+        ...(mediaHeader && {
+          media: {
+            type: mediaHeader.type,
+            url: mediaHeader.url,
+          },
+        }),
       });
       
       console.log(`[Campaign] Provider result:`, JSON.stringify({
