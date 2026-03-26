@@ -1,56 +1,44 @@
 
-# Correção Definitiva: Erro 132012 — Contract-Driven Template Dispatch
 
-## Status: ✅ IMPLEMENTADO
+# Fix: Error 131053 — Static media headers must NOT send media
 
-## Causa Raiz
+## Root Cause
 
-O sistema montava o payload de templates de forma **heurística** — contava placeholders `{{N}}` e injetava parâmetros automaticamente (ex.: nome do contato). Para templates como `rpg5` (HEADER=IMAGE estático, BODY sem variáveis, BUTTON URL estático), qualquer parâmetro enviado causava erro **132012** da Meta.
+The `resolveTemplateMediaHeader` and `validatePayloadAgainstContract` functions treat ALL `image/video/document` headers the same. But **static** media headers (like `rpg5`) have the image already stored by Meta — sending a media URL causes error 131053 because Meta tries to download an expired sample URL.
 
-## Solução: Template Contract Resolver
+The `contract.header.isMediaStatic` flag exists and is correctly set to `true` for these templates, but it's **never checked** in either function.
 
-Criado um **resolvedor de contrato canônico** (`resolveTemplateContract`) que analisa os `components` do template e produz um objeto descrevendo **exatamente** o que a Meta espera:
+## Fix (2 changes in `campaign-process-queue/index.ts`)
 
+### 1. `resolveTemplateMediaHeader` — return `not_required` for static media
+
+At line 384, change:
 ```typescript
-interface TemplateContract {
-  header: { type, dynamicParams, isMediaStatic };
-  body:   { dynamicParams, paramNames };
-  buttons: Array<{ index, type, hasDynamicParam }>;
-  totalDynamicParams: number;
-}
+if (!['image', 'video', 'document'].includes(headerType)) {
+```
+to:
+```typescript
+if (!['image', 'video', 'document'].includes(headerType) || contract.header.isMediaStatic) {
 ```
 
-### Regras aplicadas:
-- `totalDynamicParams === 0` → payload **sem** `components` (limpo)
-- Body com N params → envia **exatamente** N params
-- Botões: só envia params para botões **dinâmicos** (com `{{1}}` na URL)
-- Header IMAGE/VIDEO/DOCUMENT estático → **não** envia componente header
-- Validação pré-envio bloqueia payload inválido antes do POST
+When `isMediaStatic = true`, the function returns `{ media: null, source: 'not_required' }` — no media sent.
 
-## Arquivos Modificados
+### 2. `validatePayloadAgainstContract` — skip media requirement for static headers
 
-| Arquivo | Alteração |
-|---------|-----------|
-| `supabase/functions/_shared/templateParams.ts` | Adicionado `resolveTemplateContract()` + `TemplateContract` |
-| `supabase/functions/_shared/providers/types.ts` | Adicionado `buttonMeta` ao `SendTemplateRequest` |
-| `supabase/functions/campaign-process-queue/index.ts` | Substituído `buildTemplateVariables` por `buildTemplateVariablesFromContract` + validação pré-envio |
-| `supabase/functions/_shared/providers/notificame.ts` | Botões usam `buttonMeta` explícito; componentes vazios filtrados; audit logging |
-
-## Exemplo: Template `rpg5` (texto fixo + link estático)
-
-**Payload enviado (correto):**
-```json
-{
-  "from": "<subscription_id>",
-  "to": "55XXXXXXXXXXX",
-  "contents": [{
-    "type": "template",
-    "template": {
-      "name": "rpg5",
-      "language": { "code": "en" }
-    }
-  }]
-}
+At line 518, change:
+```typescript
+const requiresMediaHeader = ['image', 'video', 'document'].includes(contract.header.type);
+```
+to:
+```typescript
+const requiresMediaHeader = ['image', 'video', 'document'].includes(contract.header.type) && !contract.header.isMediaStatic;
 ```
 
-Sem `template.components` — a Meta não espera nenhum parâmetro.
+Static media headers pass validation without needing a media reference.
+
+## Result
+
+- `rpg5` (static IMAGE, no text vars, static button): sends payload with **zero components** — no media, no body params, no button params.
+- Templates with dynamic IMAGE headers (`{{1}}` in header text): still require and send media URL.
+- No other files need changes.
+
