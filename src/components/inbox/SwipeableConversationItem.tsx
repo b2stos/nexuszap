@@ -252,7 +252,7 @@ export function SwipeableConversationItem({
               title="Apagar conversa"
             >
               <Trash2 className="w-4 h-4" />
-            </button>
+            </div>
           </div>
         </button>
       </div>
