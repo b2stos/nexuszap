@@ -61,23 +61,24 @@ export function DeleteUserDialog({
     setIsDeleting(true);
 
     try {
-      // Verificar se é o último Super Admin (por email na lista de super admins)
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("id, email");
+      // Check if the user being deleted is the last owner in their tenant
+      const { data: ownerCount } = await supabase
+        .from("tenant_users")
+        .select("id", { count: "exact", head: true })
+        .eq("role", "owner")
+        .eq("is_active", true);
 
-      const { isSuperAdminEmail, getSuperAdminEmails } = await import("@/utils/superAdmin");
-      
-      const superAdminEmails = getSuperAdminEmails();
-      const activeSuperAdmins = profiles?.filter(p => 
-        superAdminEmails.includes(p.email.toLowerCase())
-      ) || [];
+      const { data: targetMembership } = await supabase
+        .from("tenant_users")
+        .select("role")
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .maybeSingle();
 
-      // Se o usuário a ser excluído é um super admin e é o único
-      if (isSuperAdminEmail(userEmail) && activeSuperAdmins.length <= 1) {
+      if (targetMembership?.role === "owner" && (ownerCount as any)?.length <= 1) {
         toast({
           title: "Ação não permitida",
-          description: "Não é possível excluir o último Super Admin do sistema.",
+          description: "Não é possível excluir o último Owner do sistema.",
           variant: "destructive",
         });
         setIsDeleting(false);

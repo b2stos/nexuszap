@@ -12,7 +12,7 @@ import { Users, Send, MessageSquare, UserCheck, Crown, Shield, Loader2, Trash2, 
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { isSuperAdminEmail } from "@/utils/superAdmin";
+import { useTenantRole } from "@/hooks/useTenantRole";
 import { DeleteUserDialog } from "@/components/admin/DeleteUserDialog";
 import { UserManagementDialog } from "@/components/admin/UserManagementDialog";
 import { ContactManagement } from "@/components/admin/ContactManagement";
@@ -63,8 +63,9 @@ export default function Admin() {
   // User Management Dialog state
   const [userManagementOpen, setUserManagementOpen] = useState(false);
   
-  // Check if current user is Super Admin
-  const currentUserIsSuperAdmin = isSuperAdminEmail(user?.email);
+  // Check if current user is admin/owner
+  const { isOwner } = useTenantRole();
+  const currentUserIsSuperAdmin = isOwner;
   
   // Handler for when a user is deleted
   const handleUserDeleted = (userId: string) => {

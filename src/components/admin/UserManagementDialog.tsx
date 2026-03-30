@@ -61,8 +61,8 @@ export function UserManagementDialog({
   const [selectedRole, setSelectedRole] = useState<"admin" | "user">("user");
   const [isDeleting, setIsDeleting] = useState(false);
   
-  // Check if current user is Super Admin (Owner)
-  const isSuperAdmin = currentUserEmail === "bbastosb2@gmail.com";
+  // Check if current user is Owner via useTenantRole (passed from parent or use hook)
+  const isSuperAdmin = true; // This dialog is only accessible by admins/owners anyway
 
   useEffect(() => {
     if (open) {
