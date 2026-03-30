@@ -5,13 +5,10 @@
  * - owner: Full access to everything
  * - admin: Full access except billing/tenant deletion
  * - agent: Limited access (inbox, contacts, view-only templates/campaigns)
- * 
- * Super Admin: Bypasses all restrictions (configured in superAdmin.ts)
  */
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { isSuperAdminEmail } from "@/utils/superAdmin";
 
 export type TenantRole = "owner" | "admin" | "manager" | "agent" | null;
 
@@ -20,6 +17,7 @@ interface TenantContext {
   tenantName: string | null;
   role: TenantRole;
   loading: boolean;
+  /** Kept for backward compatibility — true when user is tenant owner */
   isSuperAdmin: boolean;
   userEmail: string | null;
 }
@@ -67,7 +65,6 @@ export function useTenantRole(): UseTenantRoleReturn {
       }
 
       const userEmail = session.user.email || null;
-      const superAdmin = isSuperAdminEmail(userEmail);
 
       // Fetch user's tenant membership with tenant info
       const { data: membership, error } = await supabase
@@ -84,26 +81,24 @@ export function useTenantRole(): UseTenantRoleReturn {
 
       if (error) {
         console.error("Error fetching tenant role:", error);
-        // Super admin still gets access even without tenant
         setContext({ 
           tenantId: null, 
           tenantName: null, 
-          role: superAdmin ? "owner" : null, 
+          role: null, 
           loading: false,
-          isSuperAdmin: superAdmin,
+          isSuperAdmin: false,
           userEmail,
         });
         return;
       }
 
       if (!membership || !membership.tenant) {
-        // Super admin still gets access even without tenant
         setContext({ 
           tenantId: null, 
-          tenantName: superAdmin ? "Admin Central" : null, 
-          role: superAdmin ? "owner" : null, 
+          tenantName: null, 
+          role: null, 
           loading: false,
-          isSuperAdmin: superAdmin,
+          isSuperAdmin: false,
           userEmail,
         });
         return;
@@ -111,13 +106,14 @@ export function useTenantRole(): UseTenantRoleReturn {
 
       // Type assertion for tenant
       const tenant = membership.tenant as { id: string; name: string; status: string };
+      const role = membership.role as TenantRole;
 
       setContext({
         tenantId: tenant.id,
         tenantName: tenant.name,
-        role: superAdmin ? "owner" : membership.role as TenantRole,
+        role,
         loading: false,
-        isSuperAdmin: superAdmin,
+        isSuperAdmin: role === "owner",
         userEmail,
       });
     } catch (err) {
@@ -159,26 +155,23 @@ export function useTenantRole(): UseTenantRoleReturn {
     };
   }, [fetchTenantRole]);
 
-  // Super admin bypasses all checks
-  const { isSuperAdmin } = context;
-
-  // Role checks - super admin always has full access
-  const isOwner = isSuperAdmin || context.role === "owner";
-  const isAdmin = isSuperAdmin || context.role === "owner" || context.role === "admin";
+  // Role checks
+  const isOwner = context.role === "owner";
+  const isAdmin = context.role === "owner" || context.role === "admin";
   const isManager = context.role === "manager";
-  const isAgent = !isSuperAdmin && context.role === "agent";
+  const isAgent = context.role === "agent";
 
   // Operational access: owner, admin, OR manager (not agent)
-  const canOperate = isSuperAdmin || isOwner || isAdmin || isManager;
+  const canOperate = isOwner || isAdmin || isManager;
 
-  // Permission checks - operational roles can manage most things
+  // Permission checks
   const canManageTemplates = canOperate;
   const canManageCampaigns = canOperate;
   const canManageChannels = canOperate;
   const canViewSettings = canOperate;
-  const canViewAuditLogs = isSuperAdmin || isAdmin; // Only admin+ can view audit logs
-  const canSendMessages = true; // All roles can send messages
-  const canManageContacts = true; // All roles can manage contacts
+  const canViewAuditLogs = isAdmin;
+  const canSendMessages = true;
+  const canManageContacts = true;
 
   return {
     ...context,
