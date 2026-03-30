@@ -1599,7 +1599,7 @@ async function handleWebhook(req: Request): Promise<Response> {
     // Save event before rejecting
     await saveWebhookEvent(
       supabase,
-      channel.tenant_id,
+      resolvedChannel.tenant_id,
       channelId,
       'rate_limited',
       { body, headers: sanitizeHeaders(req), request_id: requestId },
