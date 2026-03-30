@@ -1368,6 +1368,20 @@ Deno.serve(async (req) => {
       );
     }
     
+    // SECURITY: Validate user belongs to campaign's tenant
+    const { data: membership } = await supabase
+      .from('tenant_users')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('tenant_id', campaign.tenant_id)
+      .eq('is_active', true)
+      .maybeSingle();
+    
+    if (!membership) {
+      console.error(`[Campaign][${traceId}] User ${user.id} not member of tenant ${campaign.tenant_id}`);
+      return createErrorResponse(traceId, 'FORBIDDEN', 'Sem permissão para esta campanha', 403);
+    }
+
     // Log context for debugging
     console.log(`[Campaign][${traceId}] Context: tenant=${campaign.tenant_id}, channel=${campaign.channel_id}`);
     

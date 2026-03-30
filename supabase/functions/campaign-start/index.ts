@@ -377,6 +377,20 @@ Deno.serve(async (req) => {
       );
     }
 
+    // 1.1. **SECURITY: Validate user belongs to campaign's tenant**
+    const { data: membership } = await supabase
+      .from('tenant_users')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('tenant_id', campaign.tenant_id)
+      .eq('is_active', true)
+      .maybeSingle();
+    
+    if (!membership) {
+      console.error(`[campaign-start][${traceId}] User ${user.id} not member of tenant ${campaign.tenant_id}`);
+      return createErrorResponse(traceId, 'FORBIDDEN', 'Sem permissão para esta campanha', 403);
+    }
+
     // 1.5. **CRITICAL: Validate template status (APPROVED only)**
     // deno-lint-ignore no-explicit-any
     const templateData = campaign.template as any;
