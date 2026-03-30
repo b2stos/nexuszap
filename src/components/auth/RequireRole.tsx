@@ -53,10 +53,7 @@ export function RequireRole({
     );
   }
 
-  // Super admin bypasses ALL checks
-  if (isSuperAdmin) {
-    return <>{children}</>;
-  }
+  // Note: isSuperAdmin now means "owner" which is already covered by role checks below
 
   // No tenant context (and not super admin)
   if (!tenantId) {
