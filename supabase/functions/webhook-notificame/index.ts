@@ -1527,21 +1527,69 @@ async function handleWebhook(req: Request): Promise<Response> {
     .eq('id', channelId)
     .single();
   
+  let resolvedChannel = channel;
+  
   if (channelError || !channel) {
-    log('warn', 'Channel not found', ctx, { error: channelError?.message });
-    return new Response('OK', { 
-      status: 200, 
-      headers: { ...corsHeaders, 'Content-Type': 'text/plain' } 
-    });
+    // FALLBACK: Try to find channel by subscription_id from body
+    let fallbackFound = false;
+    if (body && typeof body === 'object') {
+      const bodyObj = body as Record<string, unknown>;
+      const subscriptionId = bodyObj.subscriptionId as string ||
+        bodyObj.from as string ||
+        (bodyObj.message as Record<string, unknown>)?.to as string;
+      
+      if (subscriptionId) {
+        log('info', 'Channel not found by UUID, trying subscription_id fallback', ctx, { 
+          failed_channel_id: channelId, 
+          subscription_id: subscriptionId 
+        });
+        
+        const { data: fallbackChannel } = await supabase
+          .from('channels')
+          .select(`
+            id,
+            tenant_id,
+            name,
+            phone_number,
+            status,
+            provider_config,
+            provider_phone_id,
+            provider:providers(name)
+          `)
+          .eq('provider_config->>subscription_id', subscriptionId)
+          .limit(1)
+          .maybeSingle();
+        
+        if (fallbackChannel) {
+          resolvedChannel = fallbackChannel;
+          channelId = fallbackChannel.id;
+          ctx.channel_id = channelId;
+          fallbackFound = true;
+          log('info', '✅ Channel resolved via subscription_id fallback', ctx, {
+            resolved_channel_id: channelId,
+            channel_name: fallbackChannel.name,
+            subscription_id: subscriptionId,
+          });
+        }
+      }
+    }
+    
+    if (!fallbackFound) {
+      log('warn', 'Channel not found (no fallback available)', ctx, { error: channelError?.message });
+      return new Response('OK', { 
+        status: 200, 
+        headers: { ...corsHeaders, 'Content-Type': 'text/plain' } 
+      });
+    }
   }
   
-  ctx.tenant_id = channel.tenant_id;
+  ctx.tenant_id = resolvedChannel.tenant_id;
   
   // Validate signature (compatibility mode - never blocks)
   const signatureResult = await validateWebhookSignature(
     rawBody,
     req,
-    channel.provider_config as Record<string, unknown> | null,
+    resolvedChannel.provider_config as Record<string, unknown> | null,
     ctx
   );
   
@@ -1551,7 +1599,7 @@ async function handleWebhook(req: Request): Promise<Response> {
     // Save event before rejecting
     await saveWebhookEvent(
       supabase,
-      channel.tenant_id,
+      resolvedChannel.tenant_id,
       channelId,
       'rate_limited',
       { body, headers: sanitizeHeaders(req), request_id: requestId },
@@ -1593,7 +1641,7 @@ async function handleWebhook(req: Request): Promise<Response> {
   // Save raw event
   const webhookEventId = await saveWebhookEvent(
     supabase,
-    channel.tenant_id,
+    resolvedChannel.tenant_id,
     channelId,
     eventType,
     { 
@@ -1615,9 +1663,9 @@ async function handleWebhook(req: Request): Promise<Response> {
   // Use EdgeRuntime.waitUntil if available
   const asyncProcess = processWebhookAsync(
     supabase,
-    channel.tenant_id,
+    resolvedChannel.tenant_id,
     channelId,
-    channel as unknown as ChannelWithProvider,
+    resolvedChannel as unknown as ChannelWithProvider,
     body,
     rawBody,
     webhookEventId,
