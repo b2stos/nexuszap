@@ -1298,6 +1298,22 @@ Deno.serve(async (req) => {
   console.log(`\n[Campaign] ══════════════════════════════════════════════`);
   console.log(`[Campaign] TraceId: ${traceId}`);
   
+  // ── AUTH CHECK ──
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return createErrorResponse(traceId, 'UNAUTHORIZED', 'Token de autenticação ausente', 401);
+  }
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+  const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+  if (authError || !user) {
+    return createErrorResponse(traceId, 'UNAUTHORIZED', 'Usuário não autenticado', 401);
+  }
+  console.log(`[Campaign][${traceId}] Authenticated user: ${user.id}`);
+
   try {
     let body: ProcessRequest;
     try {

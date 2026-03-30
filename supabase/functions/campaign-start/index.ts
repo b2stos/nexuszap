@@ -244,8 +244,23 @@ Deno.serve(async (req) => {
 
   console.log(`[campaign-start][${traceId}] ====== START ======`);
   
-  // Get Supabase client with service role for bypassing RLS
+  // ── AUTH CHECK ──
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return createErrorResponse(traceId, 'UNAUTHORIZED', 'Token de autenticação ausente', 401);
+  }
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+  const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+  if (authError || !user) {
+    return createErrorResponse(traceId, 'UNAUTHORIZED', 'Usuário não autenticado', 401);
+  }
+  console.log(`[campaign-start][${traceId}] Authenticated user: ${user.id}`);
+
+  // Get Supabase client with service role for bypassing RLS
   const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
   
