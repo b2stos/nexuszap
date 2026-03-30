@@ -1589,7 +1589,7 @@ async function handleWebhook(req: Request): Promise<Response> {
   const signatureResult = await validateWebhookSignature(
     rawBody,
     req,
-    channel.provider_config as Record<string, unknown> | null,
+    resolvedChannel.provider_config as Record<string, unknown> | null,
     ctx
   );
   
