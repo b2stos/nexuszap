@@ -1527,12 +1527,60 @@ async function handleWebhook(req: Request): Promise<Response> {
     .eq('id', channelId)
     .single();
   
+  let resolvedChannel = channel;
+  
   if (channelError || !channel) {
-    log('warn', 'Channel not found', ctx, { error: channelError?.message });
-    return new Response('OK', { 
-      status: 200, 
-      headers: { ...corsHeaders, 'Content-Type': 'text/plain' } 
-    });
+    // FALLBACK: Try to find channel by subscription_id from body
+    let fallbackFound = false;
+    if (body && typeof body === 'object') {
+      const bodyObj = body as Record<string, unknown>;
+      const subscriptionId = bodyObj.subscriptionId as string ||
+        bodyObj.from as string ||
+        (bodyObj.message as Record<string, unknown>)?.to as string;
+      
+      if (subscriptionId) {
+        log('info', 'Channel not found by UUID, trying subscription_id fallback', ctx, { 
+          failed_channel_id: channelId, 
+          subscription_id: subscriptionId 
+        });
+        
+        const { data: fallbackChannel } = await supabase
+          .from('channels')
+          .select(`
+            id,
+            tenant_id,
+            name,
+            phone_number,
+            status,
+            provider_config,
+            provider_phone_id,
+            provider:providers(name)
+          `)
+          .eq('provider_config->>subscription_id', subscriptionId)
+          .limit(1)
+          .maybeSingle();
+        
+        if (fallbackChannel) {
+          resolvedChannel = fallbackChannel;
+          channelId = fallbackChannel.id;
+          ctx.channel_id = channelId;
+          fallbackFound = true;
+          log('info', '✅ Channel resolved via subscription_id fallback', ctx, {
+            resolved_channel_id: channelId,
+            channel_name: fallbackChannel.name,
+            subscription_id: subscriptionId,
+          });
+        }
+      }
+    }
+    
+    if (!fallbackFound) {
+      log('warn', 'Channel not found (no fallback available)', ctx, { error: channelError?.message });
+      return new Response('OK', { 
+        status: 200, 
+        headers: { ...corsHeaders, 'Content-Type': 'text/plain' } 
+      });
+    }
   }
   
   ctx.tenant_id = channel.tenant_id;

@@ -136,7 +136,7 @@ export default function Inbox() {
     search: '',
     unreadOnly: false,
     status: 'all',
-    repliedOnly: true, // Padrão: mostrar apenas quem respondeu
+    repliedOnly: false, // Mostrar todas as conversas por padrão
   });
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
