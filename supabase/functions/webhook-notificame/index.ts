@@ -1583,7 +1583,7 @@ async function handleWebhook(req: Request): Promise<Response> {
     }
   }
   
-  ctx.tenant_id = channel.tenant_id;
+  ctx.tenant_id = resolvedChannel.tenant_id;
   
   // Validate signature (compatibility mode - never blocks)
   const signatureResult = await validateWebhookSignature(
