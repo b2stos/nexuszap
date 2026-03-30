@@ -1641,7 +1641,7 @@ async function handleWebhook(req: Request): Promise<Response> {
   // Save raw event
   const webhookEventId = await saveWebhookEvent(
     supabase,
-    channel.tenant_id,
+    resolvedChannel.tenant_id,
     channelId,
     eventType,
     { 
