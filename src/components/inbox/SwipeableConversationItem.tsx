@@ -243,9 +243,12 @@ export function SwipeableConversationItem({
               isHovered && translateX === 0 && "opacity-100"
             )}
           >
-            <button
+            <div
+              role="button"
+              tabIndex={0}
               onClick={handleDeleteClick}
-              className="p-2 rounded-full bg-destructive/10 hover:bg-destructive/20 text-destructive transition-colors"
+              onKeyDown={(e) => e.key === 'Enter' && handleDeleteClick(e as unknown as React.MouseEvent)}
+              className="p-2 rounded-full bg-destructive/10 hover:bg-destructive/20 text-destructive transition-colors cursor-pointer"
               title="Apagar conversa"
             >
               <Trash2 className="w-4 h-4" />
