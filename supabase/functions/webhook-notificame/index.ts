@@ -1663,9 +1663,9 @@ async function handleWebhook(req: Request): Promise<Response> {
   // Use EdgeRuntime.waitUntil if available
   const asyncProcess = processWebhookAsync(
     supabase,
-    channel.tenant_id,
+    resolvedChannel.tenant_id,
     channelId,
-    channel as unknown as ChannelWithProvider,
+    resolvedChannel as unknown as ChannelWithProvider,
     body,
     rawBody,
     webhookEventId,
