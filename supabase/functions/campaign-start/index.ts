@@ -244,8 +244,23 @@ Deno.serve(async (req) => {
 
   console.log(`[campaign-start][${traceId}] ====== START ======`);
   
-  // Get Supabase client with service role for bypassing RLS
+  // ── AUTH CHECK ──
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return createErrorResponse(traceId, 'UNAUTHORIZED', 'Token de autenticação ausente', 401);
+  }
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+  const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+  if (authError || !user) {
+    return createErrorResponse(traceId, 'UNAUTHORIZED', 'Usuário não autenticado', 401);
+  }
+  console.log(`[campaign-start][${traceId}] Authenticated user: ${user.id}`);
+
+  // Get Supabase client with service role for bypassing RLS
   const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
   
@@ -360,6 +375,20 @@ Deno.serve(async (req) => {
         { db_error: campaignError?.message },
         { enqueued: 0 }
       );
+    }
+
+    // 1.1. **SECURITY: Validate user belongs to campaign's tenant**
+    const { data: membership } = await supabase
+      .from('tenant_users')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('tenant_id', campaign.tenant_id)
+      .eq('is_active', true)
+      .maybeSingle();
+    
+    if (!membership) {
+      console.error(`[campaign-start][${traceId}] User ${user.id} not member of tenant ${campaign.tenant_id}`);
+      return createErrorResponse(traceId, 'FORBIDDEN', 'Sem permissão para esta campanha', 403);
     }
 
     // 1.5. **CRITICAL: Validate template status (APPROVED only)**

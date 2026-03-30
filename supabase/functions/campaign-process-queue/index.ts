@@ -1298,6 +1298,22 @@ Deno.serve(async (req) => {
   console.log(`\n[Campaign] ══════════════════════════════════════════════`);
   console.log(`[Campaign] TraceId: ${traceId}`);
   
+  // ── AUTH CHECK ──
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return createErrorResponse(traceId, 'UNAUTHORIZED', 'Token de autenticação ausente', 401);
+  }
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+  const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+  if (authError || !user) {
+    return createErrorResponse(traceId, 'UNAUTHORIZED', 'Usuário não autenticado', 401);
+  }
+  console.log(`[Campaign][${traceId}] Authenticated user: ${user.id}`);
+
   try {
     let body: ProcessRequest;
     try {
@@ -1352,6 +1368,20 @@ Deno.serve(async (req) => {
       );
     }
     
+    // SECURITY: Validate user belongs to campaign's tenant
+    const { data: membership } = await supabase
+      .from('tenant_users')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('tenant_id', campaign.tenant_id)
+      .eq('is_active', true)
+      .maybeSingle();
+    
+    if (!membership) {
+      console.error(`[Campaign][${traceId}] User ${user.id} not member of tenant ${campaign.tenant_id}`);
+      return createErrorResponse(traceId, 'FORBIDDEN', 'Sem permissão para esta campanha', 403);
+    }
+
     // Log context for debugging
     console.log(`[Campaign][${traceId}] Context: tenant=${campaign.tenant_id}, channel=${campaign.channel_id}`);
     
